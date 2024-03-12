@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "run analaysis.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/analysis.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}
