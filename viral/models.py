@@ -34,3 +34,9 @@ class TrialInfo(BaseModel):
         return [
             event.start_time for event in self.events_info if event.name == "Port1Out"
         ]
+
+    @computed_field
+    def reward_on(self) -> List[float]:
+        return [
+            state.start_time for state in self.states_info if state.name == "reward_on"
+        ]
