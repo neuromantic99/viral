@@ -23,19 +23,24 @@ class TrialInfo(BaseModel):
     texture: str
     texture_rewarded: bool
 
-    @computed_field
+    # Type is ignored due to  an open issue with pydantic-mypy interfacing
+    # github.com/python/mypy/issues/14461
+    @computed_field  # type: ignore
+    @property
     def lick_start(self) -> List[float]:
         return [
             event.start_time for event in self.events_info if event.name == "Port1In"
         ]
 
-    @computed_field
+    @computed_field  # type: ignore
+    @property
     def lick_end(self) -> List[float]:
         return [
             event.start_time for event in self.events_info if event.name == "Port1Out"
         ]
 
-    @computed_field
+    @computed_field  # type: ignore
+    @property
     def reward_on(self) -> List[float]:
         return [
             state.start_time for state in self.states_info if state.name == "reward_on"
