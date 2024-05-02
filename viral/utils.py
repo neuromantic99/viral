@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, TypeVar
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -77,25 +77,24 @@ def plot_speed_vs_position(positions, speeds):
 ############ My speed computation function, test this relative to the above ########################33
 def compute_speed(
     position: np.ndarray, first: int, last: int, bin_size: int, sampling_rate: int
-) -> np.ndarray:
+) -> List[float]:
     """Speed in each bin (set by "step"). Assuming each integer is a second. Return unit is position units / second.
 
     This also needs testing before using for anything serious
     """
 
-    speed = []
+    speed: List[float] = []
     for start, stop in zip(
         range(first, last - bin_size, bin_size), range(first + bin_size, last, bin_size)
     ):
         n = np.sum(np.logical_and(position > start, position < stop))
-        if (
-            n == 0
-        ):  # Really this is inf, but more likely to arise from the mouse not running to this position
-            speed.append(0)
-        else:
-            speed.append(bin_size / (n / sampling_rate))
+        # This will give a 0 division error if you run timed out trials through
+        speed.append(bin_size / (n / sampling_rate))
     return speed
 
 
-def degrees_to_cm(degrees: float | np.ndarray) -> float | np.ndarray:
+T = TypeVar("T", float, np.ndarray)
+
+
+def degrees_to_cm(degrees: T) -> T:
     return (degrees / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE

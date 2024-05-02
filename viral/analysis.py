@@ -18,9 +18,9 @@ import seaborn as sns
 sns.set_theme(context="talk", style="ticks")
 
 DATA_PATH = Path("/Volumes/MarcBusche/James/Behaviour/online/Subjects")
-MOUSE = "test"
+MOUSE = "J005"
 DATE = "2024-05-02"
-SESSION_NUMBER = "002"
+SESSION_NUMBER = "001"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -55,7 +55,7 @@ def plot_lick_raster(
         )
 
     all_trials = np.concatenate(lick_positions)
-    if not all_trials:
+    if len(all_trials) == 0:
         return None
 
     a0.set_ylabel("Trial number")
@@ -224,7 +224,7 @@ def plot_speed(trials: List[TrialInfo], sampling_rate) -> None:
 
     rolling_start = 0
     rolling_stop = 200
-    rolling_step = 15
+    rolling_step = 5
     for idx, trial in enumerate(trials):
 
         position = degrees_to_cm(np.array(trial.rotary_encoder_position))
@@ -270,8 +270,8 @@ if __name__ == "__main__":
     trials = load_data(SESSION_PATH)
     # disparity(trials)
     print(f"Number of trials: {len(trials)}")
-    trials = remove_timeout_trials(trials)
     print(f"Percent Timed Out: {get_percent_timedout(trials)}")
+    trials = remove_timeout_trials(trials)
     print(f"Number of trials after removing timed out: {len(trials)}")
 
     # plot_rewarded_vs_unrewarded_licking(trials)
