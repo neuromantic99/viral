@@ -1,6 +1,6 @@
 from pathlib import Path
 import random
-from typing import Dict, List
+from typing import Any, Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
 from models import TrialInfo
@@ -18,13 +18,13 @@ import seaborn as sns
 sns.set_theme(context="talk", style="ticks")
 
 DATA_PATH = Path("/Volumes/MarcBusche/James/Behaviour/online/Subjects")
-MOUSE = "J005"
-DATE = "2024-05-02"
-SESSION_NUMBER = "001"
+MOUSE = "J004"
+DATE = "2024-05-03"
+SESSION_NUMBER = "002"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
-def load_data(session_path: Path):
+def load_data(session_path: Path) -> List[TrialInfo]:
     trial_files = list(session_path.glob("trial*.json"))
     if not trial_files:
         raise FileNotFoundError(f"No trial files found in path {session_path}")
@@ -72,7 +72,7 @@ def plot_lick_raster(
     return max(n)
 
 
-def get_anticipatory_licking(lick_positions: List[List[float]]) -> List[int]:
+def get_anticipatory_licking(lick_positions: List[np.ndarray[float]]) -> List[float]:
     return [
         len([x for x in lick_position if 170 < x < 180])
         for lick_position in lick_positions
@@ -191,8 +191,8 @@ def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
 
 
 def plot_licking_habituation(trials: List[TrialInfo]) -> None:
-    licks = [trial.lick_start for trial in trials]
-    plot_lick_raster(licks, "Licking Habituation", x_label="Time (s)", jitter=0)
+    licks = np.array([trial.lick_start for trial in trials])
+    plot_lick_raster([licks], "Licking Habituation", x_label="Time (s)", jitter=0)
     plt.show()
 
 
@@ -268,13 +268,14 @@ def remove_timeout_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
 
 if __name__ == "__main__":
     trials = load_data(SESSION_PATH)
-    # disparity(trials)
+    disparity(trials)
+
     print(f"Number of trials: {len(trials)}")
     print(f"Percent Timed Out: {get_percent_timedout(trials)}")
     trials = remove_timeout_trials(trials)
     print(f"Number of trials after removing timed out: {len(trials)}")
 
-    # plot_rewarded_vs_unrewarded_licking(trials)
+    plot_rewarded_vs_unrewarded_licking(trials)
     plot_speed(trials, sampling_rate=30)
     # # plot_trial_length(trials)
 

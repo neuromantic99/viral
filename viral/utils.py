@@ -1,4 +1,4 @@
-from typing import List, TypeVar
+from typing import Any, List, TypeVar
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -26,10 +26,10 @@ def shaded_line_plot(arr: np.ndarray, x_axis, color: str, label: str):
     )
 
 
-def licks_to_position(trial: TrialInfo) -> np.ndarray:
+def licks_to_position(trial: TrialInfo) -> np.ndarray[float]:
     """Tested with hardware does not give false anticipatory licks. Write software tests still."""
 
-    position = np.array(trial.rotary_encoder_position)
+    position = np.array(trial.rotary_encoder_position).astype(float)
     lick_start = np.array(trial.lick_start)
 
     # The rotary encoder position is stored each time the trigger_panda state is exited. So this
