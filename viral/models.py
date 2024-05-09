@@ -13,6 +13,17 @@ class EventInfo(BaseModel):
     start_time: float
 
 
+class SpeedPosition(BaseModel):
+    position_start: int
+    position_stop: int
+    speed: float
+
+
+class TrialSummary(BaseModel):
+    speed_AZ: float
+    licks_AZ: int
+
+
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float

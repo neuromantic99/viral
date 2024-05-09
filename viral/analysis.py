@@ -1,13 +1,13 @@
 from pathlib import Path
 import random
-from typing import Any, Dict, List
+from typing import Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
-from models import TrialInfo
+from models import SpeedPosition, TrialInfo, TrialSummary
 
 from utils import (
-    compute_speed,
     degrees_to_cm,
+    get_speed_positions,
     shaded_line_plot,
     licks_to_position,
 )
@@ -19,8 +19,8 @@ sns.set_theme(context="talk", style="ticks")
 
 DATA_PATH = Path("/Volumes/MarcBusche/James/Behaviour/online/Subjects")
 MOUSE = "J004"
-DATE = "2024-05-03"
-SESSION_NUMBER = "002"
+DATE = "2024-04-25"
+SESSION_NUMBER = "001"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -72,11 +72,8 @@ def plot_lick_raster(
     return max(n)
 
 
-def get_anticipatory_licking(lick_positions: List[np.ndarray[float]]) -> List[float]:
-    return [
-        len([x for x in lick_position if 170 < x < 180])
-        for lick_position in lick_positions
-    ]
+def get_anticipatory_licking(lick_positions: np.ndarray[float]) -> int:
+    return np.sum(np.logical_and(lick_positions > 170, lick_positions < 180))
 
 
 def plot_trial_length(trials: List[TrialInfo]):
@@ -152,8 +149,10 @@ def plot_previous_trial_dependent_licking(trials: List[TrialInfo]) -> None:
     plt.title("Anticipatory licking")
     sns.boxplot(
         {
-            "rewarded": get_anticipatory_licking(prev_rewarded),
-            "unrewarded": get_anticipatory_licking(prev_unrewarded),
+            "rewarded": [get_anticipatory_licking(trial) for trial in prev_rewarded],
+            "unrewarded": [
+                get_anticipatory_licking(trial) for trial in prev_unrewarded
+            ],
         }
     )
     plt.show()
@@ -172,8 +171,9 @@ def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
     plt.figure()
     plt.title("Anticipatory licking")
 
-    rewarded_anticipatory = get_anticipatory_licking(rewarded)
-    unrewarded_anticipatory = get_anticipatory_licking(unrewarded)
+    rewarded_anticipatory = [get_anticipatory_licking(trial) for trial in rewarded]
+    unrewarded_anticipatory = [get_anticipatory_licking(trial) for trial in unrewarded]
+
     sns.boxplot(
         {
             "rewarded": rewarded_anticipatory,
@@ -216,21 +216,25 @@ def plot_position_whole_session(trials: List[TrialInfo], sampling_rate: int) -> 
 
 def plot_speed(trials: List[TrialInfo], sampling_rate) -> None:
     plt.figure(figsize=(10, 6))
-    rewarded = []
-    not_rewarded = []
+    rewarded: List[List[SpeedPosition]] = []
+    not_rewarded: List[List[SpeedPosition]] = []
 
     prev_rewarded = []
     prev_unrewarded = []
 
-    rolling_start = 0
-    rolling_stop = 200
-    rolling_step = 5
+    first_position = 0
+    last_position = 200
+    step_size = 5
     for idx, trial in enumerate(trials):
 
         position = degrees_to_cm(np.array(trial.rotary_encoder_position))
 
-        speed = compute_speed(
-            position, rolling_start, rolling_stop, rolling_step, sampling_rate
+        speed = get_speed_positions(
+            position=position,
+            first_position=first_position,
+            last_position=last_position,
+            step_size=step_size,
+            sampling_rate=sampling_rate,
         )
 
         if trial.texture_rewarded:
@@ -243,11 +247,23 @@ def plot_speed(trials: List[TrialInfo], sampling_rate) -> None:
         else:
             prev_unrewarded.append(speed)
 
-    x_axis = np.linspace(rolling_start, rolling_stop, len(rewarded[0]))
+    # Should be the same for all trials
+    # Use the bin_stop so there is no forward look ahead
+    x_axis = [bin.position_stop for bin in rewarded[0]]
 
-    shaded_line_plot(np.array(rewarded), x_axis, "green", "Rewarded")
+    shaded_line_plot(
+        np.array([[bin.speed for bin in trial] for trial in rewarded]),
+        x_axis,
+        "green",
+        "Rewarded",
+    )
 
-    shaded_line_plot(np.array(not_rewarded), x_axis, "red", "Unrewarded")
+    shaded_line_plot(
+        np.array([[bin.speed for bin in trial] for trial in not_rewarded]),
+        x_axis,
+        "red",
+        "Unrewarded",
+    )
 
     plt.axvspan(180, 200, color="gray", alpha=0.5)
     plt.legend()
@@ -258,12 +274,30 @@ def plot_speed(trials: List[TrialInfo], sampling_rate) -> None:
     plt.show()
 
 
-def remove_timeout_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
+def remove_bad_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
+    """Remove the first trial as putting the mouse on the wheel, and timed out trials"""
+    trials = trials[1:]
     return [
         trial
         for trial in trials
         if degrees_to_cm(trial.rotary_encoder_position[-1]) >= 180
     ]
+
+
+def summarise_trial(trial: TrialInfo) -> TrialSummary:
+
+    position = degrees_to_cm(np.array(trial.rotary_encoder_position))
+
+    return TrialSummary(
+        speed_AZ=get_speed_positions(
+            position=position,
+            first_position=170,
+            last_position=180,
+            step_size=10,
+            sampling_rate=30,
+        )[0].speed,
+        licks_AZ=get_anticipatory_licking(licks_to_position(trial)),
+    )
 
 
 if __name__ == "__main__":
@@ -272,11 +306,11 @@ if __name__ == "__main__":
 
     print(f"Number of trials: {len(trials)}")
     print(f"Percent Timed Out: {get_percent_timedout(trials)}")
-    trials = remove_timeout_trials(trials)
+    trials = remove_bad_trials(trials)
     print(f"Number of trials after removing timed out: {len(trials)}")
 
     plot_rewarded_vs_unrewarded_licking(trials)
-    plot_speed(trials, sampling_rate=30)
+    # plot_speed(trials, sampling_rate=30)
     # # plot_trial_length(trials)
 
     # plot_previous_trial_dependent_licking(trials)
