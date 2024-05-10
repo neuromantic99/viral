@@ -1,3 +1,7 @@
+credentials.json
+token.pickle
+
+
 data/
 
 .DS_store

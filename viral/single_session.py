@@ -12,15 +12,15 @@ from utils import (
     licks_to_position,
 )
 
-from constants import ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
+from constants import DATA_PATH, ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
 import seaborn as sns
+from scipy.stats import ttest_ind
 
 sns.set_theme(context="talk", style="ticks")
 
-DATA_PATH = Path("/Volumes/MarcBusche/James/Behaviour/online/Subjects")
-MOUSE = "J004"
-DATE = "2024-04-25"
-SESSION_NUMBER = "001"
+MOUSE = "J005"
+DATE = "2024-04-17"
+SESSION_NUMBER = "002"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -297,7 +297,30 @@ def summarise_trial(trial: TrialInfo) -> TrialSummary:
             sampling_rate=30,
         )[0].speed,
         licks_AZ=get_anticipatory_licking(licks_to_position(trial)),
+        rewarded=trial.texture_rewarded,
     )
+
+
+def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
+
+    rewarded = [trial.speed_AZ for trial in trial_summaries if trial.rewarded]
+    not_rewarded = [trial.speed_AZ for trial in trial_summaries if not trial.rewarded]
+    plt.hist(
+        rewarded,
+        bins=10,
+        color="green",
+        alpha=0.5,
+    )
+
+    plt.hist(
+        not_rewarded,
+        bins=10,
+        color="red",
+        alpha=0.5,
+    )
+
+    plt.title(ttest_ind(rewarded, not_rewarded))
+    plt.show()
 
 
 if __name__ == "__main__":
@@ -307,6 +330,9 @@ if __name__ == "__main__":
     print(f"Number of trials: {len(trials)}")
     print(f"Percent Timed Out: {get_percent_timedout(trials)}")
     trials = remove_bad_trials(trials)
+
+    # az_speed_histogram([summarise_trial(trial) for trial in trials])
+
     print(f"Number of trials after removing timed out: {len(trials)}")
 
     plot_rewarded_vs_unrewarded_licking(trials)

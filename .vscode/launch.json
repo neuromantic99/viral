@@ -2,10 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "run analaysis.py",
+      "name": "single session",
       "type": "debugpy",
       "request": "launch",
-      "program": "viral/analysis.py",
+      "program": "viral/single_session.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "multiple sessions",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/multiple_sessions.py",
       "console": "integratedTerminal",
       "justMyCode": true
     }

@@ -22,6 +22,17 @@ class SpeedPosition(BaseModel):
 class TrialSummary(BaseModel):
     speed_AZ: float
     licks_AZ: int
+    rewarded: bool
+
+
+class SessionSummary(BaseModel):
+    name: str
+    trials: List[TrialSummary]
+
+
+class MouseSummary(BaseModel):
+    name: str
+    sessions: List[SessionSummary]
 
 
 class TrialInfo(BaseModel):
