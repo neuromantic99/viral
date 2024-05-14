@@ -1,3 +1,4 @@
+import math
 from typing import Any, List, TypeVar
 from matplotlib import pyplot as plt
 import numpy as np
@@ -115,3 +116,20 @@ T = TypeVar("T", float, np.ndarray)
 
 def degrees_to_cm(degrees: T) -> T:
     return (degrees / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE
+
+
+def pade_approx_norminv(p: float) -> float:
+    q = (
+        math.sqrt(2 * math.pi) * (p - 1 / 2)
+        - (157 / 231) * math.sqrt(2) * math.pi ** (3 / 2) * (p - 1 / 2) ** 3
+    )
+    r = (
+        1
+        - (78 / 77) * math.pi * (p - 1 / 2) ** 2
+        + (241 * math.pi**2 / 2310) * (p - 1 / 2) ** 4
+    )
+    return q / r
+
+
+def d_prime(hit_rate: float, false_alarm_rate: float) -> float:
+    return pade_approx_norminv(hit_rate) - pade_approx_norminv(false_alarm_rate)

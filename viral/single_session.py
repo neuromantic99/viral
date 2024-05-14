@@ -18,9 +18,9 @@ from scipy.stats import ttest_ind
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J005"
-DATE = "2024-04-17"
-SESSION_NUMBER = "002"
+MOUSE = "J004"
+DATE = "2024-04-25"
+SESSION_NUMBER = "001"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -73,7 +73,7 @@ def plot_lick_raster(
 
 
 def get_anticipatory_licking(lick_positions: np.ndarray[float]) -> int:
-    return np.sum(np.logical_and(lick_positions > 170, lick_positions < 180))
+    return np.sum(np.logical_and(lick_positions > 80, lick_positions < 180))
 
 
 def plot_trial_length(trials: List[TrialInfo]):

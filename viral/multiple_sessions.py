@@ -7,9 +7,10 @@ from gsheets_importer import gsheet2df
 from single_session import load_data, remove_bad_trials, summarise_trial
 from constants import DATA_PATH, HERE
 from models import MouseSummary, SessionSummary, TrialSummary
+from utils import d_prime
 
 
-MOUSE = "J005"
+MOUSE = "J007"
 SPREADSHEET_ID = "1fMnVXrDeaWTkX-TT21F4mFuAlaXIe6uVteEjv8mH0Q4"
 
 # Assumes that the sheet name is the same as the mouse name
@@ -52,33 +53,46 @@ def load_cache(mouse_name: str):
 
 
 def speed_difference(trials: List[TrialSummary]) -> float:
-    return np.mean([trial.speed_AZ for trial in trials if trial.rewarded]).astype(
-        "float"
-    ) - np.mean([trial.speed_AZ for trial in trials if not trial.rewarded]).astype(
-        "float"
+
+    rewarded = [trial.speed_AZ for trial in trials if trial.rewarded]
+    unrewarded = [trial.speed_AZ for trial in trials if not trial.rewarded]
+
+    dprime = (np.mean(unrewarded) - np.mean(rewarded)) / (
+        (np.std(rewarded) + np.std(unrewarded)) / 2
     )
+    return dprime.astype(float)
 
 
 def licking_difference(trials: List[TrialSummary]) -> float:
     rewarded = [trial.licks_AZ > 0 for trial in trials if trial.rewarded]
     not_rewarded = [trial.licks_AZ > 0 for trial in trials if not trial.rewarded]
 
-    return sum(rewarded) / len(rewarded) - sum(not_rewarded) / len(not_rewarded)
+    return d_prime(sum(rewarded) / len(rewarded), sum(not_rewarded) / len(not_rewarded))
+
+    # return sum(rewarded) / len(rewarded) - sum(not_rewarded) / len(not_rewarded)
+
+
+def learning_metric(trials: List[TrialSummary]) -> float:
+    return (speed_difference(trials) + licking_difference(trials)) / 2
 
 
 if __name__ == "__main__":
-    cache_mouse(MOUSE)
+    # cache_mouse(MOUSE)
     mouse = load_cache(MOUSE)
 
+    sessions = [session for session in mouse.sessions if len(session.trials) > 30]
+
     plt.plot(
-        range(len(mouse.sessions)),
-        [licking_difference(session.trials) for session in mouse.sessions],
+        range(len(sessions)),
+        [learning_metric(session.trials) for session in sessions],
     )
+
     plt.xticks(
-        range(len(mouse.sessions)),
-        [session.name for session in mouse.sessions],
+        range(len(sessions)),
+        [session.name for session in sessions],
         rotation=90,
     )
+
     plt.axhline(0, color="black", linestyle="--")
     plt.title(MOUSE)
     plt.show()
