@@ -14,12 +14,14 @@ from utils import (
 
 from constants import DATA_PATH, ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
 import seaborn as sns
+
+
 from scipy.stats import ttest_ind
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J004"
-DATE = "2024-04-25"
+MOUSE = "J013"
+DATE = "2024-05-29"
 SESSION_NUMBER = "001"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
@@ -61,7 +63,6 @@ def plot_lick_raster(
     a0.set_ylabel("Trial number")
     a0.axvspan(180, 200, color="gray", alpha=0.5)
     a0.set_xlim(0, max(all_trials) + 0.1 * max(all_trials))
-
     bins = np.arange(0, 200, 5)
     n, _, _ = a1.hist(all_trials, bins)
     a1.set_ylabel("Total number of licks")
@@ -191,8 +192,8 @@ def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
 
 
 def plot_licking_habituation(trials: List[TrialInfo]) -> None:
-    licks = np.array([trial.lick_start for trial in trials])
-    plot_lick_raster([licks], "Licking Habituation", x_label="Time (s)", jitter=0)
+    licks = [np.array(trial.lick_start) for trial in trials]
+    plot_lick_raster(licks, "Licking Habituation", x_label="Time (s)", jitter=0)
     plt.show()
 
 
@@ -214,7 +215,7 @@ def plot_position_whole_session(trials: List[TrialInfo], sampling_rate: int) -> 
     plt.show()
 
 
-def plot_speed(trials: List[TrialInfo], sampling_rate) -> None:
+def plot_speed(trials: List[TrialInfo], sampling_rate: int) -> None:
     plt.figure(figsize=(10, 6))
     rewarded: List[List[SpeedPosition]] = []
     not_rewarded: List[List[SpeedPosition]] = []
@@ -325,19 +326,20 @@ def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
 
 if __name__ == "__main__":
     trials = load_data(SESSION_PATH)
-    disparity(trials)
+    # disparity(trials)
 
-    print(f"Number of trials: {len(trials)}")
-    print(f"Percent Timed Out: {get_percent_timedout(trials)}")
+    # plot_licking_habituation(trials)
+
+    # print(f"Number of trials: {len(trials)}")
+    # print(f"Percent Timed Out: {get_percent_timedout(trials)}")
     trials = remove_bad_trials(trials)
 
     # az_speed_histogram([summarise_trial(trial) for trial in trials])
 
-    print(f"Number of trials after removing timed out: {len(trials)}")
+    # print(f"Number of trials after removing timed out: {len(trials)}")
 
-    plot_rewarded_vs_unrewarded_licking(trials)
-    # plot_speed(trials, sampling_rate=30)
+    # plot_rewarded_vs_unrewarded_licking(trials)
+    plot_speed(trials, sampling_rate=30)
     # # plot_trial_length(trials)
 
     # plot_previous_trial_dependent_licking(trials)
-    # plot_licking_habituation(trial )
