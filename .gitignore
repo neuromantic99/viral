@@ -1,3 +1,10 @@
+*.png
+*.jpeg
+*.jpg
+
+plots/
+
+
 credentials.json
 token.pickle
 

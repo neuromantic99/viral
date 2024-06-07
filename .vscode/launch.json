@@ -16,6 +16,14 @@
       "program": "viral/multiple_sessions.py",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "labmeeting",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "presentations/2024-06-03_labmeeting.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ]
 }

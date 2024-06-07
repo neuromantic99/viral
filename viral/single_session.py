@@ -1,27 +1,31 @@
+import sys
 from pathlib import Path
+
+# Allow you to run the file directly, remove if exporting as a proper module
+HERE = Path(__file__).parent
+sys.path.append(str(HERE.parent.parent))
+
 import random
 from typing import Dict, List
+
 import matplotlib.pyplot as plt
 import numpy as np
-from models import SpeedPosition, TrialInfo, TrialSummary
+import seaborn as sns
+from scipy.stats import ttest_ind
 
-from utils import (
+from viral.constants import DATA_PATH, ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
+from viral.models import SpeedPosition, TrialInfo, TrialSummary
+from viral.utils import (
     degrees_to_cm,
     get_speed_positions,
-    shaded_line_plot,
     licks_to_position,
+    shaded_line_plot,
 )
-
-from constants import DATA_PATH, ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
-import seaborn as sns
-
-
-from scipy.stats import ttest_ind
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J013"
-DATE = "2024-05-29"
+MOUSE = "J015"
+DATE = "2024-06-06"
 SESSION_NUMBER = "001"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
@@ -46,7 +50,8 @@ def plot_lick_raster(
 ) -> float | None:
 
     f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
-    f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
+    f.suptitle(title)
+    # f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
 
     for idx, lick_trial in enumerate(lick_positions):
         a0.scatter(
@@ -61,11 +66,12 @@ def plot_lick_raster(
         return None
 
     a0.set_ylabel("Trial number")
+    a0.set_ylim(-1, len(lick_positions))
     a0.axvspan(180, 200, color="gray", alpha=0.5)
     a0.set_xlim(0, max(all_trials) + 0.1 * max(all_trials))
     bins = np.arange(0, 200, 5)
     n, _, _ = a1.hist(all_trials, bins)
-    a1.set_ylabel("Total number of licks")
+    a1.set_ylabel("Total # licks")
     a1.set_xlabel(x_label)
     a1.set_ylim(0, rolling_y_lim)
     a1.set_xlim(0, 200)
@@ -159,15 +165,25 @@ def plot_previous_trial_dependent_licking(trials: List[TrialInfo]) -> None:
     plt.show()
 
 
+def plot_licking_all_trials(trials: List[TrialInfo]) -> None:
+    plot_lick_raster(
+        [licks_to_position(trial) for trial in trials],
+        "All trials",
+        None,
+        jitter=0,
+    )
+    plt.show()
+
+
 def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
     rewarded = [licks_to_position(trial) for trial in trials if trial.texture_rewarded]
     unrewarded = [
         licks_to_position(trial) for trial in trials if not trial.texture_rewarded
     ]
 
-    jitter = 0
-    y_max = plot_lick_raster(rewarded, "rewarded", None, jitter=jitter)
-    plot_lick_raster(unrewarded, "unrewarded", y_max, jitter=jitter)
+    jitter = 0.2
+    y_max = plot_lick_raster(rewarded, "Rewarded Trials", None, jitter=jitter)
+    plot_lick_raster(unrewarded, "Unrewarded Trials", y_max, jitter=jitter)
 
     plt.figure()
     plt.title("Anticipatory licking")
@@ -212,6 +228,47 @@ def plot_position_whole_session(trials: List[TrialInfo], sampling_rate: int) -> 
     )
     plt.xlabel("Time (s)")
     plt.ylabel("Position (m)")
+    plt.show()
+
+
+def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
+    plt.figure(figsize=(10, 6))
+
+    first_position = 0
+    last_position = 200
+    step_size = 5
+
+    speeds = []
+
+    for trial in trials:
+        position = degrees_to_cm(np.array(trial.rotary_encoder_position))
+
+        speeds.append(
+            get_speed_positions(
+                position=position,
+                first_position=first_position,
+                last_position=last_position,
+                step_size=step_size,
+                sampling_rate=sampling_rate,
+            )
+        )
+
+    # Should be the same for all trials
+    # Use the bin_stop so there is no forward look ahead
+    x_axis = [bin.position_stop for bin in speeds[0]]
+
+    shaded_line_plot(
+        np.array([[bin.speed for bin in trial] for trial in speeds]),
+        x_axis,
+        "Black",
+        "All Trials",
+    )
+
+    plt.axvspan(180, 200, color="gray", alpha=0.5)
+    plt.legend()
+    plt.ylim(0, None)
+    plt.xlabel("Distance (cm)")
+    plt.ylabel("Speed (cm / s)")
     plt.show()
 
 
@@ -281,7 +338,8 @@ def remove_bad_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
     return [
         trial
         for trial in trials
-        if degrees_to_cm(trial.rotary_encoder_position[-1]) >= 180
+        if trial.rotary_encoder_position
+        and degrees_to_cm(trial.rotary_encoder_position[-1]) >= 180
     ]
 
 
@@ -338,8 +396,8 @@ if __name__ == "__main__":
 
     # print(f"Number of trials after removing timed out: {len(trials)}")
 
-    # plot_rewarded_vs_unrewarded_licking(trials)
-    plot_speed(trials, sampling_rate=30)
+    plot_rewarded_vs_unrewarded_licking(trials)
+    # plot_speed(trials, sampling_rate=30)
     # # plot_trial_length(trials)
 
     # plot_previous_trial_dependent_licking(trials)

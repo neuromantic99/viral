@@ -1,17 +1,17 @@
 import math
-from typing import Any, List, TypeVar
+from typing import List, TypeVar
 from matplotlib import pyplot as plt
 import numpy as np
 
-from constants import ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
-from models import SpeedPosition, TrialInfo
+from .constants import ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
+from .models import SpeedPosition, TrialInfo
 
 
-def shaded_line_plot(arr: np.ndarray[float], x_axis, color: str, label: str):
+def shaded_line_plot(arr: np.ndarray[float], x_axis, color: str, label: str) -> None:
 
     mean = np.mean(arr, 0)
     sem = np.std(arr, 0) / np.sqrt(arr.shape[1])
-    plt.plot(x_axis, mean, color=color, label=label, marker="o")
+    plt.plot(x_axis, mean, color=color, label=label, marker="")
     plt.fill_between(
         x_axis,
         np.subtract(
@@ -42,6 +42,7 @@ def licks_to_position(trial: TrialInfo) -> np.ndarray[float]:
             if state.name in ["trigger_panda", "trigger_panda_post_reward"]
         ]
     )
+
     assert (
         position.shape == time_position.shape
     ), "Maybe, we might have off-by-ones here"
@@ -54,13 +55,6 @@ def licks_to_position(trial: TrialInfo) -> np.ndarray[float]:
         np.abs(lick_start[:, None] - time_position[None, :]), axis=1
     )
     return (position[min_diff_indices] / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE
-
-
-###################### ChatGPT's idea of how to plot speed vs position ##################
-def compute_speed_chat(positions, dt):
-    positions = np.array(positions)
-    displacements = np.diff(positions, axis=0)
-    return np.abs(displacements) / dt
 
 
 def get_speed_positions(
