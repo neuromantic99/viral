@@ -10,7 +10,7 @@ from models import MouseSummary, SessionSummary, TrialSummary
 from utils import d_prime
 
 
-MOUSE = "J007"
+MOUSE = "J008"
 SPREADSHEET_ID = "1fMnVXrDeaWTkX-TT21F4mFuAlaXIe6uVteEjv8mH0Q4"
 
 # Assumes that the sheet name is the same as the mouse name
