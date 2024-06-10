@@ -11,17 +11,13 @@ from matplotlib import pyplot as plt
 import numpy as np
 from viral.gsheets_importer import gsheet2df
 from viral.single_session import load_data, remove_bad_trials, summarise_trial
-from viral.constants import DATA_PATH, HERE
+from viral.constants import DATA_PATH, HERE, SPREADSHEET_ID
 from viral.models import MouseSummary, SessionSummary, TrialSummary
 from viral.utils import d_prime
 
 
-MOUSE = "J007"
-SPREADSHEET_ID = "1fMnVXrDeaWTkX-TT21F4mFuAlaXIe6uVteEjv8mH0Q4"
-
-
 def cache_mouse(mouse_name: str):
-    metadata = gsheet2df(SPREADSHEET_ID, MOUSE, 1)
+    metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     session_summaries = []
     for _, row in metadata.iterrows():
         if "learning day" not in row["Type"].lower():
@@ -32,7 +28,7 @@ def cache_mouse(mouse_name: str):
             if len(row["Session Number"]) == 3
             else f"00{row['Session Number']}"
         )
-        session_path = DATA_PATH / MOUSE / row["Date"] / session_number
+        session_path = DATA_PATH / mouse_name / row["Date"] / session_number
         trials = load_data(session_path)
         trials = remove_bad_trials(trials)
         session_summaries.append(
