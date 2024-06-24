@@ -13,7 +13,7 @@ CRED_PATH = HERE.parent / "credentials.json"
 TOKEN_PATH = HERE.parent / "token.pickle"
 
 
-def build_gsheet(spreadsheet_id: str, sheet_name: str):
+def build_gsheet(spreadsheet_id: str, sheet_name: str) -> None:
     """Takes input of google sheets SPREADSHEET_ID and SHEET_NAME
     returns gsheet object that can be read by gsheet2df into a pandas dataframe.
 
@@ -56,7 +56,7 @@ def build_gsheet(spreadsheet_id: str, sheet_name: str):
     return sheet.values().get(spreadsheetId=spreadsheet_id, range=sheet_name).execute()
 
 
-def gsheet2df(spreadsheet_id: str, sheet_name: str, header_row: int):
+def gsheet2df(spreadsheet_id: str, sheet_name: str, header_row: int) -> pd.DataFrame:
     """
     Imports the sheet defined in SPREADSHEET_ID as a pandas dataframe
     Inputs -

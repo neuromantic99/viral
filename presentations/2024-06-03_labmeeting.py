@@ -18,7 +18,10 @@ from viral.single_session import (
     plot_speed,
     remove_bad_trials,
 )
-from viral.multiple_sessions import load_cache, plot_performance_across_days
+from viral.multiple_sessions import (
+    load_cache,
+    plot_performance_across_days,
+)
 from viral.constants import DATA_PATH, HERE
 
 
