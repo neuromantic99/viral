@@ -18,10 +18,10 @@
       "justMyCode": true
     },
     {
-      "name": "labmeeting",
+      "name": "presentation",
       "type": "debugpy",
       "request": "launch",
-      "program": "presentations/2024-06-03_labmeeting.py",
+      "program": "presentations/2024-06-18_replaymeeting.py",
       "console": "integratedTerminal",
       "justMyCode": true
     }

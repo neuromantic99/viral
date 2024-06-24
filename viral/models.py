@@ -23,6 +23,7 @@ class TrialSummary(BaseModel):
     speed_AZ: float
     licks_AZ: int
     rewarded: bool
+    reward_drunk: bool
 
 
 class SessionSummary(BaseModel):

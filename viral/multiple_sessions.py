@@ -1,6 +1,10 @@
+import copy
 import json
 from pathlib import Path
+import random
 import sys
+
+from pydantic import ValidationError
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
@@ -15,8 +19,12 @@ from viral.constants import DATA_PATH, HERE, SPREADSHEET_ID
 from viral.models import MouseSummary, SessionSummary, TrialSummary
 from viral.utils import d_prime
 
+import seaborn as sns
 
-def cache_mouse(mouse_name: str):
+sns.set_theme(context="talk", style="ticks")
+
+
+def cache_mouse(mouse_name: str) -> None:
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     session_summaries = []
     for _, row in metadata.iterrows():
@@ -33,7 +41,8 @@ def cache_mouse(mouse_name: str):
         trials = remove_bad_trials(trials)
         session_summaries.append(
             SessionSummary(
-                name=row["Type"], trials=[summarise_trial(trial) for trial in trials]
+                name=row["Type"],
+                trials=[summarise_trial(trial) for trial in trials],
             )
         )
 
@@ -69,8 +78,6 @@ def licking_difference(trials: List[TrialSummary]) -> float:
 
     return d_prime(sum(rewarded) / len(rewarded), sum(not_rewarded) / len(not_rewarded))
 
-    # return sum(rewarded) / len(rewarded) - sum(not_rewarded) / len(not_rewarded)
-
 
 def learning_metric(trials: List[TrialSummary]) -> float:
     return (speed_difference(trials) + licking_difference(trials)) / 2
@@ -93,10 +100,55 @@ def plot_performance_across_days(sessions: List[SessionSummary]) -> None:
     # plt.title(MOUSE)
 
 
-if __name__ == "__main__":
-    cache_mouse(MOUSE)
-    # Assumes that the sheet name is the same as the mouse name
-    mouse = load_cache(MOUSE)
-    sessions = [session for session in mouse.sessions if len(session.trials) > 20]
-    plot_performance_across_days(sessions)
-    plt.show()
+def flatten_sessions(sessions: List[SessionSummary]) -> List[TrialSummary]:
+    return [trial for session in sessions for trial in session.trials]
+
+
+def rolling_performance(trials: List[TrialSummary], window: int) -> List[float]:
+    return [
+        learning_metric(trials[idx - window : idx])
+        for idx in range(window, len(trials))
+    ]
+
+
+def plot_rolling_performance(
+    sessions: List[SessionSummary], window: int, add_text_to_chance: bool = True
+) -> None:
+
+    trials = flatten_sessions(sessions)
+    rolling = rolling_performance(trials, window)
+
+    plt.plot(rolling)
+    plt.axhspan(-0.5, 0.5, color="gray", alpha=0.5)
+    if add_text_to_chance:
+        plt.text(
+            len(rolling),
+            0,
+            "chance level",
+            horizontalalignment="right",
+            verticalalignment="center",
+            color="gray",
+            fontsize=12,
+            weight="bold",
+            clip_on=True,
+        )
+
+
+def get_chance_level(mice: List[MouseSummary]) -> List[float]:
+    """Rough permutation test / bootstrap for chance level. Needs to be formalised further."""
+
+    # TODO: Maybe should compute this on a per mouse basis
+    all_trials = [
+        copy.deepcopy(trial)
+        for mouse in mice
+        for trial in flatten_sessions(mouse.sessions)
+    ]
+
+    result = []
+    for _ in range(1000):
+        sample = random.sample(all_trials, 50)
+        for trial in sample:
+            trial.rewarded = random.choice([True, False])
+        result.append(learning_metric(sample))
+
+    return result

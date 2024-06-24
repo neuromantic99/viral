@@ -24,8 +24,8 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J015"
-DATE = "2024-06-06"
+MOUSE = "J016"
+DATE = "2024-06-20"
 SESSION_NUMBER = "001"
 SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
@@ -48,7 +48,6 @@ def plot_lick_raster(
     jitter: float = 0.0,
     x_label: str = "Position (cm)",
 ) -> float | None:
-
     f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     f.suptitle(title)
     # f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
@@ -80,10 +79,10 @@ def plot_lick_raster(
 
 
 def get_anticipatory_licking(lick_positions: np.ndarray[float]) -> int:
-    return np.sum(np.logical_and(lick_positions > 80, lick_positions < 180))
+    return np.sum(np.logical_and(lick_positions > 150, lick_positions < 180))
 
 
-def plot_trial_length(trials: List[TrialInfo]):
+def plot_trial_length(trials: List[TrialInfo]) -> None:
     plt.figure()
     sns.boxplot(
         {
@@ -284,7 +283,6 @@ def plot_speed(trials: List[TrialInfo], sampling_rate: int) -> None:
     last_position = 200
     step_size = 5
     for idx, trial in enumerate(trials):
-
         position = degrees_to_cm(np.array(trial.rotary_encoder_position))
 
         speed = get_speed_positions(
@@ -350,18 +348,30 @@ def summarise_trial(trial: TrialInfo) -> TrialSummary:
     return TrialSummary(
         speed_AZ=get_speed_positions(
             position=position,
-            first_position=170,
+            first_position=150,
             last_position=180,
-            step_size=10,
+            step_size=30,
             sampling_rate=30,
         )[0].speed,
         licks_AZ=get_anticipatory_licking(licks_to_position(trial)),
         rewarded=trial.texture_rewarded,
+        reward_drunk=reward_drunk(trial),
     )
 
 
-def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
+def reward_drunk(trial: TrialInfo) -> bool:
+    if (
+        not trial.texture_rewarded
+        or degrees_to_cm(trial.rotary_encoder_position[-1]) < 180
+    ):
+        return False
 
+    reward_zone_licks = licks_to_position(trial) > 180
+    # Greater than 1 to remove artifact from water coming out
+    return sum(reward_zone_licks) > 1
+
+
+def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
     rewarded = [trial.speed_AZ for trial in trial_summaries if trial.rewarded]
     not_rewarded = [trial.speed_AZ for trial in trial_summaries if not trial.rewarded]
     plt.hist(
@@ -388,8 +398,8 @@ if __name__ == "__main__":
 
     # plot_licking_habituation(trials)
 
-    # print(f"Number of trials: {len(trials)}")
-    # print(f"Percent Timed Out: {get_percent_timedout(trials)}")
+    print(f"Number of trials: {len(trials)}")
+    print(f"Percent Timed Out: {get_percent_timedout(trials)}")
     trials = remove_bad_trials(trials)
 
     # az_speed_histogram([summarise_trial(trial) for trial in trials])
