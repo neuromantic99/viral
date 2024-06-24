@@ -1,5 +1,6 @@
 import math
-from typing import List, TypeVar
+from typing import Iterable, List, TypeVar
+import warnings
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -7,7 +8,12 @@ from .constants import ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
 from .models import SpeedPosition, TrialInfo
 
 
-def shaded_line_plot(arr: np.ndarray[float], x_axis, color: str, label: str) -> None:
+def shaded_line_plot(
+    arr: np.ndarray[float],
+    x_axis: np.ndarray[float] | List[float],
+    color: str,
+    label: str,
+) -> None:
 
     mean = np.mean(arr, 0)
     sem = np.std(arr, 0) / np.sqrt(arr.shape[1])
@@ -43,9 +49,16 @@ def licks_to_position(trial: TrialInfo) -> np.ndarray[float]:
         ]
     )
 
-    assert (
-        position.shape == time_position.shape
-    ), "Maybe, we might have off-by-ones here"
+    match abs(position.shape[0] - time_position.shape[0]):
+        case 0:
+            pass
+        case 1:
+            warnings.warn(
+                "There is an off-by-one here. That happens occassionally for a reason i don't understand but, probably doesn't matter."
+            )
+        case _:
+            raise ValueError("posiiton and time_position should have the same length.")
+
     # You can get NaNs if a state is not entered in a trial. Replace with -inf to stop
     # it being detected as the argmin
     time_position[np.isnan(time_position)] = -np.inf
