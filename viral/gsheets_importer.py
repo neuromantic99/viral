@@ -1,5 +1,6 @@
 import pickle
 import os.path
+from typing import Dict
 
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -13,7 +14,7 @@ CRED_PATH = HERE.parent / "credentials.json"
 TOKEN_PATH = HERE.parent / "token.pickle"
 
 
-def build_gsheet(spreadsheet_id: str, sheet_name: str) -> None:
+def build_gsheet(spreadsheet_id: str, sheet_name: str) -> Dict:
     """Takes input of google sheets SPREADSHEET_ID and SHEET_NAME
     returns gsheet object that can be read by gsheet2df into a pandas dataframe.
 

@@ -73,7 +73,7 @@ def after_learning_speed() -> None:
     plot_speed(trials, 30)
 
 
-def across_days():
+def across_days() -> None:
     plt.figure(figsize=(10, 4))
     # f, (ax, bx) = plt.subplots(, 1, sharey="row")
     for idx, mouse_name in enumerate(["J004", "J005", "J007"]):

@@ -8,7 +8,11 @@ sys.path.append(str(HERE.parent))
 from matplotlib import pyplot as plt
 
 from viral.constants import HERE
-from viral.multiple_sessions import load_cache, plot_rolling_performance
+from viral.multiple_sessions import (
+    get_chance_level,
+    load_cache,
+    plot_rolling_performance,
+)
 
 
 def plot_rolling_performance_all_mice() -> None:
