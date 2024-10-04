@@ -15,21 +15,21 @@ sns.set_theme(context="talk", style="ticks")
 from viral.single_session import (
     load_data,
     plot_rewarded_vs_unrewarded_licking,
-    plot_speed,
+    plot_speed_reward_unrewarded,
     remove_bad_trials,
 )
 from viral.multiple_sessions import (
     load_cache,
     plot_performance_across_days,
 )
-from viral.constants import DATA_PATH, HERE
+from viral.constants import BEHAVIOUR_DATA_PATH, HERE
 
 
 def before_learning_licking() -> None:
     MOUSE = "J005"
     DATE = "2024-04-26"
     SESSION_NUMBER = "002"
-    SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
+    SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
     trials = load_data(SESSION_PATH)
     trials = remove_bad_trials(trials)
@@ -41,7 +41,7 @@ def after_learning_licking() -> None:
     MOUSE = "J007"
     DATE = "2024-04-29"
     SESSION_NUMBER = "002"
-    SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
+    SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
     trials = load_data(SESSION_PATH)
     trials = remove_bad_trials(trials)
@@ -54,11 +54,11 @@ def before_learning_speed() -> None:
     MOUSE = "J005"
     DATE = "2024-04-26"
     SESSION_NUMBER = "002"
-    SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
+    SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
     trials = load_data(SESSION_PATH)
     trials = remove_bad_trials(trials)
-    plot_speed(trials, 30)
+    plot_speed_reward_unrewarded(trials, 30)
 
 
 def after_learning_speed() -> None:
@@ -66,11 +66,11 @@ def after_learning_speed() -> None:
     MOUSE = "J005"
     DATE = "2024-05-02"
     SESSION_NUMBER = "001"
-    SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
+    SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
     trials = load_data(SESSION_PATH)
     trials = remove_bad_trials(trials)
-    plot_speed(trials, 30)
+    plot_speed_reward_unrewarded(trials, 30)
 
 
 def across_days() -> None:

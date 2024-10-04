@@ -29,6 +29,8 @@ class TrialSummary(BaseModel):
 class SessionSummary(BaseModel):
     name: str
     trials: List[TrialSummary]
+    rewarded_licks: List[int]
+    unrewarded_licks: List[int]
 
 
 class MouseSummary(BaseModel):

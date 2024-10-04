@@ -7,13 +7,16 @@ sys.path.append(str(HERE.parent.parent))
 
 import random
 from typing import Dict, List
-
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from scipy.stats import ttest_ind
 
-from viral.constants import DATA_PATH, ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
+from viral.constants import (
+    BEHAVIOUR_DATA_PATH,
+    ENCODER_TICKS_PER_TURN,
+    WHEEL_CIRCUMFERENCE,
+)
 from viral.models import SpeedPosition, TrialInfo, TrialSummary
 from viral.utils import (
     degrees_to_cm,
@@ -24,10 +27,10 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J016"
-DATE = "2024-06-20"
-SESSION_NUMBER = "001"
-SESSION_PATH = DATA_PATH / MOUSE / DATE / SESSION_NUMBER
+MOUSE = "J019"
+DATE = "2024-09-30"
+SESSION_NUMBER = "002"
+SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
 def load_data(session_path: Path) -> List[TrialInfo]:
@@ -42,11 +45,12 @@ def load_data(session_path: Path) -> List[TrialInfo]:
 
 
 def plot_lick_raster(
-    lick_positions: List[np.ndarray[float]],
+    lick_positions: List[np.ndarray],
     title: str,
     rolling_y_lim: float | None = None,
     jitter: float = 0.0,
     x_label: str = "Position (cm)",
+    x_max: int = 200,
 ) -> float | None:
     f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     f.suptitle(title)
@@ -68,17 +72,20 @@ def plot_lick_raster(
     a0.set_ylim(-1, len(lick_positions))
     a0.axvspan(180, 200, color="gray", alpha=0.5)
     a0.set_xlim(0, max(all_trials) + 0.1 * max(all_trials))
-    bins = np.arange(0, 200, 5)
+    # bins = np.arange(0, 200, x_max / 40)
+    bins = np.arange(0, x_max, 4)
+
     n, _, _ = a1.hist(all_trials, bins)
     a1.set_ylabel("Total # licks")
     a1.set_xlabel(x_label)
     a1.set_ylim(0, rolling_y_lim)
-    a1.set_xlim(0, 200)
+    a1.set_xlim(0, x_max)
     a1.axvspan(180, 200, color="gray", alpha=0.5)
+
     return max(n)
 
 
-def get_anticipatory_licking(lick_positions: np.ndarray[float]) -> int:
+def get_anticipatory_licking(lick_positions: np.ndarray) -> int:
     return np.sum(np.logical_and(lick_positions > 150, lick_positions < 180))
 
 
@@ -109,7 +116,7 @@ def get_percent_timedout(trials: List[TrialInfo]) -> Dict[str, float]:
     return {
         "rewarded": round(
             sum(
-                trial.trial_end_time - trial.trial_start_time > 120
+                trial.trial_end_time - trial.trial_start_time > 300
                 for trial in rewarded
             )
             / len(rewarded)
@@ -118,7 +125,7 @@ def get_percent_timedout(trials: List[TrialInfo]) -> Dict[str, float]:
         ),
         "unrewarded": round(
             sum(
-                trial.trial_end_time - trial.trial_start_time > 120
+                trial.trial_end_time - trial.trial_start_time > 300
                 for trial in unrewarded
             )
             / len(unrewarded)
@@ -203,16 +210,19 @@ def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
         f"Unrewarded: {round(sum(trial  > 0 for trial in unrewarded_anticipatory) / len(unrewarded_anticipatory), 2)}"
     )
 
-    plt.show()
-
 
 def plot_licking_habituation(trials: List[TrialInfo]) -> None:
     licks = [np.array(trial.lick_start) for trial in trials]
-    plot_lick_raster(licks, "Licking Habituation", x_label="Time (s)", jitter=0)
-    plt.show()
+    plot_lick_raster(
+        licks,
+        f"Licking Habituation {MOUSE} {DATE}",
+        x_label="Time (s)",
+        jitter=0,
+        x_max=30,
+    )
 
 
-def plot_position_whole_session(trials: List[TrialInfo], sampling_rate: int) -> None:
+def plot_position_habituation(trials: List[TrialInfo], sampling_rate: int) -> None:
     all_positions = np.array([], dtype="float")
     previous_rotary_end = 0
     for trial in trials:
@@ -227,7 +237,6 @@ def plot_position_whole_session(trials: List[TrialInfo], sampling_rate: int) -> 
     )
     plt.xlabel("Time (s)")
     plt.ylabel("Position (m)")
-    plt.show()
 
 
 def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
@@ -271,7 +280,7 @@ def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
     plt.show()
 
 
-def plot_speed(trials: List[TrialInfo], sampling_rate: int) -> None:
+def plot_speed_reward_unrewarded(trials: List[TrialInfo], sampling_rate: int) -> None:
     plt.figure(figsize=(10, 6))
     rewarded: List[List[SpeedPosition]] = []
     not_rewarded: List[List[SpeedPosition]] = []
@@ -327,7 +336,6 @@ def plot_speed(trials: List[TrialInfo], sampling_rate: int) -> None:
     plt.xlabel("Distance (cm)")
     plt.ylabel("Speed (cm / s)")
     plt.title(MOUSE)
-    plt.show()
 
 
 def remove_bad_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
@@ -357,6 +365,12 @@ def summarise_trial(trial: TrialInfo) -> TrialSummary:
         rewarded=trial.texture_rewarded,
         reward_drunk=reward_drunk(trial),
     )
+
+
+def get_binned_licks(trials: List[TrialInfo]) -> List[int]:
+    """Bin licks across trials. Need to think about doing this for separate trials for the error"""
+    licks = np.concatenate([licks_to_position(trial) for trial in trials])
+    return np.histogram(licks, bins=np.arange(0, 200, 5))[0].tolist()
 
 
 def reward_drunk(trial: TrialInfo) -> bool:
@@ -396,18 +410,28 @@ if __name__ == "__main__":
     trials = load_data(SESSION_PATH)
     # disparity(trials)
 
+    # plot_position_habituation(trials, sampling_rate=10)
     # plot_licking_habituation(trials)
+    # plt.show()
 
-    print(f"Number of trials: {len(trials)}")
-    print(f"Percent Timed Out: {get_percent_timedout(trials)}")
+    total_number_trials = len(trials)
+    print(f"Number of trials: {total_number_trials}")
+    print(get_percent_timedout(trials))
     trials = remove_bad_trials(trials)
+    print(f"Number of after bad removal: {len(trials)}")
+    print(
+        f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
+    )
+    # binned = get_binned_licks(trials)
 
     # az_speed_histogram([summarise_trial(trial) for trial in trials])
 
     # print(f"Number of trials after removing timed out: {len(trials)}")
 
     plot_rewarded_vs_unrewarded_licking(trials)
-    # plot_speed(trials, sampling_rate=30)
+    plot_speed_reward_unrewarded(trials, sampling_rate=30)
+    plt.show()
+
     # # plot_trial_length(trials)
 
     # plot_previous_trial_dependent_licking(trials)
