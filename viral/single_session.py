@@ -17,7 +17,9 @@ from viral.constants import (
     ENCODER_TICKS_PER_TURN,
     WHEEL_CIRCUMFERENCE,
 )
+
 from viral.models import SpeedPosition, TrialInfo, TrialSummary
+
 from viral.utils import (
     degrees_to_cm,
     get_speed_positions,
@@ -27,9 +29,9 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J019"
-DATE = "2024-09-30"
-SESSION_NUMBER = "002"
+MOUSE = "JB013"
+DATE = "2024-10-18"
+SESSION_NUMBER = "001"
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -51,6 +53,7 @@ def plot_lick_raster(
     jitter: float = 0.0,
     x_label: str = "Position (cm)",
     x_max: int = 200,
+    bins: np.ndarray | None = None,
 ) -> float | None:
     f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     f.suptitle(title)
@@ -72,8 +75,7 @@ def plot_lick_raster(
     a0.set_ylim(-1, len(lick_positions))
     a0.axvspan(180, 200, color="gray", alpha=0.5)
     a0.set_xlim(0, max(all_trials) + 0.1 * max(all_trials))
-    # bins = np.arange(0, 200, x_max / 40)
-    bins = np.arange(0, x_max, 4)
+    bins = bins if bins is not None else np.arange(0, 200, 5)
 
     n, _, _ = a1.hist(all_trials, bins)
     a1.set_ylabel("Total # licks")
@@ -219,6 +221,7 @@ def plot_licking_habituation(trials: List[TrialInfo]) -> None:
         x_label="Time (s)",
         jitter=0,
         x_max=30,
+        bins=np.arange(0, 31, 1),
     )
 
 
@@ -410,27 +413,28 @@ if __name__ == "__main__":
     trials = load_data(SESSION_PATH)
     # disparity(trials)
 
-    # plot_position_habituation(trials, sampling_rate=10)
-    # plot_licking_habituation(trials)
-    # plt.show()
+    print(len(trials))
+    plot_position_habituation(trials, sampling_rate=10)
+    plot_licking_habituation(trials)
+    plt.show()
 
-    total_number_trials = len(trials)
-    print(f"Number of trials: {total_number_trials}")
-    print(get_percent_timedout(trials))
-    trials = remove_bad_trials(trials)
-    print(f"Number of after bad removal: {len(trials)}")
-    print(
-        f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
-    )
+    # total_number_trials = len(trials)
+    # print(f"Number of trials: {total_number_trials}")
+    # print(get_percent_timedout(trials))
+    # trials = remove_bad_trials(trials)
+    # print(f"Number of after bad removal: {len(trials)}")
+    # print(
+    #     f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
+    # )
     # binned = get_binned_licks(trials)
 
     # az_speed_histogram([summarise_trial(trial) for trial in trials])
 
     # print(f"Number of trials after removing timed out: {len(trials)}")
 
-    plot_rewarded_vs_unrewarded_licking(trials)
-    plot_speed_reward_unrewarded(trials, sampling_rate=30)
-    plt.show()
+    # plot_rewarded_vs_unrewarded_licking(trials)
+    # plot_speed_reward_unrewarded(trials, sampling_rate=30)
+    # plt.show()
 
     # # plot_trial_length(trials)
 
