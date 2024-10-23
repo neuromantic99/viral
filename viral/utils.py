@@ -1,5 +1,5 @@
 import math
-from typing import Iterable, List, TypeVar
+from typing import List, Tuple, TypeVar
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
@@ -33,7 +33,7 @@ def shaded_line_plot(
     )
 
 
-def licks_to_position(trial: TrialInfo) -> np.ndarray[float]:
+def licks_to_position(trial: TrialInfo) -> np.ndarray:
     """Tested with hardware does not give false anticipatory licks. Write software tests still."""
 
     position = np.array(trial.rotary_encoder_position).astype(float)
@@ -125,6 +125,14 @@ def degrees_to_cm(degrees: T) -> T:
     return (degrees / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE
 
 
+def threshold_detect(signal: np.ndarray, threshold: float) -> np.ndarray:
+    """lloyd russell"""
+    thresh_signal = signal > threshold
+    thresh_signal[1:][thresh_signal[:-1] & thresh_signal[1:]] = False
+    times = np.where(thresh_signal)
+    return times[0]
+
+
 def pade_approx_norminv(p: float) -> float:
     q = (
         math.sqrt(2 * math.pi) * (p - 1 / 2)
@@ -140,3 +148,17 @@ def pade_approx_norminv(p: float) -> float:
 
 def d_prime(hit_rate: float, false_alarm_rate: float) -> float:
     return pade_approx_norminv(hit_rate) - pade_approx_norminv(false_alarm_rate)
+
+
+def threshold_detect_edges(
+    signal: np.ndarray, threshold: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    rising_edges = (signal[:-1] <= threshold) & (signal[1:] > threshold)
+    falling_edges = (signal[:-1] > threshold) & (signal[1:] <= threshold)
+    rising_indices = (
+        np.where(rising_edges)[0] + 1
+    )  # Shift by 1 to get the index where the crossing occurs
+    falling_indices = (
+        np.where(falling_edges)[0] + 1
+    )  # Shift by 1 to get the index where the crossing occurs
+    return rising_indices, falling_indices
