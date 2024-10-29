@@ -3,7 +3,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from viral.models import SpeedPosition
-from viral.utils import extract_frame_times, get_speed_positions, threshold_detect_edges
+from viral.utils import extract_TTL_chunks, get_speed_positions, threshold_detect_edges
 
 
 def compare_pydantic_models(
@@ -138,7 +138,7 @@ def test_regular_frame_clock_intervals() -> None:
     frame_clock = np.zeros(1000)
     frame_clock[::30] = 5
 
-    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+    frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
 
     # Check that the length of the detected frames is as expected
     assert len(frame_times) == len(frame_clock[::30])
@@ -158,7 +158,7 @@ def test_frame_clock_with_single_gap() -> None:
 
     frame_clock = np.hstack((frame_clock1, frame_clock2, frame_clock3))
 
-    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+    frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
 
     # Check that chunk length splits into two parts as expected
     assert len(chunk_lens) == 2
@@ -175,10 +175,41 @@ def test_multiple_gaps_in_frame_clock() -> None:
     frame_clock[12000:14000] = 0  # Second gap
     frame_clock[25000:28000] = 0  # Third gap
 
-    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+    frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
 
     # Expect 4 chunks due to 3 gaps introduced
     assert len(chunk_lens) == 4
     # Sum of chunk lengths should equal total frames detected
     assert sum(chunk_lens) == len(frame_times)
+    assert len(frame_times) == np.sum(frame_clock == 5)
+
+
+def test_chunk_len_correct() -> None:
+    sampling_rate = 10
+    frame_clock = np.zeros(100)
+
+    frame_clock[1] = 5
+    frame_clock[2] = 0
+    frame_clock[3] = 5
+    frame_clock[4] = 0
+    frame_clock[5] = 5
+
+    frame_clock[50] = 5
+    frame_clock[51] = 0
+    frame_clock[52] = 5
+    frame_clock[53] = 0
+    frame_clock[54] = 5
+    frame_clock[55] = 0
+    frame_clock[56] = 5
+
+    frame_clock[70] = 5
+    frame_clock[71] = 0
+    frame_clock[72] = 5
+    frame_clock[73] = 0
+    frame_clock[74] = 5
+
+    frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
+
+    assert len(chunk_lens) == 3
+    assert chunk_lens[0] == 3 and chunk_lens[1] == 4 and chunk_lens[2] == 3
     assert len(frame_times) == np.sum(frame_clock == 5)
