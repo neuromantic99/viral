@@ -1,11 +1,17 @@
 import math
+from pathlib import Path
 from typing import List, Tuple, TypeVar
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
+from collections import Counter
 
 from .constants import ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
 from .models import SpeedPosition, TrialInfo
+
+
+from nptdms import TdmsFile
+from ScanImageTiffReader import ScanImageTiffReader
 
 
 def shaded_line_plot(
@@ -162,3 +168,71 @@ def threshold_detect_edges(
         np.where(falling_edges)[0] + 1
     )  # Shift by 1 to get the index where the crossing occurs
     return rising_indices, falling_indices
+
+
+def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
+    return list(directory.glob("*.tif"))
+
+
+def process_sync_file(tdms_path: Path, tiff_directory: Path) -> None:
+    # tiffs = sorted(get_tiff_paths_in_directory(tiff_directory))
+
+    # stack_lengths = [ScanImageTiffReader(str(tiff)).shape()[0] for tiff in tiffs]
+    stack_lengths = [10963, 23779, 19146, 8960, 340, 15313, 13176]
+    tdms_file = TdmsFile.read(tdms_path)
+
+    group = tdms_file["Analog"]
+    frame_clock = group["AI0"][:]
+    behaviour_clock = group["AI1"][:]
+
+    # Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
+    # two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
+    if 30 < len(frame_clock) / 1000 / 60 < 100:
+        sampling_rate = 1000
+    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+        sampling_rate = 10000
+    else:
+        raise ValueError("Could not determine sampling rate")
+
+    print(f"Sampling rate: {sampling_rate}")
+    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+
+    plt.plot(frame_clock)
+    plt.plot(frame_times, np.ones(len(frame_times)), ".", color="green")
+    print(Counter(np.diff(frame_times)))
+    print(chunk_lens - stack_lengths)
+
+    21 / 0
+
+
+def extract_frame_times(
+    frame_clock: np.ndarray, sampling_rate: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    frame_times = threshold_detect(frame_clock, 1)
+
+    # Remove the chunk stop indices as this is when the signal goes low after aquistion stops
+    frame_times = np.delete(
+        frame_times, np.where(np.diff(frame_clock) > sampling_rate)[0]
+    )
+
+    diffed = np.diff(frame_times)
+    # Make sure there are no frame clocks that don't make sense, more than one frame apart but less than a second apart
+    bad_times = np.where(
+        np.logical_or(
+            diffed < 29 * sampling_rate / 1000,
+            np.logical_and(diffed > 40 * sampling_rate / 1000, diffed < sampling_rate),
+        )
+    )[0]
+    if len(bad_times) != 0:
+        plt.plot(frame_clock)
+        plt.plot(frame_times, np.ones(len(frame_times)), ".", color="green")
+        plt.plot(frame_times[bad_times], np.ones(len(bad_times)), ".", color="red")
+        plt.show()
+        raise ValueError(
+            "Bad inter-frame-interval. Inspect the clock using plt.plot(frame_times[bad_times], np.ones(len(bad_times)), '.')"
+        )
+    gap_idx = np.where(np.diff(frame_times) > sampling_rate)[0]
+    gap_idx = np.insert(gap_idx, 0, 0)
+    gap_idx = np.append(gap_idx, len(frame_times))
+    chunk_lens = np.diff(gap_idx)
+    return frame_times, chunk_lens

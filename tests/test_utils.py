@@ -3,7 +3,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from viral.models import SpeedPosition
-from viral.utils import get_speed_positions, threshold_detect_edges
+from viral.utils import extract_frame_times, get_speed_positions, threshold_detect_edges
 
 
 def compare_pydantic_models(
@@ -131,3 +131,54 @@ def test_signal_just_meets_threshold() -> None:
     assert (
         len(falling) == 0
     ), "There should be no falling edges as the signal is at the threshold"
+
+
+def test_regular_frame_clock_intervals() -> None:
+    sampling_rate = 1000
+    frame_clock = np.zeros(1000)
+    frame_clock[::30] = 5
+
+    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+
+    # Check that the length of the detected frames is as expected
+    assert len(frame_times) == len(frame_clock[::30])
+    assert np.array_equal(np.array([34]), chunk_lens)
+
+
+def test_frame_clock_with_single_gap() -> None:
+    # Frame clock with a single larger gap, should split into two chunks
+    sampling_rate = 1000
+    frame_clock1 = np.zeros(2000)
+    frame_clock1[::30] = 5
+
+    frame_clock2 = np.zeros(5000)
+
+    frame_clock3 = np.zeros(3000)
+    frame_clock3[::30] = 5
+
+    frame_clock = np.hstack((frame_clock1, frame_clock2, frame_clock3))
+
+    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+
+    # Check that chunk length splits into two parts as expected
+    assert len(chunk_lens) == 2
+    # Ensure chunks are roughly half each of 33 expected intervals
+    assert len(frame_times) == len(frame_clock1[::30]) + len(frame_clock3[::30])
+
+
+def test_multiple_gaps_in_frame_clock() -> None:
+    # Frame clock with multiple large gaps, expecting multiple chunks
+    sampling_rate = 1000
+    frame_clock = np.zeros(30000)
+    frame_clock[::30] = 5
+    frame_clock[500:1600] = 0  # First gap
+    frame_clock[12000:14000] = 0  # Second gap
+    frame_clock[25000:28000] = 0  # Third gap
+
+    frame_times, chunk_lens = extract_frame_times(frame_clock, sampling_rate)
+
+    # Expect 4 chunks due to 3 gaps introduced
+    assert len(chunk_lens) == 4
+    # Sum of chunk lengths should equal total frames detected
+    assert sum(chunk_lens) == len(frame_times)
+    assert len(frame_times) == np.sum(frame_clock == 5)
