@@ -3,6 +3,7 @@ from pathlib import Path
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
+sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 import random
@@ -24,14 +25,15 @@ from viral.utils import (
     degrees_to_cm,
     get_speed_positions,
     licks_to_position,
+    process_sync_file,
     shaded_line_plot,
 )
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB013"
-DATE = "2024-10-18"
-SESSION_NUMBER = "001"
+MOUSE = "TEST23"
+DATE = "2024-11-04"
+SESSION_NUMBER = "002"
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -68,6 +70,7 @@ def plot_lick_raster(
         )
 
     all_trials = np.concatenate(lick_positions)
+
     if len(all_trials) == 0:
         return None
 
@@ -343,7 +346,8 @@ def plot_speed_reward_unrewarded(trials: List[TrialInfo], sampling_rate: int) ->
 
 def remove_bad_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
     """Remove the first trial as putting the mouse on the wheel, and timed out trials"""
-    trials = trials[1:]
+    # Taken this out, as on the 2p the first trial is not bad
+    # trials = trials[1:]
     return [
         trial
         for trial in trials
@@ -409,33 +413,37 @@ def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
     plt.show()
 
 
+def do_sync() -> None:
+
+    trials = load_data(
+        Path("/Volumes/MarcBusche/Josef/Behaviour/online/Subjects/JB011/2024-10-28/002")
+    )
+
+    process_sync_file(
+        Path("/Volumes/MarcBusche/Josef/DAQami/20241028_1715.tdms"),
+        Path("/Volumes/MarcBusche/Josef/2P/2024-10-28/Jb011"),
+        trials,
+    )
+
+
 if __name__ == "__main__":
+
+    # do_sync()
     trials = load_data(SESSION_PATH)
-    # disparity(trials)
 
-    print(len(trials))
-    plot_position_habituation(trials, sampling_rate=10)
-    plot_licking_habituation(trials)
+    # Is habituation
+    if not trials[0].texture:
+        plot_position_habituation(trials, sampling_rate=10)
+        plot_licking_habituation(trials)
+    # Is task
+    else:
+        total_number_trials = len(trials)
+        print(f"Number of trials: {total_number_trials}")
+        trials = remove_bad_trials(trials)
+        print(f"Number of after bad removal: {len(trials)}")
+        print(
+            f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
+        )
+        plot_rewarded_vs_unrewarded_licking(trials)
+        plot_speed_reward_unrewarded(trials, sampling_rate=30)
     plt.show()
-
-    # total_number_trials = len(trials)
-    # print(f"Number of trials: {total_number_trials}")
-    # print(get_percent_timedout(trials))
-    # trials = remove_bad_trials(trials)
-    # print(f"Number of after bad removal: {len(trials)}")
-    # print(
-    #     f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
-    # )
-    # binned = get_binned_licks(trials)
-
-    # az_speed_histogram([summarise_trial(trial) for trial in trials])
-
-    # print(f"Number of trials after removing timed out: {len(trials)}")
-
-    # plot_rewarded_vs_unrewarded_licking(trials)
-    # plot_speed_reward_unrewarded(trials, sampling_rate=30)
-    # plt.show()
-
-    # # plot_trial_length(trials)
-
-    # plot_previous_trial_dependent_licking(trials)
