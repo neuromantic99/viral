@@ -1,12 +1,12 @@
 import math
 from pathlib import Path
+import time
 from typing import List, Tuple, TypeVar
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
-from collections import Counter
 
-from .constants import ENCODER_TICKS_PER_TURN, WHEEL_CIRCUMFERENCE
+from .constants import ENCODER_TICKS_PER_TURN
 from .models import SpeedPosition, TrialInfo
 
 
@@ -15,8 +15,8 @@ from ScanImageTiffReader import ScanImageTiffReader
 
 
 def shaded_line_plot(
-    arr: np.ndarray[float],
-    x_axis: np.ndarray[float] | List[float],
+    arr: np.ndarray,
+    x_axis: np.ndarray | List[float],
     color: str,
     label: str,
 ) -> None:
@@ -39,7 +39,7 @@ def shaded_line_plot(
     )
 
 
-def licks_to_position(trial: TrialInfo) -> np.ndarray:
+def licks_to_position(trial: TrialInfo, wheel_circumference: float) -> np.ndarray:
     """Tested with hardware does not give false anticipatory licks. Write software tests still."""
 
     position = np.array(trial.rotary_encoder_position).astype(float)
@@ -73,7 +73,7 @@ def licks_to_position(trial: TrialInfo) -> np.ndarray:
     min_diff_indices = np.argmin(
         np.abs(lick_start[:, None] - time_position[None, :]), axis=1
     )
-    return (position[min_diff_indices] / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE
+    return (position[min_diff_indices] / ENCODER_TICKS_PER_TURN) * wheel_circumference
 
 
 def get_speed_positions(
@@ -127,8 +127,8 @@ def get_speed_positions(
 T = TypeVar("T", float, np.ndarray)
 
 
-def degrees_to_cm(degrees: T) -> T:
-    return (degrees / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE
+def degrees_to_cm(degrees: T, wheel_circumference: float) -> T:
+    return (degrees / ENCODER_TICKS_PER_TURN) * wheel_circumference
 
 
 def threshold_detect(signal: np.ndarray, threshold: float) -> np.ndarray:
@@ -178,18 +178,76 @@ def count_spacers(trial: TrialInfo) -> int:
     return len([state for state in trial.states_info if "spacer_high" in state.name])
 
 
+def add_daq_times_to_trial(
+    trial: TrialInfo,
+    trial_idx: int,
+    frame_times: np.ndarray,
+    behaviour_times: np.ndarray,
+    behaviour_chunk_lens: np.ndarray,
+    daq_sampling_rate: int,
+) -> None:
+    trial_spacer_daq_times = behaviour_times[
+        np.sum(behaviour_chunk_lens[:trial_idx]) : np.sum(
+            behaviour_chunk_lens[: trial_idx + 1]
+        )
+    ]
+    # Sanity check the above logic
+    assert len(trial_spacer_daq_times) == count_spacers(trial)
+
+    trial_spacer_bpod_times = np.array(
+        [state.start_time for state in trial.states_info if "spacer_high" in state.name]
+    )
+
+    # Should be the first state, but verify
+    assert trial_spacer_bpod_times[0] == 0
+
+    # Check that the clocks are equal to the millisecond
+    np.testing.assert_almost_equal(
+        (trial_spacer_daq_times - trial_spacer_daq_times[0]) / daq_sampling_rate,
+        trial_spacer_bpod_times,
+        decimal=3,
+    )
+
+    bpod_to_daq = (
+        lambda bpod_time: bpod_time * daq_sampling_rate + trial_spacer_daq_times[0]
+    )
+
+    # Another probably redundant sanity check
+    np.testing.assert_almost_equal(
+        np.array([bpod_to_daq(bpod_time) for bpod_time in trial_spacer_bpod_times])
+        / daq_sampling_rate,
+        trial_spacer_daq_times / daq_sampling_rate,
+        decimal=3,
+    )
+
+    # Bit of monkey patching but oh well
+    for state in trial.states_info:
+        state.start_time_daq = bpod_to_daq(state.start_time)
+        state.end_time_daq = bpod_to_daq(state.end_time)
+
+    for event in trial.events_info:
+        event.start_time_daq = bpod_to_daq(event.start_time)
+
+
 def process_sync_file(
     tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
 ) -> None:
 
+    t1 = time.time()
+
     # tiffs = sorted(get_tiff_paths_in_directory(tiff_directory))
     # stack_lengths = [ScanImageTiffReader(str(tiff)).shape()[0] for tiff in tiffs]
-    stack_lengths = [10963, 23779, 19146, 8960, 340, 15313, 13176]
+    # For the 2024-10-22 JB011
+    # stack_lengths = [10963, 23779, 19146, 8960, 340, 15313, 13176]
+    # For the 2024-10-28 JB011
+    stack_lengths = [61255, 22293, 25525]
 
     tdms_file = TdmsFile.read(tdms_path)
     group = tdms_file["Analog"]
     frame_clock = group["AI0"][:]
     behaviour_clock = group["AI1"][:]
+
+    print(f"Time to load data: {time.time() - t1}")
 
     # Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     # two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
@@ -218,10 +276,25 @@ def process_sync_file(
     frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
     sanity_check_imaging_frames(frame_times, sampling_rate)
 
-    plt.plot(frame_clock)
-    plt.plot(frame_times, np.ones(len(frame_times)), ".", color="green")
-    print(chunk_lens - stack_lengths)
+    assert np.all(
+        chunk_lens - stack_lengths == 2
+    ), "This will occcur especially on crashed recordings, think about a fix"
 
+    valid_frame_times
+
+    for idx, trial in enumerate(trials):
+        # Works in place, maybe not ideal
+        add_daq_times_to_trial(
+            trial,
+            idx,
+            frame_times,
+            behaviour_times,
+            behaviour_chunk_lens,
+            sampling_rate,
+        )
+
+    plt.plot(range(0, len(frame_clock), 5), frame_clock[::5])
+    plt.plot(frame_times, np.ones(len(frame_times)), ".", color="green")
     21 / 0
 
 
@@ -231,10 +304,10 @@ def extract_TTL_chunks(
     frame_times = threshold_detect(frame_clock, 1)
     diffed = np.diff(frame_times)
     chunk_starts = np.where(diffed > sampling_rate)[0] + 1
-    # The first chunk starts on the first frame
+    # The first chunk starts on the first frame detected
     chunk_starts = np.insert(chunk_starts, 0, 0)
+    # Add the final frame to allow the diff to work on the last chunk
     chunk_starts = np.append(chunk_starts, len(frame_times))
-
     return frame_times, np.diff(chunk_starts)
 
 
@@ -257,3 +330,12 @@ def sanity_check_imaging_frames(frame_times: np.ndarray, sampling_rate: float) -
     #     plt.plot(frame_times[bad_times], np.ones(len(bad_times)), ".", color="red")
     #     plt.show()
     #     raise ValueError("Bad inter-frame-interval. Inspect the clock using the plot")
+
+
+def get_wheel_circumference_from_rig(rig: str) -> float:
+    if rig == "2P":
+        return 11.05 * math.pi
+    elif rig == "Box":
+        return 53.4
+    else:
+        raise ValueError(f"Unknown rig: {rig}")

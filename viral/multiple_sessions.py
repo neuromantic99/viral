@@ -23,7 +23,7 @@ from viral.single_session import (
 )
 from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
 from viral.models import MouseSummary, SessionSummary, TrialSummary
-from viral.utils import d_prime, shaded_line_plot
+from viral.utils import d_prime, get_wheel_circumference_from_rig, shaded_line_plot
 
 import seaborn as sns
 
@@ -67,21 +67,30 @@ def cache_mouse(mouse_name: str) -> None:
             )
             trials.extend(load_data(session_path))
 
-        trials = remove_bad_trials(trials)
-        if not trials:
+        wheel_circumference = get_wheel_circumference_from_rig(row["Rig"])
+
+        trials = remove_bad_trials(trials, wheel_circumference=wheel_circumference)
+        if not [trial for trial in trials if trial.texture_rewarded] or not [
+            trial for trial in trials if not trial.texture_rewarded
+        ]:
             print(
-                f"No trials found for mouse {mouse_name}, date {row['Date']}, sessions {session_numbers}"
+                f"Mouse {mouse_name}, date {row['Date']}, sessions {session_numbers} does not have both rewarded and unrewarded trials"
             )
             continue
         session_summaries.append(
             SessionSummary(
                 name=row["Type"],
-                trials=[summarise_trial(trial) for trial in trials],
+                trials=[
+                    summarise_trial(trial, wheel_circumference=wheel_circumference)
+                    for trial in trials
+                ],
                 rewarded_licks=get_binned_licks(
-                    [trial for trial in trials if trial.texture_rewarded]
+                    [trial for trial in trials if trial.texture_rewarded],
+                    wheel_circumference=wheel_circumference,
                 ),
                 unrewarded_licks=get_binned_licks(
-                    [trial for trial in trials if not trial.texture_rewarded]
+                    [trial for trial in trials if not trial.texture_rewarded],
+                    wheel_circumference=wheel_circumference,
                 ),
             )
         )
@@ -221,8 +230,10 @@ def get_chance_level(mice: List[MouseSummary]) -> List[float]:
 if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
-    redo = False
-    for mouse_name in ["J018", "J019", "J020", "J021"]:
+    redo = True
+    for mouse_name in ["JB011", "JB012", "JB013", "JB014", "JB015", "JB016"]:
+        # for mouse_name in ["JB016"]:
+        # for mouse_name in ["J018", "J019", "J020", "J021"]:
         # for mouse_name in ["J015", "J016", "J004", "J005", "J007"]:
         # for mouse_name in ["J004", "J005", "J007"]:
         # for mouse_name in ["J004", "J005", "J007"]:
@@ -230,15 +241,17 @@ if __name__ == "__main__":
         print(f"\nProcessing {mouse_name}...")
         if redo:
             cache_mouse(mouse_name)
-
-        try:
             mice.append(load_cache(mouse_name))
-            print(f"mouse_name {mouse_name} already cached")
-        except (ValidationError, FileNotFoundError):
-            print(f"mouse_name {mouse_name} not cached yet...")
-            cache_mouse(mouse_name)
-            mice.append(load_cache(mouse_name))
-            print(f"mouse_name {mouse_name} cached now")
+            print(f"mouse_name {mouse_name} redone and cached")
+        else:
+            try:
+                mice.append(load_cache(mouse_name))
+                print(f"mouse_name {mouse_name} already cached")
+            except (ValidationError, FileNotFoundError):
+                print(f"mouse_name {mouse_name} not cached yet...")
+                cache_mouse(mouse_name)
+                mice.append(load_cache(mouse_name))
+                print(f"mouse_name {mouse_name} cached now")
 
     chance = get_chance_level(mice)
 

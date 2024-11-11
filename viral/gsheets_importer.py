@@ -7,7 +7,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import pandas as pd
 
-from .constants import HERE
+from viral.constants import HERE
 
 
 CRED_PATH = HERE.parent / "credentials.json"

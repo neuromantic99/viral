@@ -6,11 +6,17 @@ class StateInfo(BaseModel):
     name: str
     start_time: float
     end_time: float
+    start_time_daq: float | None = None  # Possibly redundant
+    end_time_daq: float | None = None
+    closest_frame_start: int | None = None
+    closest_frame_end: int | None = None
 
 
 class EventInfo(BaseModel):
     name: str
     start_time: float
+    start_time_daq: float | None = None
+    closest_frame: int | None = None
 
 
 class SpeedPosition(BaseModel):

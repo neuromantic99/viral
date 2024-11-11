@@ -12,18 +12,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from scipy.stats import ttest_ind
+from gsheets_importer import gsheet2df
 
-from viral.constants import (
-    BEHAVIOUR_DATA_PATH,
-    ENCODER_TICKS_PER_TURN,
-    WHEEL_CIRCUMFERENCE,
-)
+from viral.constants import BEHAVIOUR_DATA_PATH, ENCODER_TICKS_PER_TURN, SPREADSHEET_ID
 
 from viral.models import SpeedPosition, TrialInfo, TrialSummary
 
 from viral.utils import (
     degrees_to_cm,
     get_speed_positions,
+    get_wheel_circumference_from_rig,
     licks_to_position,
     process_sync_file,
     shaded_line_plot,
@@ -31,9 +29,9 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "TEST23"
-DATE = "2024-11-04"
-SESSION_NUMBER = "002"
+MOUSE = "JB011"
+DATE = "2024-11-03"
+SESSION_NUMBER = "003"
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -140,22 +138,16 @@ def get_percent_timedout(trials: List[TrialInfo]) -> Dict[str, float]:
     }
 
 
-def disparity(trials: List[TrialInfo]) -> None:
-    for trial in trials:
-        if degrees_to_cm(trial.rotary_encoder_position[-1]) < 180:
-            print(degrees_to_cm(trial.rotary_encoder_position[-1]))
-            print(trial.trial_end_time - trial.trial_start_time)
-            print("\n")
-
-
-def plot_previous_trial_dependent_licking(trials: List[TrialInfo]) -> None:
+def plot_previous_trial_dependent_licking(
+    trials: List[TrialInfo], wheel_circumference: float
+) -> None:
     prev_rewarded = [
-        licks_to_position(trials[idx])
+        licks_to_position(trials[idx], wheel_circumference)
         for idx in range(len(trials))
         if trials[idx - 1].texture_rewarded
     ]
     prev_unrewarded = [
-        licks_to_position(trials[idx])
+        licks_to_position(trials[idx], wheel_circumference)
         for idx in range(len(trials))
         if not trials[idx - 1].texture_rewarded
     ]
@@ -176,9 +168,11 @@ def plot_previous_trial_dependent_licking(trials: List[TrialInfo]) -> None:
     plt.show()
 
 
-def plot_licking_all_trials(trials: List[TrialInfo]) -> None:
+def plot_licking_all_trials(
+    trials: List[TrialInfo], wheel_circumference: float
+) -> None:
     plot_lick_raster(
-        [licks_to_position(trial) for trial in trials],
+        [licks_to_position(trial, wheel_circumference) for trial in trials],
         "All trials",
         None,
         jitter=0,
@@ -187,9 +181,16 @@ def plot_licking_all_trials(trials: List[TrialInfo]) -> None:
 
 
 def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
-    rewarded = [licks_to_position(trial) for trial in trials if trial.texture_rewarded]
+
+    rewarded = [
+        licks_to_position(trial, wheel_circumference)
+        for trial in trials
+        if trial.texture_rewarded
+    ]
     unrewarded = [
-        licks_to_position(trial) for trial in trials if not trial.texture_rewarded
+        licks_to_position(trial, wheel_circumference)
+        for trial in trials
+        if not trial.texture_rewarded
     ]
 
     jitter = 0.2
@@ -228,7 +229,9 @@ def plot_licking_habituation(trials: List[TrialInfo]) -> None:
     )
 
 
-def plot_position_habituation(trials: List[TrialInfo], sampling_rate: int) -> None:
+def plot_position_habituation(
+    trials: List[TrialInfo], sampling_rate: int, wheel_circumference: float
+) -> None:
     all_positions = np.array([], dtype="float")
     previous_rotary_end = 0
     for trial in trials:
@@ -239,7 +242,7 @@ def plot_position_habituation(trials: List[TrialInfo], sampling_rate: int) -> No
     plt.figure(figsize=(10, 6))
     plt.plot(
         np.arange(len(all_positions)) / sampling_rate,
-        (all_positions / ENCODER_TICKS_PER_TURN) * WHEEL_CIRCUMFERENCE / 100,
+        (all_positions / ENCODER_TICKS_PER_TURN) * wheel_circumference / 100,
     )
     plt.xlabel("Time (s)")
     plt.ylabel("Position (m)")
@@ -255,7 +258,9 @@ def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
     speeds = []
 
     for trial in trials:
-        position = degrees_to_cm(np.array(trial.rotary_encoder_position))
+        position = degrees_to_cm(
+            np.array(trial.rotary_encoder_position), wheel_circumference
+        )
 
         speeds.append(
             get_speed_positions(
@@ -286,7 +291,9 @@ def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
     plt.show()
 
 
-def plot_speed_reward_unrewarded(trials: List[TrialInfo], sampling_rate: int) -> None:
+def plot_speed_reward_unrewarded(
+    trials: List[TrialInfo], sampling_rate: int, wheel_circumference: float
+) -> None:
     plt.figure(figsize=(10, 6))
     rewarded: List[List[SpeedPosition]] = []
     not_rewarded: List[List[SpeedPosition]] = []
@@ -298,7 +305,10 @@ def plot_speed_reward_unrewarded(trials: List[TrialInfo], sampling_rate: int) ->
     last_position = 200
     step_size = 5
     for idx, trial in enumerate(trials):
-        position = degrees_to_cm(np.array(trial.rotary_encoder_position))
+        position = degrees_to_cm(
+            np.array(trial.rotary_encoder_position),
+            wheel_circumference=wheel_circumference,
+        )
 
         speed = get_speed_positions(
             position=position,
@@ -344,7 +354,9 @@ def plot_speed_reward_unrewarded(trials: List[TrialInfo], sampling_rate: int) ->
     plt.title(MOUSE)
 
 
-def remove_bad_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
+def remove_bad_trials(
+    trials: List[TrialInfo], wheel_circumference: float
+) -> List[TrialInfo]:
     """Remove the first trial as putting the mouse on the wheel, and timed out trials"""
     # Taken this out, as on the 2p the first trial is not bad
     # trials = trials[1:]
@@ -352,13 +364,18 @@ def remove_bad_trials(trials: List[TrialInfo]) -> List[TrialInfo]:
         trial
         for trial in trials
         if trial.rotary_encoder_position
-        and degrees_to_cm(trial.rotary_encoder_position[-1]) >= 180
+        and degrees_to_cm(
+            trial.rotary_encoder_position[-1], wheel_circumference=wheel_circumference
+        )
+        >= 180
     ]
 
 
-def summarise_trial(trial: TrialInfo) -> TrialSummary:
+def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummary:
 
-    position = degrees_to_cm(np.array(trial.rotary_encoder_position))
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference=wheel_circumference
+    )
 
     return TrialSummary(
         speed_AZ=get_speed_positions(
@@ -368,26 +385,30 @@ def summarise_trial(trial: TrialInfo) -> TrialSummary:
             step_size=30,
             sampling_rate=30,
         )[0].speed,
-        licks_AZ=get_anticipatory_licking(licks_to_position(trial)),
+        licks_AZ=get_anticipatory_licking(
+            licks_to_position(trial, wheel_circumference)
+        ),
         rewarded=trial.texture_rewarded,
-        reward_drunk=reward_drunk(trial),
+        reward_drunk=reward_drunk(trial, wheel_circumference),
     )
 
 
-def get_binned_licks(trials: List[TrialInfo]) -> List[int]:
+def get_binned_licks(trials: List[TrialInfo], wheel_circumference: float) -> List[int]:
     """Bin licks across trials. Need to think about doing this for separate trials for the error"""
-    licks = np.concatenate([licks_to_position(trial) for trial in trials])
+    licks = np.concatenate(
+        [licks_to_position(trial, wheel_circumference) for trial in trials]
+    )
     return np.histogram(licks, bins=np.arange(0, 200, 5))[0].tolist()
 
 
-def reward_drunk(trial: TrialInfo) -> bool:
+def reward_drunk(trial: TrialInfo, wheel_circumference: float) -> bool:
     if (
         not trial.texture_rewarded
-        or degrees_to_cm(trial.rotary_encoder_position[-1]) < 180
+        or degrees_to_cm(trial.rotary_encoder_position[-1], wheel_circumference) < 180
     ):
         return False
 
-    reward_zone_licks = licks_to_position(trial) > 180
+    reward_zone_licks = licks_to_position(trial, wheel_circumference) > 180
     # Greater than 1 to remove artifact from water coming out
     return sum(reward_zone_licks) > 1
 
@@ -431,19 +452,29 @@ if __name__ == "__main__":
     # do_sync()
     trials = load_data(SESSION_PATH)
 
+    metadata = gsheet2df(SPREADSHEET_ID, MOUSE, 1)
+    rig = metadata[metadata["Date"] == DATE]["Rig"].values[0]
+    wheel_circumference = get_wheel_circumference_from_rig(rig)
+    print(f"Wheel circumference: {wheel_circumference}")
+
     # Is habituation
     if not trials[0].texture:
-        plot_position_habituation(trials, sampling_rate=10)
+        plot_position_habituation(
+            trials, sampling_rate=10, wheel_circumference=wheel_circumference
+        )
         plot_licking_habituation(trials)
+
     # Is task
     else:
         total_number_trials = len(trials)
         print(f"Number of trials: {total_number_trials}")
-        trials = remove_bad_trials(trials)
+        trials = remove_bad_trials(trials, wheel_circumference=wheel_circumference)
         print(f"Number of after bad removal: {len(trials)}")
         print(
             f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
         )
         plot_rewarded_vs_unrewarded_licking(trials)
-        plot_speed_reward_unrewarded(trials, sampling_rate=30)
+        plot_speed_reward_unrewarded(
+            trials, sampling_rate=30, wheel_circumference=wheel_circumference
+        )
     plt.show()
