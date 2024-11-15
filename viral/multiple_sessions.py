@@ -39,7 +39,15 @@ def parse_session_number(session_number: str) -> List[str]:
     )
 
     session_numbers = [
-        session_number if len(session_number) == 3 else f"00{session_number}"
+        (
+            session_number
+            if len(session_number) == 3
+            else (
+                f"00{session_number}"
+                if len(session_number) == 1
+                else f"0{session_number}"
+            )
+        )
         for session_number in session_numbers
     ]
 
@@ -95,7 +103,9 @@ def cache_mouse(mouse_name: str) -> None:
             )
         )
 
-    with open(HERE.parent / "data" / f"{mouse_name}.json", "w") as f:
+    with open(
+        HERE.parent / "data" / "behaviour_summaries" / f"{mouse_name}.json", "w"
+    ) as f:
         json.dump(
             MouseSummary(
                 sessions=session_summaries,
@@ -106,7 +116,9 @@ def cache_mouse(mouse_name: str) -> None:
 
 
 def load_cache(mouse_name: str) -> MouseSummary:
-    with open(HERE.parent / "data" / f"{mouse_name}.json", "r") as f:
+    with open(
+        HERE.parent / "data" / "behaviour_summaries" / f"{mouse_name}.json", "r"
+    ) as f:
         return MouseSummary.model_validate_json(f.read())
 
 
@@ -207,7 +219,7 @@ def plot_rolling_performance(
     plt.ylabel("Learning metric")
 
 
-def get_chance_level(mice: List[MouseSummary]) -> List[float]:
+def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
     """Rough permutation test / bootstrap for chance level. Needs to be formalised further."""
 
     # TODO: Maybe should compute this on a per mouse basis
@@ -219,7 +231,7 @@ def get_chance_level(mice: List[MouseSummary]) -> List[float]:
 
     result = []
     for _ in range(1000):
-        sample = random.sample(all_trials, 100)
+        sample = random.sample(all_trials, window)
         for trial in sample:
             trial.rewarded = random.choice([True, False])
         result.append(learning_metric(sample))
@@ -230,8 +242,10 @@ def get_chance_level(mice: List[MouseSummary]) -> List[float]:
 if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
-    redo = True
-    for mouse_name in ["JB011", "JB012", "JB013", "JB014", "JB015", "JB016"]:
+    redo = False
+    # for mouse_name in ["JB011", "JB012", "JB013", "JB014", "JB015", "JB016"]:
+    window = 50
+    for mouse_name in ["JB013"]:
         # for mouse_name in ["JB016"]:
         # for mouse_name in ["J018", "J019", "J020", "J021"]:
         # for mouse_name in ["J015", "J016", "J004", "J005", "J007"]:
@@ -253,12 +267,11 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    chance = get_chance_level(mice)
+    chance = get_chance_level(mice, window=window)
 
     for mouse in mice:
         plt.figure()
         plt.title(mouse.name)
-        window = 100 if mouse.name != "J020" else 20
         plot_rolling_performance(
             mouse.sessions,
             window,
