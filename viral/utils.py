@@ -181,7 +181,7 @@ def count_spacers(trial: TrialInfo) -> int:
 def add_daq_times_to_trial(
     trial: TrialInfo,
     trial_idx: int,
-    frame_times: np.ndarray,
+    valid_frame_times: np.ndarray,
     behaviour_times: np.ndarray,
     behaviour_chunk_lens: np.ndarray,
     daq_sampling_rate: int,
@@ -222,25 +222,35 @@ def add_daq_times_to_trial(
 
     # Bit of monkey patching but oh well
     for state in trial.states_info:
-        state.start_time_daq = bpod_to_daq(state.start_time)
-        state.end_time_daq = bpod_to_daq(state.end_time)
+        state.start_time_daq = bpod_to_daq(state.start_time).astype(float)
+        state.end_time_daq = bpod_to_daq(state.end_time).astype(float)
+        state.closest_frame_start = int(
+            np.argmin(np.abs(valid_frame_times - state.start_time_daq))
+        )
+        state.closest_frame_end = int(
+            np.argmin(np.abs(valid_frame_times - state.end_time_daq))
+        )
 
     for event in trial.events_info:
-        event.start_time_daq = bpod_to_daq(event.start_time)
+        event.start_time_daq = float(bpod_to_daq(event.start_time))
+        event.closest_frame = int(
+            np.argmin(np.abs(valid_frame_times - event.start_time_daq))
+        )
 
 
-def process_sync_file(
+def add_imaging_info_to_trials(
     tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
-) -> None:
+) -> List[TrialInfo]:
 
     t1 = time.time()
+    # This takes ages
+    tiffs = sorted(get_tiff_paths_in_directory(tiff_directory))
+    stack_lengths = [ScanImageTiffReader(str(tiff)).shape()[0] for tiff in tiffs]
 
-    # tiffs = sorted(get_tiff_paths_in_directory(tiff_directory))
-    # stack_lengths = [ScanImageTiffReader(str(tiff)).shape()[0] for tiff in tiffs]
     # For the 2024-10-22 JB011
     # stack_lengths = [10963, 23779, 19146, 8960, 340, 15313, 13176]
     # For the 2024-10-28 JB011
-    stack_lengths = [61255, 22293, 25525]
+    # stack_lengths = [61255, 22293, 25525]
 
     tdms_file = TdmsFile.read(tdms_path)
     group = tdms_file["Analog"]
@@ -280,22 +290,37 @@ def process_sync_file(
         chunk_lens - stack_lengths == 2
     ), "This will occcur especially on crashed recordings, think about a fix"
 
-    valid_frame_times
+    # This assumes that the final two frames are the invalid ones. This is definitely true of the final
+    # frame as we likely abort in the middle of a frame. It's probably true of the penultimate frame too
+    # but i'm not 100% sure.
+    valid_frame_times = np.array([])
+    offset = 0
+    for stack_len, chunk_len in zip(stack_lengths, chunk_lens, strict=True):
+        valid_frame_times = np.append(
+            valid_frame_times, frame_times[offset : offset + stack_len]
+        )
+        offset += chunk_len
 
+    assert (
+        len(valid_frame_times)
+        == sum(stack_lengths)
+        == len(frame_times) - 2 * len(stack_lengths)
+    )
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
         add_daq_times_to_trial(
             trial,
             idx,
-            frame_times,
+            valid_frame_times,
             behaviour_times,
             behaviour_chunk_lens,
             sampling_rate,
         )
 
-    plt.plot(range(0, len(frame_clock), 5), frame_clock[::5])
-    plt.plot(frame_times, np.ones(len(frame_times)), ".", color="green")
-    21 / 0
+    # Useful debugging plot
+    # plt.plot(range(0, len(frame_clock), 5), frame_clock[::5])
+    # plt.plot(valid_frame_times, np.ones(len(valid_frame_times)), ".", color="green")
+    return trials
 
 
 def extract_TTL_chunks(
@@ -335,7 +360,7 @@ def sanity_check_imaging_frames(frame_times: np.ndarray, sampling_rate: float) -
 def get_wheel_circumference_from_rig(rig: str) -> float:
     if rig == "2P":
         return 11.05 * math.pi
-    elif rig == "Box":
+    elif rig in {"Box", "Box2.0"}:
         return 53.4
     else:
         raise ValueError(f"Unknown rig: {rig}")

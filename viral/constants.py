@@ -7,7 +7,8 @@ HERE = Path(__file__).parent
 SERVER_PATH = Path("/Volumes/MarcBusche/Josef/")
 
 BEHAVIOUR_DATA_PATH = SERVER_PATH / Path("Behaviour/online/Subjects")
-
+SYNC_FILE_PATH = SERVER_PATH / "DAQami"
+TIFF_UMBRELLA = SERVER_PATH / "2p"
 
 ENCODER_TICKS_PER_TURN = 360  # check me
 

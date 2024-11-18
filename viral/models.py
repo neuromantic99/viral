@@ -76,3 +76,10 @@ class TrialInfo(BaseModel):
         return [
             state.start_time for state in self.states_info if state.name == "reward_on"
         ]
+
+
+class Cached2pSession(BaseModel):
+    trials: List[TrialInfo]
+    mouse_name: str
+    date: str
+    session_type: str

@@ -23,15 +23,15 @@ from viral.utils import (
     get_speed_positions,
     get_wheel_circumference_from_rig,
     licks_to_position,
-    process_sync_file,
+    add_imaging_info_to_trials,
     shaded_line_plot,
 )
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB011"
-DATE = "2024-11-03"
-SESSION_NUMBER = "003"
+MOUSE = "JB017"
+DATE = "2024-11-18"
+SESSION_NUMBER = "002"
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -193,7 +193,7 @@ def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
         if not trial.texture_rewarded
     ]
 
-    jitter = 0.2
+    jitter = 0.1
     y_max = plot_lick_raster(rewarded, "Rewarded Trials", None, jitter=jitter)
     plot_lick_raster(unrewarded, "Unrewarded Trials", y_max, jitter=jitter)
 
@@ -434,22 +434,8 @@ def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
     plt.show()
 
 
-def do_sync() -> None:
-
-    trials = load_data(
-        Path("/Volumes/MarcBusche/Josef/Behaviour/online/Subjects/JB011/2024-10-28/002")
-    )
-
-    process_sync_file(
-        Path("/Volumes/MarcBusche/Josef/DAQami/20241028_1715.tdms"),
-        Path("/Volumes/MarcBusche/Josef/2P/2024-10-28/Jb011"),
-        trials,
-    )
-
-
 if __name__ == "__main__":
 
-    # do_sync()
     trials = load_data(SESSION_PATH)
 
     metadata = gsheet2df(SPREADSHEET_ID, MOUSE, 1)
@@ -459,6 +445,7 @@ if __name__ == "__main__":
 
     # Is habituation
     if not trials[0].texture:
+        print(f"Habituation: Number of trials: {len(trials)}")
         plot_position_habituation(
             trials, sampling_rate=10, wheel_circumference=wheel_circumference
         )
