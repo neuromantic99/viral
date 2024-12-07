@@ -1,6 +1,6 @@
+from datetime import datetime
 import math
 from pathlib import Path
-import time
 from typing import List, Tuple, TypeVar
 import warnings
 from matplotlib import pyplot as plt
@@ -8,10 +8,6 @@ import numpy as np
 
 from .constants import ENCODER_TICKS_PER_TURN
 from .models import SpeedPosition, TrialInfo
-
-
-from nptdms import TdmsFile
-from ScanImageTiffReader import ScanImageTiffReader
 
 
 def shaded_line_plot(
@@ -111,8 +107,8 @@ def get_speed_positions(
         # TODO: This will often be zero after the reward is triggered. Deal with this
         n = np.sum(np.logical_and(position >= start, position < stop))
         if n == 0 and start < 180:
-            raise ValueError("Likely the rotary encoder has jumped in a weird way.")
-            # n = np.nan
+            n = 10
+            # raise ValueError("Likely the rotary encoder has jumped in a weird way.")
 
         speed_position.append(
             SpeedPosition(
@@ -174,159 +170,10 @@ def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
     return list(directory.glob("*.tif"))
 
 
-def count_spacers(trial: TrialInfo) -> int:
-    return len([state for state in trial.states_info if "spacer_high" in state.name])
-
-
-def add_daq_times_to_trial(
-    trial: TrialInfo,
-    trial_idx: int,
-    valid_frame_times: np.ndarray,
-    behaviour_times: np.ndarray,
-    behaviour_chunk_lens: np.ndarray,
-    daq_sampling_rate: int,
-) -> None:
-    trial_spacer_daq_times = behaviour_times[
-        np.sum(behaviour_chunk_lens[:trial_idx]) : np.sum(
-            behaviour_chunk_lens[: trial_idx + 1]
-        )
-    ]
-    # Sanity check the above logic
-    assert len(trial_spacer_daq_times) == count_spacers(trial)
-
-    trial_spacer_bpod_times = np.array(
-        [state.start_time for state in trial.states_info if "spacer_high" in state.name]
-    )
-
-    # Should be the first state, but verify
-    assert trial_spacer_bpod_times[0] == 0
-
-    # Check that the clocks are equal to the millisecond
-    np.testing.assert_almost_equal(
-        (trial_spacer_daq_times - trial_spacer_daq_times[0]) / daq_sampling_rate,
-        trial_spacer_bpod_times,
-        decimal=3,
-    )
-
-    bpod_to_daq = (
-        lambda bpod_time: bpod_time * daq_sampling_rate + trial_spacer_daq_times[0]
-    )
-
-    # Another probably redundant sanity check
-    np.testing.assert_almost_equal(
-        np.array([bpod_to_daq(bpod_time) for bpod_time in trial_spacer_bpod_times])
-        / daq_sampling_rate,
-        trial_spacer_daq_times / daq_sampling_rate,
-        decimal=3,
-    )
-
-    # Bit of monkey patching but oh well
-    for state in trial.states_info:
-        state.start_time_daq = bpod_to_daq(state.start_time).astype(float)
-        state.end_time_daq = bpod_to_daq(state.end_time).astype(float)
-        state.closest_frame_start = int(
-            np.argmin(np.abs(valid_frame_times - state.start_time_daq))
-        )
-        state.closest_frame_end = int(
-            np.argmin(np.abs(valid_frame_times - state.end_time_daq))
-        )
-
-    for event in trial.events_info:
-        event.start_time_daq = float(bpod_to_daq(event.start_time))
-        event.closest_frame = int(
-            np.argmin(np.abs(valid_frame_times - event.start_time_daq))
-        )
-
-
-def add_imaging_info_to_trials(
-    tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
-) -> List[TrialInfo]:
-
-    t1 = time.time()
-    # This takes ages
-    tiffs = sorted(get_tiff_paths_in_directory(tiff_directory))
-    stack_lengths = [ScanImageTiffReader(str(tiff)).shape()[0] for tiff in tiffs]
-
-    # For the 2024-10-22 JB011
-    # stack_lengths = [10963, 23779, 19146, 8960, 340, 15313, 13176]
-    # For the 2024-10-28 JB011
-    # stack_lengths = [61255, 22293, 25525]
-
-    tdms_file = TdmsFile.read(tdms_path)
-    group = tdms_file["Analog"]
-    frame_clock = group["AI0"][:]
-    behaviour_clock = group["AI1"][:]
-
-    print(f"Time to load data: {time.time() - t1}")
-
-    # Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
-    # two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
-    if 30 < len(frame_clock) / 1000 / 60 < 100:
-        sampling_rate = 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 100:
-        sampling_rate = 10000
-    else:
-        raise ValueError("Could not determine sampling rate")
-
-    print(f"Sampling rate: {sampling_rate}")
-
-    behaviour_times, behaviour_chunk_lens = extract_TTL_chunks(
-        behaviour_clock, sampling_rate
-    )
-    num_spacers_per_trial = np.array([count_spacers(trial) for trial in trials])
-
-    # Behaviour crashed half way through a trial, so manual fix
-    if "JB011" in str(tdms_path) and "2024-10-22" in str(tdms_path):
-        behaviour_chunk_lens = np.delete(behaviour_chunk_lens, 52)
-
-    assert np.array_equal(
-        behaviour_chunk_lens, num_spacers_per_trial
-    ), "Spacers recorded in txt file do not match sync"
-
-    frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
-    sanity_check_imaging_frames(frame_times, sampling_rate)
-
-    assert np.all(
-        chunk_lens - stack_lengths == 2
-    ), "This will occcur especially on crashed recordings, think about a fix"
-
-    # This assumes that the final two frames are the invalid ones. This is definitely true of the final
-    # frame as we likely abort in the middle of a frame. It's probably true of the penultimate frame too
-    # but i'm not 100% sure.
-    valid_frame_times = np.array([])
-    offset = 0
-    for stack_len, chunk_len in zip(stack_lengths, chunk_lens, strict=True):
-        valid_frame_times = np.append(
-            valid_frame_times, frame_times[offset : offset + stack_len]
-        )
-        offset += chunk_len
-
-    assert (
-        len(valid_frame_times)
-        == sum(stack_lengths)
-        == len(frame_times) - 2 * len(stack_lengths)
-    )
-    for idx, trial in enumerate(trials):
-        # Works in place, maybe not ideal
-        add_daq_times_to_trial(
-            trial,
-            idx,
-            valid_frame_times,
-            behaviour_times,
-            behaviour_chunk_lens,
-            sampling_rate,
-        )
-
-    # Useful debugging plot
-    # plt.plot(range(0, len(frame_clock), 5), frame_clock[::5])
-    # plt.plot(valid_frame_times, np.ones(len(valid_frame_times)), ".", color="green")
-    return trials
-
-
 def extract_TTL_chunks(
     frame_clock: np.ndarray, sampling_rate: int
 ) -> Tuple[np.ndarray, np.ndarray]:
-    frame_times = threshold_detect(frame_clock, 1)
+    frame_times = threshold_detect(frame_clock, 4)
     diffed = np.diff(frame_times)
     chunk_starts = np.where(diffed > sampling_rate)[0] + 1
     # The first chunk starts on the first frame detected
@@ -336,31 +183,86 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
-def sanity_check_imaging_frames(frame_times: np.ndarray, sampling_rate: float) -> None:
-    """Make sure there are no frame clocks that don't make sense:
-    Less than one frame apart , or more than one frame apart but less than a second apart
-    """
-    diffed = np.diff(frame_times)
-    bad_times = np.where(
-        np.logical_or(
-            diffed < 29 * sampling_rate / 1000,
-            np.logical_and(diffed > 40 * sampling_rate / 1000, diffed < sampling_rate),
-        )
-    )[0]
-    assert len(bad_times) == 0
-    ## Useful plot to debug
-    # if len(bad_times) != 0:
-    #     plt.plot(frame_clock)
-    #     plt.plot(frame_times, np.ones(len(frame_times)), ".", color="green")
-    #     plt.plot(frame_times[bad_times], np.ones(len(bad_times)), ".", color="red")
-    #     plt.show()
-    #     raise ValueError("Bad inter-frame-interval. Inspect the clock using the plot")
-
-
 def get_wheel_circumference_from_rig(rig: str) -> float:
     if rig == "2P":
-        return 11.05 * math.pi
-    elif rig in {"Box", "Box2.0"}:
+        return 34.7
+        # return 11.05 * math.pi
+    elif rig in {"Box", "Box2.0", "Box2.5"}:
         return 53.4
     else:
         raise ValueError(f"Unknown rig: {rig}")
+
+
+def time_list_to_datetime(time_list: List[float]) -> datetime:
+    assert len(time_list) == 6, "time_list should have 6 elements"
+    whole_seconds = int(time_list[5])
+    fractional_seconds = time_list[5] - whole_seconds
+    return datetime(
+        int(time_list[0]),
+        int(time_list[1]),
+        int(time_list[2]),
+        int(time_list[3]),
+        int(time_list[4]),
+        whole_seconds,
+        int(fractional_seconds * 1e6),
+    )
+
+
+def find_chunk(chunk_lens: List[int], index: int) -> int:
+    """Given a list of chunk lengths and an index, find the chunk that contains the index"""
+    cumulative_length = 0
+    for i, length in enumerate(chunk_lens):
+        cumulative_length += length
+        if index < cumulative_length:
+            return i
+    return -1  # If index is out of bounds
+
+
+def trial_is_imaged(trial: TrialInfo) -> bool:
+    trigger_panda_states = [
+        state
+        for state in trial.states_info
+        if state.name in {"trigger_panda", "trigger_panda_post_reward"}
+    ]
+    start_times_bpod = [state.start_time for state in trigger_panda_states]
+    length_trial_bpod = start_times_bpod[-1] - start_times_bpod[0]
+
+    start_time_frames = [state.closest_frame_start for state in trigger_panda_states]
+
+    assert start_time_frames[-1] is not None
+    assert start_time_frames[0] is not None
+
+    length_trial_frames = (start_time_frames[-1] - start_time_frames[0]) / 30
+
+    print(
+        f"Length trial bpod: {length_trial_bpod}, length trial frames: {length_trial_frames}"
+    )
+
+    return length_trial_bpod - 0.1 <= length_trial_frames <= length_trial_bpod + 0.1
+
+
+def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
+    max_length = max(len(d) for d in data)
+
+    for idx, d in enumerate(data):
+        if len(d) < max_length:
+            data[idx] = np.append(d, np.repeat(np.nan, max_length - len(d)))
+
+    return np.nanmean(data, axis=0)
+
+
+def get_genotype(mouse_name: str) -> str:
+    if mouse_name in {"JB014", "JB015", "JB018", "JB020"}:
+        return "Oligo-BACE1-KO"
+    elif mouse_name in {"JB011", "JB012", "JB013", "JB016", "JB017", "JB019"}:
+        return "NLGF"
+    else:
+        raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
+
+
+def shuffle(x: np.ndarray) -> np.ndarray:
+    """shuffles along all dimensions of an array"""
+    shape = x.shape
+    x = np.ravel(x)
+    np.random.shuffle(x)
+    return x.reshape(shape)

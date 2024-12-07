@@ -24,6 +24,22 @@
       "program": "presentations/2024-06-18_replaymeeting.py",
       "console": "integratedTerminal",
       "justMyCode": true
-    }
+    },
+    {
+      "name": "two-photon",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/two_photon.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "cache 2p sessions",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/cache_2p_sessions.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
   ]
 }
