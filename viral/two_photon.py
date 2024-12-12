@@ -1,8 +1,10 @@
 import logging
 from pathlib import Path
+import random
 import sys
 from typing import List
 from scipy.stats import zscore
+import seaborn as sns
 
 
 # Allow you to run the file directly, remove if exporting as a proper module
@@ -10,6 +12,8 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+
+sns.set_theme(context="talk", style="ticks")
 
 from viral.utils import (
     degrees_to_cm,
@@ -52,9 +56,7 @@ def get_dff(mouse: str, date: str) -> np.ndarray:
 
 
 def activity_trial_position(
-    trial: TrialInfo,
-    dff: np.ndarray,
-    wheel_circumference: float,
+    trial: TrialInfo, dff: np.ndarray, wheel_circumference: float, verbose: bool = False
 ) -> np.ndarray | None:
 
     position = degrees_to_cm(
@@ -72,9 +74,9 @@ def activity_trial_position(
     assert len(position) == len(frame_position)
 
     # Bin frames by position
-    bin_size = 2
-    max_position = 170
+    bin_size = 1
     start = 10
+    max_position = 170
 
     dff_position = []
 
@@ -83,9 +85,11 @@ def activity_trial_position(
             np.logical_and(position >= bin_start, position < bin_start + bin_size)
         ]
         dff_bin = dff[:, frame_idx_bin]
-        print(f"bin_start: {bin_start}")
-        print(f"bin_end: {bin_start + bin_size}")
-        print(f"n_frames in bin: {len(frame_idx_bin)}")
+
+        if verbose:
+            print(f"bin_start: {bin_start}")
+            print(f"bin_end: {bin_start + bin_size}")
+            print(f"n_frames in bin: {len(frame_idx_bin)}")
         dff_position.append(np.mean(dff_bin, axis=1))
 
     print("\n")
@@ -112,20 +116,49 @@ def normalize(array: np.ndarray, axis: int) -> np.ndarray:
 def get_position_activity(
     trials: List[TrialInfo], dff: np.ndarray, wheel_circumference: float
 ) -> np.ndarray:
-    return sort_matrix_peak(
-        normalize(
+
+    test_matrices = []
+    # 33, 40
+    # 76, 85
+    # 120, 132
+
+    for _ in range(10):
+        train_idx = random.sample(range(len(trials)), len(trials) // 2)
+        test_idx = [idx for idx in range(len(trials)) if idx not in train_idx]
+
+        # Find the order in which to sort neurons in a random 50% of the trials
+        train_matrix = np.nanmean(
+            np.array(
+                [
+                    activity_trial_position(trials[idx], dff, wheel_circumference)
+                    for idx in train_idx
+                ]
+            ),
+            axis=0,
+        )
+        train_matrix[:, 33 // 1 : 40 // 1] = 0
+        train_matrix[:, 76 // 1 : 85 // 1] = 0
+        train_matrix[:, 120 // 1 : 132 // 1] = 0
+
+        peak_indices = np.argmax(train_matrix, axis=1)
+        sorted_order = np.argsort(peak_indices)
+
+        test_matrix = normalize(
             np.nanmean(
                 np.array(
                     [
-                        activity_trial_position(trial, dff, wheel_circumference)
-                        for trial in trials
+                        activity_trial_position(trials[idx], dff, wheel_circumference)
+                        for idx in test_idx
                     ]
                 ),
                 axis=0,
             ),
             axis=1,
         )
-    )
+
+        test_matrices.append(test_matrix[sorted_order, :])
+
+    return np.mean(np.array(test_matrices), 0)
 
 
 def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
@@ -137,18 +170,19 @@ def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
         dff,
         get_wheel_circumference_from_rig("2P"),
     )
-    plt.imshow(data, aspect="auto")
+    plt.imshow(data, aspect="auto", cmap="viridis")
+    clb = plt.colorbar()
+    clb.ax.set_title("Normalised\nactivity", fontsize=12)
 
-    # From activity trial position
-    start = 10
-    stop = 170
-    # bin_size = (stop - start) / data.shape[1]
-    # tick_step = 20
+    plt.ylabel("cell number")
+    plt.xlabel("corrdior position")
+    ticks = np.array([50, 100, 150])
+    plt.xticks(ticks - 10, ticks)
 
-    plt.xticks(
-        np.linspace(0, data.shape[1], 10),
-        np.linspace(start, stop, 10).astype(int),
-    )
+    plt.title("Unsupervised Session")
+
+    plt.tight_layout()
+
     plt.savefig(
         HERE.parent
         / "plots"
@@ -172,7 +206,16 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             get_wheel_circumference_from_rig("2P"),
         ),
         aspect="auto",
+        cmap="viridis",
     )
+
+    clb = plt.colorbar()
+    clb.ax.set_title("Normalised\nactivity", fontsize=12)
+    plt.ylabel("cell number")
+    plt.xlabel("corrdior position")
+    ticks = np.array([50, 100, 150])
+    plt.xticks(ticks - 10, ticks)
+    plt.tight_layout()
     plt.savefig(
         HERE.parent
         / "plots"
@@ -193,7 +236,16 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             get_wheel_circumference_from_rig("2P"),
         ),
         aspect="auto",
+        cmap="viridis",
     )
+
+    clb = plt.colorbar()
+    clb.ax.set_title("Normalised\nactivity", fontsize=12)
+    plt.ylabel("cell number")
+    plt.xlabel("corrdior position")
+    ticks = np.array([50, 100, 150])
+    plt.xticks(ticks - 10, ticks)
+    plt.tight_layout()
     plt.savefig(
         HERE.parent
         / "plots"
@@ -205,11 +257,15 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
 if __name__ == "__main__":
 
     mouse = "JB018"
-    date = "2024-11-18"
+    date = "2024-12-06"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
-    print(f"number of trials {len(session.trials)}")
+    print(f"Total number of trials: {len(session.trials)}")
+    print(
+        f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
+    )
+
     dff = get_dff(mouse, date)
 
     assert (

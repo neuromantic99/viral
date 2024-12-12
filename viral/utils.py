@@ -234,11 +234,13 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
 
     length_trial_frames = (start_time_frames[-1] - start_time_frames[0]) / 30
 
-    print(
-        f"Length trial bpod: {length_trial_bpod}, length trial frames: {length_trial_frames}"
+    # A little but of a error in this calculation is allowed here as the frame rate is not exactly 30.
+    # Possibly you will get a false positive if the trial is stopped exactly at the end but unlikely
+    trial_imaged = (
+        length_trial_bpod - 0.5 <= length_trial_frames <= length_trial_bpod + 0.5
     )
 
-    return length_trial_bpod - 0.1 <= length_trial_frames <= length_trial_bpod + 0.1
+    return trial_imaged
 
 
 def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
@@ -256,6 +258,9 @@ def get_genotype(mouse_name: str) -> str:
         return "Oligo-BACE1-KO"
     elif mouse_name in {"JB011", "JB012", "JB013", "JB016", "JB017", "JB019"}:
         return "NLGF"
+
+    elif mouse_name in {"JB025", "JB024"}:
+        return "WT"
     else:
         raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
 

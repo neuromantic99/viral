@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
+sys.path.append(str(HERE.parent))
 
 from typing import List, Tuple
 
@@ -23,7 +24,13 @@ from viral.single_session import (
 )
 from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
 from viral.models import MouseSummary, SessionSummary, TrialSummary
-from viral.utils import d_prime, get_wheel_circumference_from_rig, shaded_line_plot
+from viral.utils import (
+    average_different_lengths,
+    d_prime,
+    get_genotype,
+    get_wheel_circumference_from_rig,
+    shaded_line_plot,
+)
 
 import seaborn as sns
 
@@ -63,8 +70,13 @@ def cache_mouse(mouse_name: str) -> None:
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     session_summaries = []
     for _, row in metadata.iterrows():
-        if "learning day" not in row["Type"].lower():
+        if (
+            "learning day" not in row["Type"].lower()
+            or "unsupervised" in row["Type"].lower()
+        ):
             continue
+
+        print(f"Processing session: {row['Type']}")
 
         session_numbers = parse_session_number(row["Session Number"])
 
@@ -77,7 +89,11 @@ def cache_mouse(mouse_name: str) -> None:
 
         wheel_circumference = get_wheel_circumference_from_rig(row["Rig"])
 
+        print(f"Total of {len(trials)} trials")
+
         trials = remove_bad_trials(trials, wheel_circumference=wheel_circumference)
+        print(f"Total of {len(trials)} after bad removal")
+
         if not [trial for trial in trials if trial.texture_rewarded] or not [
             trial for trial in trials if not trial.texture_rewarded
         ]:
@@ -239,18 +255,79 @@ def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
     return result
 
 
+def plot_performance_summaries(mice: List[SessionSummary]):
+    rolling_performance_dict = {}
+    window = 40
+
+    for mouse in mice:
+        pre_reversal = [
+            session
+            for session in mouse.sessions
+            if "reversal" not in session.name.lower()
+        ]
+        post_reversal = [
+            session for session in mouse.sessions if "reversal" in session.name.lower()
+        ]
+        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
+
+        rolling_performance_dict[mouse.name] = {
+            "pre_reversal": np.array(
+                rolling_performance(flatten_sessions(pre_reversal), window)
+            ),
+            "post_reversal": np.array(
+                rolling_performance(flatten_sessions(post_reversal), window)
+            ),
+        }
+
+    key = "post_reversal"
+    to_plot = {
+        "NLGF": [
+            np.where(data[key] > 1)[0][0] + window
+            for mouse, data in rolling_performance_dict.items()
+            if get_genotype(mouse) == "NLGF"
+        ],
+        "Oligo-Bace1\nKnockout": [
+            np.where(data[key] > 1)[0][0] + window
+            for mouse, data in rolling_performance_dict.items()
+            if get_genotype(mouse) == "Oligo-BACE1-KO"
+        ],
+        "WT": [
+            np.where(data[key] > 1)[0][0] + window
+            for mouse, data in rolling_performance_dict.items()
+            if get_genotype(mouse) == "WT"
+        ],
+    }
+
+    plt.ylabel(f"Trials to criterion")
+    plt.title(key.replace("_", " ").capitalize())
+
+    sns.boxplot(to_plot, showfliers=False)
+    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+    plt.tight_layout()
+    plt.savefig(HERE.parent / "plots" / f"behaviour-summaries-{key}")
+    plt.show()
+
+
 if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
     redo = False
-    # for mouse_name in ["JB011", "JB012", "JB013", "JB014", "JB015", "JB016"]:
-    window = 50
-    for mouse_name in ["JB013"]:
-        # for mouse_name in ["JB016"]:
-        # for mouse_name in ["J018", "J019", "J020", "J021"]:
-        # for mouse_name in ["J015", "J016", "J004", "J005", "J007"]:
-        # for mouse_name in ["J004", "J005", "J007"]:
-        # for mouse_name in ["J004", "J005", "J007"]:
+    cache_mouse("JB024")
+
+    for mouse_name in [
+        # "JB011",
+        # "JB012",
+        # "JB013",
+        # "JB014",
+        # "JB015",
+        # "JB016",
+        # "JB017",
+        # "JB018",
+        # "JB019",
+        # "JB020",
+        "JB024",
+        # "JB025",
+    ]:
 
         print(f"\nProcessing {mouse_name}...")
         if redo:
@@ -267,18 +344,41 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
+    plot_performance_summaries(mice)
+    plt.show()
+
+    mouse = mice[0]
+    window = 50
+
     chance = get_chance_level(mice, window=window)
 
-    for mouse in mice:
-        plt.figure()
-        plt.title(mouse.name)
-        plot_rolling_performance(
-            mouse.sessions,
-            window,
-            (
-                np.percentile(chance, 1).astype(float),
-                np.percentile(chance, 99).astype(float),
-            ),
-            add_text_to_chance=True,
-        )
+    plt.figure()
+    plot_rolling_performance(
+        mouse.sessions,
+        window,
+        (
+            np.percentile(chance, 1).astype(float),
+            np.percentile(chance, 99).astype(float),
+        ),
+        add_text_to_chance=True,
+    )
+
+    num_to_reversal = sum(
+        [
+            len(session.trials)
+            for session in mouse.sessions
+            if "reversal" not in session.name.lower()
+        ]
+    )
+
+    plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
+    plt.text(
+        num_to_reversal - window + 10,
+        2,
+        "Reversal\nStarts",
+        color=sns.color_palette()[1],
+        fontsize=15,
+    )
+    plt.tight_layout()
+    # plt.savefig(HERE.parent / "plots" / "example-mouse-performance.png")
     plt.show()

@@ -1,9 +1,16 @@
+from pathlib import Path
 from typing import List
 import numpy as np
 from pydantic import BaseModel
 
+from viral.cache_2p_sessions import get_tiff_metadata
 from viral.models import SpeedPosition
-from viral.utils import extract_TTL_chunks, get_speed_positions, threshold_detect_edges
+from viral.utils import (
+    extract_TTL_chunks,
+    find_chunk,
+    get_speed_positions,
+    threshold_detect_edges,
+)
 
 
 def compare_pydantic_models(

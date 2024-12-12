@@ -23,15 +23,15 @@ from viral.utils import (
     get_speed_positions,
     get_wheel_circumference_from_rig,
     licks_to_position,
-    add_imaging_info_to_trials,
     shaded_line_plot,
 )
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB017"
-DATE = "2024-11-18"
+MOUSE = "JB023"
+DATE = "2024-12-12"
 SESSION_NUMBER = "002"
+
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
@@ -360,6 +360,7 @@ def remove_bad_trials(
     """Remove the first trial as putting the mouse on the wheel, and timed out trials"""
     # Taken this out, as on the 2p the first trial is not bad
     # trials = trials[1:]
+
     return [
         trial
         for trial in trials
@@ -439,7 +440,11 @@ if __name__ == "__main__":
     trials = load_data(SESSION_PATH)
 
     metadata = gsheet2df(SPREADSHEET_ID, MOUSE, 1)
-    rig = metadata[metadata["Date"] == DATE]["Rig"].values[0]
+    try:
+        rig = metadata[metadata["Date"] == DATE]["Rig"].values[0]
+    except IndexError as e:
+        raise ValueError("You need to fill out the rig in the spreadsheet m8") from e
+
     wheel_circumference = get_wheel_circumference_from_rig(rig)
     print(f"Wheel circumference: {wheel_circumference}")
 
