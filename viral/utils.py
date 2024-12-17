@@ -254,12 +254,20 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
 
 
 def get_genotype(mouse_name: str) -> str:
-    if mouse_name in {"JB014", "JB015", "JB018", "JB020"}:
+    if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
-    elif mouse_name in {"JB011", "JB012", "JB013", "JB016", "JB017", "JB019"}:
+    elif mouse_name in {
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB016",
+        "JB017",
+        "JB019",
+        "JB023",
+        "JB021",
+    }:
         return "NLGF"
-
-    elif mouse_name in {"JB025", "JB024"}:
+    elif mouse_name in {"JB025", "JB024", "JB026", "JB027"}:
         return "WT"
     else:
         raise ValueError(f"Unknown genotype for mouse: {mouse_name}")

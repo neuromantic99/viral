@@ -68,12 +68,18 @@ def parse_session_number(session_number: str) -> List[str]:
 
 def cache_mouse(mouse_name: str) -> None:
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
+    # Remove empty rows
+    metadata = metadata[metadata["Date"].astype(bool)]
     session_summaries = []
     for _, row in metadata.iterrows():
-        if (
-            "learning day" not in row["Type"].lower()
-            or "unsupervised" in row["Type"].lower()
-        ):
+        type_check = row["Type"].lower()
+        if "learning day" not in type_check or "unsupervised" in type_check:
+            assert (
+                "habituation" in type_check
+                or "take bottle out" in type_check
+                or "water in dish" in type_check
+                or "unsupervised" in type_check
+            ), f"type {type_check} not understood"
             continue
 
         print(f"Processing session: {row['Type']}")
@@ -87,6 +93,7 @@ def cache_mouse(mouse_name: str) -> None:
             )
             trials.extend(load_data(session_path))
 
+        assert trials[0].texture, "You're accidently processing a habituation"
         wheel_circumference = get_wheel_circumference_from_rig(row["Rig"])
 
         print(f"Total of {len(trials)} trials")
@@ -279,7 +286,7 @@ def plot_performance_summaries(mice: List[SessionSummary]):
             ),
         }
 
-    key = "post_reversal"
+    key = "pre_reversal"
     to_plot = {
         "NLGF": [
             np.where(data[key] > 1)[0][0] + window
@@ -311,22 +318,26 @@ def plot_performance_summaries(mice: List[SessionSummary]):
 if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
-    redo = False
-    cache_mouse("JB024")
 
+    redo = False
     for mouse_name in [
-        # "JB011",
-        # "JB012",
-        # "JB013",
-        # "JB014",
-        # "JB015",
-        # "JB016",
-        # "JB017",
-        # "JB018",
-        # "JB019",
-        # "JB020",
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
         "JB024",
-        # "JB025",
+        "JB025",
+        "JB026",
+        "JB027",
     ]:
 
         print(f"\nProcessing {mouse_name}...")
@@ -344,14 +355,14 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
+    window = 50
+
     plot_performance_summaries(mice)
     plt.show()
 
-    mouse = mice[0]
-    window = 50
-
     chance = get_chance_level(mice, window=window)
 
+    mouse = mice[0]
     plt.figure()
     plot_rolling_performance(
         mouse.sessions,
@@ -364,11 +375,9 @@ if __name__ == "__main__":
     )
 
     num_to_reversal = sum(
-        [
-            len(session.trials)
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
+        len(session.trials)
+        for session in mouse.sessions
+        if "reversal" not in session.name.lower()
     )
 
     plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
