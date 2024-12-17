@@ -29,7 +29,7 @@ from viral.utils import (
 sns.set_theme(context="talk", style="ticks")
 
 MOUSE = "JB023"
-DATE = "2024-12-12"
+DATE = "2024-12-17"
 SESSION_NUMBER = "002"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
@@ -60,6 +60,7 @@ def plot_lick_raster(
     # f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
 
     for idx, lick_trial in enumerate(lick_positions):
+
         a0.scatter(
             lick_trial,
             [idx + random.random() * jitter for _ in range(len(lick_trial))],
@@ -89,7 +90,7 @@ def plot_lick_raster(
 
 
 def get_anticipatory_licking(lick_positions: np.ndarray) -> int:
-    return np.sum(np.logical_and(lick_positions > 150, lick_positions < 180))
+    return np.sum(np.logical_and(lick_positions > 150, lick_positions < 179))
 
 
 def plot_trial_length(trials: List[TrialInfo]) -> None:
@@ -365,10 +366,11 @@ def remove_bad_trials(
         trial
         for trial in trials
         if trial.rotary_encoder_position
-        and degrees_to_cm(
-            trial.rotary_encoder_position[-1], wheel_circumference=wheel_circumference
+        and max(
+            degrees_to_cm(encoder_position, wheel_circumference)
+            for encoder_position in trial.rotary_encoder_position
         )
-        >= 180
+        >= 179
     ]
 
 
