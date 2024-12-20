@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from scipy.stats import ttest_ind
-from gsheets_importer import gsheet2df
+from viral.gsheets_importer import gsheet2df
 
 from viral.constants import BEHAVIOUR_DATA_PATH, ENCODER_TICKS_PER_TURN, SPREADSHEET_ID
 
@@ -29,7 +29,7 @@ from viral.utils import (
 sns.set_theme(context="talk", style="ticks")
 
 MOUSE = "JB023"
-DATE = "2024-12-17"
+DATE = "2024-12-13"
 SESSION_NUMBER = "002"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
@@ -331,8 +331,9 @@ def plot_speed_reward_unrewarded(
 
     # Should be the same for all trials
     # Use the bin_stop so there is no forward look ahead
+    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=0)
+    plt.xlim(0, 200)
     x_axis = [bin.position_stop for bin in rewarded[0]]
-
     shaded_line_plot(
         np.array([[bin.speed for bin in trial] for trial in rewarded]),
         x_axis,
@@ -346,8 +347,6 @@ def plot_speed_reward_unrewarded(
         "red",
         "Unrewarded",
     )
-
-    plt.axvspan(180, 200, color="gray", alpha=0.5)
     plt.legend()
     plt.ylim(0, None)
     plt.xlabel("Distance (cm)")
@@ -388,11 +387,26 @@ def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummar
             step_size=30,
             sampling_rate=30,
         )[0].speed,
+        speed_nonAZ=get_speed_positions(
+            position=position,
+            first_position=0,
+            last_position=150,
+            step_size=30,
+            sampling_rate=30,
+        )[0].speed,
+        trial_speed=get_speed_positions(
+            position=position,
+            first_position=0,
+            last_position=180,
+            step_size=30,
+            sampling_rate=30,
+        )[0].speed,
         licks_AZ=get_anticipatory_licking(
             licks_to_position(trial, wheel_circumference)
         ),
         rewarded=trial.texture_rewarded,
         reward_drunk=reward_drunk(trial, wheel_circumference),
+        trial_time_overall=trial.trial_end_time - trial.trial_start_time,
     )
 
 

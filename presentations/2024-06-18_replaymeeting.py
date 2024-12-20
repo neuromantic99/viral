@@ -17,13 +17,13 @@ from viral.multiple_sessions import (
 
 def plot_rolling_performance_all_mice() -> None:
 
-    mice = [load_cache(mouse_name) for mouse_name in ["J004", "J005", "J007"]]
+    mice = [load_cache(mouse_name) for mouse_name in ["J018", "J019", "J020", "J021"]]
 
     chance = get_chance_level(mice)
 
     plt.figure(figsize=(4 * 3, 4))
     for idx, mouse in enumerate(mice):
-        plt.subplot(1, 3, idx + 1)
+        plt.subplot(1, 4, idx + 1)
         plt.title(f"wild type {idx + 1}")
         plot_rolling_performance(mouse.sessions, 50, chance)
         plt.ylim(-0.8, 4.1)
@@ -35,20 +35,20 @@ def plot_rolling_performance_all_mice() -> None:
     plt.tight_layout()
     plt.savefig(HERE.parent / "plots" / "rolling_performance_WT.png")
 
-    plt.figure(figsize=(4 * 2, 4))
-    for idx, mouse_name in enumerate(["J015", "J016"]):
-        mouse = load_cache(mouse_name)
-        plt.subplot(1, 2, idx + 1)
-        plt.title(f"NLGF {idx + 1}")
-        plot_rolling_performance(mouse.sessions, 50, idx == 0)
-        plt.ylim(-0.8, 3)
-        # plt.xlim(0, 600)
-        plt.xlabel("trial number")
-        if idx == 0:
-            plt.ylabel("learning metric")
+    # plt.figure(figsize=(4 * 2, 4))
+    # for idx, mouse_name in enumerate(["J015", "J016"]):
+    #     mouse = load_cache(mouse_name)
+    #     plt.subplot(1, 2, idx + 1)
+    #     plt.title(f"NLGF {idx + 1}")
+    #     plot_rolling_performance(mouse.sessions, 50, idx == 0)
+    #     plt.ylim(-0.8, 3)
+    #     # plt.xlim(0, 600)
+    #     plt.xlabel("trial number")
+    #     if idx == 0:
+    #         plt.ylabel("learning metric")
 
-    plt.tight_layout()
-    plt.savefig(HERE.parent / "plots" / "rolling_performance_NLGF.png")
+    # plt.tight_layout()
+    # plt.savefig(HERE.parent / "plots" / "rolling_performance_NLGF.png")
 
 
 if __name__ == "__main__":

@@ -27,9 +27,13 @@ class SpeedPosition(BaseModel):
 
 class TrialSummary(BaseModel):
     speed_AZ: float
+    speed_nonAZ: float
+    trial_speed: float
     licks_AZ: int
     rewarded: bool
     reward_drunk: bool
+    # trial_time_locomotion: float
+    trial_time_overall: float
 
 
 class SessionSummary(BaseModel):
@@ -37,6 +41,21 @@ class SessionSummary(BaseModel):
     trials: List[TrialSummary]
     rewarded_licks: List[int]
     unrewarded_licks: List[int]
+
+    @computed_field
+    @property
+    def num_trials(self) -> int:
+        return len(self.trials)
+
+    @computed_field
+    @property
+    def num_rewarded_trials(self) -> int:
+        return sum(trial.rewarded for trial in self.trials)
+
+    @computed_field
+    @property
+    def num_unrewarded_trials(self) -> int:
+        return self.num_trials - self.num_rewarded_trials
 
 
 class MouseSummary(BaseModel):
