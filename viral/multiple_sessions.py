@@ -283,6 +283,25 @@ def plot_rolling_performance(
     plt.ylabel("Learning metric")
 
 
+def get_rolling_performance(mouse: MouseSummary, window: int) -> dict:
+    pre_reversal = [
+        session for session in mouse.sessions if "reversal" not in session.name.lower()
+    ]
+    post_reversal = [
+        session for session in mouse.sessions if "reversal" in session.name.lower()
+    ]
+    assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
+
+    return {
+        "pre_reversal": np.array(
+            rolling_performance(flatten_sessions(pre_reversal), window)
+        ),
+        "post_reversal": np.array(
+            rolling_performance(flatten_sessions(post_reversal), window)
+        ),
+    }
+
+
 def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
     """Rough permutation test / bootstrap for chance level. Needs to be formalised further."""
 
@@ -304,7 +323,7 @@ def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
 
 
 def plot_running_speed_summaries(
-    mice: List[SessionSummary], condition: str = "pre_reversal"
+    mice: List[MouseSummary], condition: str = "pre_reversal"
 ):
     running_speed_dict = {}
     for mouse in mice:
@@ -415,7 +434,7 @@ def plot_running_speed_summaries(
 
 
 def plot_trial_time_summaries(
-    mice: List[SessionSummary], condition: str = "pre_reversal"
+    mice: List[MouseSummary], condition: str = "pre_reversal"
 ):
     trial_time_dict = {}
     for mouse in mice:
@@ -490,7 +509,7 @@ def plot_trial_time_summaries(
 
 
 def plot_num_trials_summaries(
-    mice: List[SessionSummary], condition: str = "pre_reversal"
+    mice: List[MouseSummary], condition: str = "pre_reversal"
 ):
     num_trials_dict = {}
     for mouse in mice:
@@ -539,7 +558,7 @@ def plot_num_trials_summaries(
     plt.show()
 
 
-def plot_performance_summaries(mice: List[SessionSummary], key: str):
+def plot_performance_summaries(mice: List[MouseSummary], key: str):
     rolling_performance_dict = {}
     window = 40
 
@@ -591,32 +610,16 @@ def plot_performance_summaries(mice: List[SessionSummary], key: str):
     plt.show()
 
 
-# TODO Could probably come up with a function to get the plot data to then reuse the behaviour summaries plots
 def plot_performance_summaries_genotype_sex(
-    mice: List[SessionSummary], key: str = "pre_reversal"
+    mice: List[MouseSummary], key: str = "pre_reversal"
 ):
     rolling_performance_dict = {}
     window = 40
 
     for mouse in mice:
-        pre_reversal = [
-            session
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
-        post_reversal = [
-            session for session in mouse.sessions if "reversal" in session.name.lower()
-        ]
-        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
-
-        rolling_performance_dict[mouse.name] = {
-            "pre_reversal": np.array(
-                rolling_performance(flatten_sessions(pre_reversal), window)
-            ),
-            "post_reversal": np.array(
-                rolling_performance(flatten_sessions(post_reversal), window)
-            ),
-        }
+        rolling_performance_dict[mouse.name] = get_rolling_performance(
+            mouse=mouse, window=window
+        )
 
     to_plot = {
         "NLGF\nMale": [
@@ -668,30 +671,15 @@ def plot_performance_summaries_genotype_sex(
 
 
 def plot_performance_summaries_genotype_setup(
-    mice: List[SessionSummary], key: str = "pre_reversal"
+    mice: List[MouseSummary], key: str = "pre_reversal"
 ):
     rolling_performance_dict = {}
     window = 40
 
     for mouse in mice:
-        pre_reversal = [
-            session
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
-        post_reversal = [
-            session for session in mouse.sessions if "reversal" in session.name.lower()
-        ]
-        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
-
-        rolling_performance_dict[mouse.name] = {
-            "pre_reversal": np.array(
-                rolling_performance(flatten_sessions(pre_reversal), window)
-            ),
-            "post_reversal": np.array(
-                rolling_performance(flatten_sessions(post_reversal), window)
-            ),
-        }
+        rolling_performance_dict[mouse.name] = get_rolling_performance(
+            mouse=mouse, window=window
+        )
 
     to_plot = {
         "NLGF\nbox": [
@@ -742,31 +730,15 @@ def plot_performance_summaries_genotype_setup(
     plt.show()
 
 
-def plot_performance_summaries_sex(
-    mice: List[SessionSummary], key: str = "pre_reversal"
-):
+def plot_performance_summaries_sex(mice: List[MouseSummary], key: str = "pre_reversal"):
     rolling_performance_dict = {}
     window = 40
 
     for mouse in mice:
-        pre_reversal = [
-            session
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
-        post_reversal = [
-            session for session in mouse.sessions if "reversal" in session.name.lower()
-        ]
-        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
-
-        rolling_performance_dict[mouse.name] = {
-            "pre_reversal": np.array(
-                rolling_performance(flatten_sessions(pre_reversal), window)
-            ),
-            "post_reversal": np.array(
-                rolling_performance(flatten_sessions(post_reversal), window)
-            ),
-        }
+        for mouse in mice:
+            rolling_performance_dict[mouse.name] = get_rolling_performance(
+                mouse=mouse, window=window
+            )
 
     to_plot = {
         "Male": [
@@ -792,30 +764,16 @@ def plot_performance_summaries_sex(
 
 
 def plot_performance_summaries_setup(
-    mice: List[SessionSummary], key: str = "pre_reversal"
+    mice: List[MouseSummary], key: str = "pre_reversal"
 ):
     rolling_performance_dict = {}
     window = 40
 
     for mouse in mice:
-        pre_reversal = [
-            session
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
-        post_reversal = [
-            session for session in mouse.sessions if "reversal" in session.name.lower()
-        ]
-        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
-
-        rolling_performance_dict[mouse.name] = {
-            "pre_reversal": np.array(
-                rolling_performance(flatten_sessions(pre_reversal), window)
-            ),
-            "post_reversal": np.array(
-                rolling_performance(flatten_sessions(post_reversal), window)
-            ),
-        }
+        for mouse in mice:
+            rolling_performance_dict[mouse.name] = get_rolling_performance(
+                mouse=mouse, window=window
+            )
 
     to_plot = {
         "box": [
@@ -863,7 +821,7 @@ if __name__ == "__main__":
         "JB020",
         "JB021",
         "JB022",
-        # "JB023",
+        "JB023",
         "JB024",
         "JB025",
         "JB026",
@@ -888,48 +846,57 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    plot_performance_summaries(mice, "pre_reversal")
-    plot_performance_summaries(mice, "post_reversal")
-    plot_running_speed_summaries(mice, "pre_reversal")
-    plot_running_speed_summaries(mice, "post_reversal")
-    plot_trial_time_summaries(mice, "post_reversal")
-    plot_trial_time_summaries(mice, "pre_reversal")
-    plot_num_trials_summaries(mice, "pre_reversal")
-    plot_num_trials_summaries(mice, "post_reversal")
-    # plot_performance_summaries(mice)
-    # plt.show()
+    # plot_performance_summaries(mice, "pre_reversal")
+    # plot_performance_summaries(mice, "post_reversal")
+    # plot_running_speed_summaries(mice, "pre_reversal")
+    # plot_running_speed_summaries(mice, "post_reversal")
+    # plot_trial_time_summaries(mice, "post_reversal")
+    # plot_trial_time_summaries(mice, "pre_reversal")
+    # plot_num_trials_summaries(mice, "pre_reversal")
+    # plot_num_trials_summaries(mice, "post_reversal")
 
-    mouse = mice[1]
-    window = 50
+    plot_performance_summaries_setup(mice, "pre_reversal")
+    plot_performance_summaries_setup(mice, "post_reversal")
+    plot_performance_summaries_sex(mice, "pre_reversal")
+    plot_performance_summaries_sex(mice, "post_reversal")
+    plot_performance_summaries_genotype_setup(mice, "pre_reversal")
+    plot_performance_summaries_genotype_setup(mice, "post_reversal")
+    plot_performance_summaries_genotype_sex(mice, "pre_reversal")
+    plot_performance_summaries_genotype_sex(mice, "post_reversal")
 
-    chance = get_chance_level(mice, window=window)
-
-    mouse = mice[0]
-    plt.figure()
-    plot_rolling_performance(
-        mouse.sessions,
-        window,
-        (
-            np.percentile(chance, 1).astype(float),
-            np.percentile(chance, 99).astype(float),
-        ),
-        add_text_to_chance=True,
-    )
-
-    num_to_reversal = sum(
-        len(session.trials)
-        for session in mouse.sessions
-        if "reversal" not in session.name.lower()
-    )
-
-    plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
-    plt.text(
-        num_to_reversal - window + 10,
-        2,
-        "Reversal\nStarts",
-        color=sns.color_palette()[1],
-        fontsize=15,
-    )
-    plt.tight_layout()
-    # plt.savefig(HERE.parent / "plots" / "example-mouse-performance.png")
     plt.show()
+
+    # mouse = mice[1]
+    # window = 50
+
+    # chance = get_chance_level(mice, window=window)
+
+    # mouse = mice[0]
+    # plt.figure()
+    # plot_rolling_performance(
+    #     mouse.sessions,
+    #     window,
+    #     (
+    #         np.percentile(chance, 1).astype(float),
+    #         np.percentile(chance, 99).astype(float),
+    #     ),
+    #     add_text_to_chance=True,
+    # )
+
+    # num_to_reversal = sum(
+    #     len(session.trials)
+    #     for session in mouse.sessions
+    #     if "reversal" not in session.name.lower()
+    # )
+
+    # plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
+    # plt.text(
+    #     num_to_reversal - window + 10,
+    #     2,
+    #     "Reversal\nStarts",
+    #     color=sns.color_palette()[1],
+    #     fontsize=15,
+    # )
+    # plt.tight_layout()
+    # # plt.savefig(HERE.parent / "plots" / "example-mouse-performance.png")
+    # plt.show()
