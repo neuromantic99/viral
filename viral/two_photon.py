@@ -20,6 +20,7 @@ from viral.utils import (
     get_wheel_circumference_from_rig,
     shuffle,
     trial_is_imaged,
+    get_speed_positions,
 )
 
 from viral.models import Cached2pSession, TrialInfo
@@ -251,6 +252,134 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
         / "plots"
         / "place_cells"
         / f"place-cells-unrewarded-{session.mouse_name}-{session.date}"
+    )
+
+
+def activity_trial_speed(
+    trial: TrialInfo, dff: np.ndarray, wheel_circumference: float, verbose: bool = False
+) -> np.ndarray | None:
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
+    )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name in ["trigger_panda", "trigger_panda_post_reward"]
+        ]
+    )
+
+    assert len(position) == len(frame_position)
+
+    # TODO: Are these the right parameters
+    first_position = 10
+    last_position = 170
+    step_size = 30
+    sampling_rate = 30
+    speed = get_speed_positions(
+        position=position,
+        first_position=first_position,
+        last_position=last_position,
+        step_size=step_size,
+        sampling_rate=sampling_rate,
+    )
+
+    # Bin frames by speed
+    bin_size = 1
+    start = 0
+    max_speed = (
+        50  # arbitrary value, double-check but should be fine, TODO: make it dynamic?
+    )
+
+    dff_speed = list()
+    for bin_start in range(start, max_speed, bin_size):
+        frame_idx_bin = frame_position[
+            np.logical_and(speed >= bin_start, speed < bin_start + bin_size)
+        ]
+        dff_bin = dff[:, frame_idx_bin]
+
+        if verbose:
+            print(f"bin_start: {bin_start}")
+            print(f"bin_end: {bin_start + bin_size}")
+            print(f"n_frames in bin: {len(frame_idx_bin)}")
+        dff_speed.append(np.mean(dff_bin, axis=1))
+
+    print("\n")
+    return np.array(dff_speed).T
+
+
+def get_speed_activity(
+    trials: List[TrialInfo], dff: np.ndarray, wheel_circumference: float
+) -> np.ndarray:
+    test_matrices = list()
+
+    for _ in range(10):
+        train_idx = random.sample(range(len(trials)), len(trials) // 2)
+        test_idx = [idx for idx in range(len(trials)) if idx not in train_idx]
+
+        # Find the order in which to sort neurons in a random 50% of the trials
+        train_matrix = np.nanmean(
+            np.array(
+                [
+                    activity_trial_speed(trials[idx], dff, wheel_circumference)
+                    for idx in train_idx
+                ]
+            ),
+            axis=0,
+        )
+        train_matrix[:, 33 // 1 : 40 // 1] = 0
+        train_matrix[:, 76 // 1 : 85 // 1] = 0
+        train_matrix[:, 120 // 1 : 132 // 1] = 0
+
+        peak_indices = np.argmax(train_matrix, axis=1)
+        sorted_order = np.argsort(peak_indices)
+
+        test_matrix = normalize(
+            np.nanmean(
+                np.array(
+                    [
+                        activity_trial_speed(trials[idx], dff, wheel_circumference)
+                        for idx in test_idx
+                    ]
+                ),
+                axis=0,
+            ),
+            axis=1,
+        )
+
+        test_matrices.append(test_matrix[sorted_order, :])
+
+    return np.mean(np.array(test_matrices), 0)
+
+
+def speed_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
+
+    plt.figure()
+    plt.title("Unsupervised Session")
+    data = get_speed_activity(
+        [trial for trial in session.trials if trial_is_imaged(trial)],
+        dff,
+        get_wheel_circumference_from_rig("2P"),
+    )
+    plt.imshow(data, aspect="auto", cmap="viridis")
+    clb = plt.colorbar()
+    clb.ax.set_title("Normalised\nactivity", fontsize=12)
+
+    plt.ylabel("cell number")
+    plt.xlabel("speed")
+    ticks = np.array([1, 50])  # arbitrary speed x-ticks
+    plt.xticks(ticks)
+
+    plt.title("Unsupervised Session")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        HERE.parent
+        / "plots"
+        / "speed_cells"
+        / f"speed-cells-unsupervised-{session.mouse_name}-{session.date}"
     )
 
 
