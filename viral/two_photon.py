@@ -5,7 +5,7 @@ import sys
 from typing import List
 from scipy.stats import zscore
 import seaborn as sns
-
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -33,8 +33,9 @@ sys.path.append(str(HERE.parent.parent))
 from matplotlib import pyplot as plt
 import numpy as np
 
-
 from viral.constants import SERVER_PATH, TIFF_UMBRELLA
+# SERVER_PATH = Path("/Volumes/MarcBusche/Josef/")
+# TIFF_UMBRELLA = SERVER_PATH / "2P"
 
 
 def compute_dff(f: np.ndarray) -> np.ndarray:
@@ -272,12 +273,12 @@ def activity_trial_speed(
 
     assert len(position) == len(frame_position)
 
-    # TODO: Are these the right parameters
+    # TODO: Think about step_size! Has to evenly divide the range, however we had it at 30 before (0-150; 150-180; ...)
     first_position = 10
     last_position = 170
-    step_size = 30
+    step_size = 1
     sampling_rate = 30
-    speed = get_speed_positions(
+    speed_positions = get_speed_positions(
         position=position,
         first_position=first_position,
         last_position=last_position,
@@ -288,15 +289,29 @@ def activity_trial_speed(
     # Bin frames by speed
     bin_size = 1
     start = 0
-    max_speed = (
-        50  # arbitrary value, double-check but should be fine, TODO: make it dynamic?
-    )
+    max_speed = max(sp.speed for sp in speed_positions) + bin_size
 
     dff_speed = list()
-    for bin_start in range(start, max_speed, bin_size):
-        frame_idx_bin = frame_position[
-            np.logical_and(speed >= bin_start, speed < bin_start + bin_size)
+    for bin_start in range(start, int(max_speed), bin_size):
+        if bin_start == 0:
+            frame_idx_bin = [
+                frame_position[idx] for idx, sp in enumerate(speed_positions) if sp.speed == 0
+            ]
+            # TODO: Is the handling of speed = 0 correct?
+            if len(frame_idx_bin) > 0:
+                dff_bin = dff[:, frame_idx_bin]
+                dff_speed.append(np.mean(dff_bin, axis=1))
+            else:
+                dff_speed.append(np.zeros(dff.shape[0]))  # handle no data for speed = 0
+            continue
+        frame_idx_bin = [
+            frame_position[idx]
+            for idx, sp in enumerate(speed_positions)
+            if bin_start <= sp.speed < bin_start + bin_size
         ]
+        if len(frame_idx_bin) == 0:
+            dff_speed.append(np.zeros(dff.shape[0])) # speed = 0 gets included
+            continue
         dff_bin = dff[:, frame_idx_bin]
 
         if verbose:
@@ -305,7 +320,7 @@ def activity_trial_speed(
             print(f"n_frames in bin: {len(frame_idx_bin)}")
         dff_speed.append(np.mean(dff_bin, axis=1))
 
-    print("\n")
+    # print("\n")
     return np.array(dff_speed).T
 
 
@@ -362,14 +377,16 @@ def speed_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
         dff,
         get_wheel_circumference_from_rig("2P"),
     )
+    num_speeds = data.shape[1]
     plt.imshow(data, aspect="auto", cmap="viridis")
     clb = plt.colorbar()
     clb.ax.set_title("Normalised\nactivity", fontsize=12)
+    # clb.ax.set_yticks([0, 1])
+    # clb.ax.set_yticklabels(["0", "1"])
 
     plt.ylabel("cell number")
     plt.xlabel("speed")
-    ticks = np.array([1, 50])  # arbitrary speed x-ticks
-    plt.xticks(ticks)
+    plt.xticks([0, num_speeds-1])
 
     plt.title("Unsupervised Session")
 
@@ -383,33 +400,92 @@ def speed_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
     )
 
 
-if __name__ == "__main__":
+def speed_cells(session: Cached2pSession, dff: np.ndarray) -> None:
 
-    mouse = "JB018"
-    date = "2024-12-06"
+    plt.figure()
+    plt.title("Rewarded trials")
+    data = get_speed_activity(
+        [trial for trial in session.trials if trial_is_imaged(trial) and trial.texture_rewarded],
+        dff,
+        get_wheel_circumference_from_rig("2P"),
+    )
+    num_speeds = data.shape[1]
+    plt.imshow(data, aspect="auto", cmap="viridis")
+    clb = plt.colorbar()
+    clb.ax.set_title("Normalised\nactivity", fontsize=12)
+    # clb.ax.set_yticks([0, 1])
+    # clb.ax.set_yticklabels(["0", "1"])
 
-    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
-        session = Cached2pSession.model_validate_json(f.read())
-    print(f"Total number of trials: {len(session.trials)}")
-    print(
-        f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
+    plt.ylabel("cell number")
+    plt.xlabel("speed")
+    plt.xticks([0, num_speeds-1])
+
+    plt.tight_layout()
+
+    plt.savefig(
+        HERE.parent
+        / "plots"
+        / "speed_cells"
+        / f"speed-cells-rewarded-{session.mouse_name}-{session.date}"
     )
 
-    dff = get_dff(mouse, date)
+    plt.figure()
+    plt.title("Unrewarded trials")
+    data = get_speed_activity(
+        [trial for trial in session.trials if trial_is_imaged(trial) and not trial.texture_rewarded],
+        dff,
+        get_wheel_circumference_from_rig("2P"),
+    )
+    num_speeds = data.shape[1]
+    plt.imshow(data, aspect="auto", cmap="viridis")
+    clb = plt.colorbar()
+    clb.ax.set_title("Normalised\nactivity", fontsize=12)
+    # clb.ax.set_yticks([0, 1])
+    # clb.ax.set_yticklabels(["0", "1"])
 
-    assert (
-        max(
-            trial.states_info[-1].closest_frame_start
-            for trial in session.trials
-            if trial.states_info[-1].closest_frame_start is not None
+    plt.ylabel("cell number")
+    plt.xlabel("speed")
+    plt.xticks([0, num_speeds-1])
+
+    plt.tight_layout()
+
+    plt.savefig(
+        HERE.parent
+        / "plots"
+        / "speed_cells"
+        / f"speed-cells-unrewarded-{session.mouse_name}-{session.date}"
+    )
+
+if __name__ == "__main__":
+
+    mouse = "JB011"
+    dates = ["2024-10-28", "2024-10-30", "2024-10-31", "2024-11-03"]
+    
+    for date in dates:
+        with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
+            session = Cached2pSession.model_validate_json(f.read())
+        print(f"Total number of trials: {len(session.trials)}")
+        print(
+            f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
         )
-        < dff.shape[1]
-    ), "Tiff is too short"
 
-    if "unsupervised" in session.session_type.lower():
-        place_cells_unsupervised(session, dff)
-    else:
-        place_cells(session, dff)
+        dff = get_dff(mouse, date)
+
+        assert (
+            max(
+                trial.states_info[-1].closest_frame_start
+                for trial in session.trials
+                if trial.states_info[-1].closest_frame_start is not None
+            )
+            < dff.shape[1]
+        ), "Tiff is too short"
+
+        if "unsupervised" in session.session_type.lower():
+            place_cells_unsupervised(session, dff)
+            speed_cells_unsupervised(session, dff)
+        else:
+            place_cells(session, dff)
+            speed_cells(session, dff)
 
     # all_trial_activity = []
     # for trial in session.trials:
