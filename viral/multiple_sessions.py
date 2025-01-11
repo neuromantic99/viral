@@ -847,7 +847,7 @@ if __name__ == "__main__":
                 print(f"mouse_name {mouse_name} cached now")
 
     # plot_performance_summaries(mice, "pre_reversal")
-    # plot_performance_summaries(mice, "post_reversal")
+    plot_performance_summaries(mice, "post_reversal")
     # plot_running_speed_summaries(mice, "pre_reversal")
     # plot_running_speed_summaries(mice, "post_reversal")
     # plot_trial_time_summaries(mice, "post_reversal")
@@ -855,14 +855,14 @@ if __name__ == "__main__":
     # plot_num_trials_summaries(mice, "pre_reversal")
     # plot_num_trials_summaries(mice, "post_reversal")
 
-    plot_performance_summaries_setup(mice, "pre_reversal")
-    plot_performance_summaries_setup(mice, "post_reversal")
-    plot_performance_summaries_sex(mice, "pre_reversal")
-    plot_performance_summaries_sex(mice, "post_reversal")
-    plot_performance_summaries_genotype_setup(mice, "pre_reversal")
-    plot_performance_summaries_genotype_setup(mice, "post_reversal")
-    plot_performance_summaries_genotype_sex(mice, "pre_reversal")
-    plot_performance_summaries_genotype_sex(mice, "post_reversal")
+    # plot_performance_summaries_setup(mice, "pre_reversal")
+    # plot_performance_summaries_setup(mice, "post_reversal")
+    # plot_performance_summaries_sex(mice, "pre_reversal")
+    # plot_performance_summaries_sex(mice, "post_reversal")
+    # plot_performance_summaries_genotype_setup(mice, "pre_reversal")
+    # plot_performance_summaries_genotype_setup(mice, "post_reversal")
+    # plot_performance_summaries_genotype_sex(mice, "pre_reversal")
+    # plot_performance_summaries_genotype_sex(mice, "post_reversal")
 
     plt.show()
 

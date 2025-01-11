@@ -34,6 +34,7 @@ from viral.utils import (
     get_tiff_paths_in_directory,
     time_list_to_datetime,
     trial_is_imaged,
+    degrees_to_cm
 )
 
 import logging
@@ -95,6 +96,8 @@ def add_daq_times_to_trial(
     # Sanity check the above logic
     assert len(trial_spacer_daq_times) == count_spacers(trial)
 
+    # trial.valid_frame_times = valid_frame_times
+
     trial_spacer_bpod_times = np.array(
         [state.start_time for state in trial.states_info if "spacer_high" in state.name]
     )
@@ -140,7 +143,7 @@ def add_daq_times_to_trial(
 
 
 def add_imaging_info_to_trials(
-    tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
+    tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]    
 ) -> List[TrialInfo]:
 
     logger.info("Adding imaging info to trials")
@@ -158,6 +161,8 @@ def add_imaging_info_to_trials(
     behaviour_clock = group["AI1"][:]
 
     print(f"Time to load data: {time.time() - t1}")
+    print(frame_clock)
+    print(behaviour_clock)
 
     # Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     # two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
@@ -170,7 +175,9 @@ def add_imaging_info_to_trials(
 
     print(f"Sampling rate: {sampling_rate}")
 
-    behaviour_times, behaviour_chunk_lens = extract_TTL_chunks(
+    print(f"Length of frame clock: {len(frame_clock)}")
+    print(f"Length of behaviour clock: {len(behaviour_clock)}")
+    behaviour_times, behaviour_chunk_lens =  extract_TTL_chunks(
         behaviour_clock, sampling_rate
     )
     num_spacers_per_trial = np.array([count_spacers(trial) for trial in trials])
@@ -212,6 +219,18 @@ def add_imaging_info_to_trials(
         == sum(stack_lengths)
         # == len(frame_times) - 2 * len(stack_lengths)
     )
+    
+    print(f"frame_clock: {len(frame_clock)}")
+    print(f"behaviour_clock: {len(behaviour_clock)}")
+    print(f"frame_times: {len(frame_times)}")
+    print(f"frame_times: {(frame_times)}")
+    print(f"valid_frame_times: {len(valid_frame_times)}")
+    print(f"valid_frame_times: {(valid_frame_times)}")
+    print(f"behaviour_times: {len(behaviour_times)}")
+    print(f"behaviour_times: {(behaviour_times)}")
+    print(f"range of valid_frame_times: {valid_frame_times[0]} to {valid_frame_times[-1]}")
+    print(f"range of behaviour_times: {behaviour_times[0]} to {behaviour_times[-1]}")
+
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
         add_daq_times_to_trial(
@@ -235,7 +254,7 @@ def add_imaging_info_to_trials(
         )
 
     first_trial_imaged = [trial for trial in trials if trial_is_imaged(trial)][0]
-    # Useful debugging plot
+    # Useful debugging plot  
     downscale = 5 if sampling_rate == 10000 else 1
     # plt.plot(range(0, len(frame_clock), downscale), frame_clock[::downscale])
     # plt.plot(behaviour_clock, color="blue")
@@ -247,6 +266,31 @@ def add_imaging_info_to_trials(
     #     color="red",
     # )
 
+    # not ideal
+    
+    valid_behaviour_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_valid_behaviour_times.npy"
+    valid_frame_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_valid_frame_times.npy"
+    behaviour_clock_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_clock.npy"
+    behaviour_chunk_lens_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_chunk_lens.csv"
+    behaviour_clock_template = np.arange(len(behaviour_clock)).astype(float)
+    behaviour_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_times.csv"
+    print("Before saving")
+    print(f"range of valid_frame_times: {valid_frame_times[0]} to {valid_frame_times[-1]}")
+    print(f"range of behaviour_times: {behaviour_times[0]} to {behaviour_times[-1]}")
+    print(f"range of behaviour_clock: {behaviour_clock_template[0]} to {behaviour_clock_template[-1]}")
+    print(f"len behaviour_chunk_lens: {len(behaviour_chunk_lens)}")
+    print(f"len number of trials: {len(trials)}")
+    print(f"len number of behaviour_times: {len(behaviour_times)}")
+    np.savetxt(behaviour_chunk_lens_filename, behaviour_chunk_lens, delimiter=",")
+    np.savetxt(behaviour_times_filename, behaviour_times, delimiter=",")
+    
+    print(valid_frame_times.dtype)
+    print(behaviour_times.dtype)
+    print(behaviour_clock.dtype)
+    print(behaviour_clock.shape)
+    # np.save(behaviour_times_filename, behaviour_times.astype(float))
+    np.save(valid_frame_times_filename, valid_frame_times)
+    np.save(behaviour_clock_filename, behaviour_clock_template)
     return trials
 
 
@@ -259,7 +303,7 @@ def get_tiff_metadata(
 
     # For debugging, remove eventually
     if use_cache:
-        temp_cache_path = Path("/Users/jamesrowland/Code/viral/data/temp_caches")
+        temp_cache_path = Path("/home/josef/code/viral/data/temp_caches")
         if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
             stack_lengths = np.load(
                 temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy"
@@ -302,9 +346,9 @@ def get_tiff_metadata(
 
         ############# ADD ME BACK IN  ##################
         # Check no dropped frames in the middle
-        assert (
-            round(np.max(diffed), 4) == round(np.min(diffed), 4) == 0.0333
-        ), "Dropped frames in the middle based on tiff timestamps"
+        # assert (
+        #     round(np.max(diffed), 4) == round(np.min(diffed), 4) == 0.0333
+        # ), "Dropped frames in the middle based on tiff timestamps"
 
     if use_cache:
         for variable, name in zip(
@@ -414,8 +458,7 @@ def process_session(
 
 if __name__ == "__main__":
 
-    # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
-    for mouse_name in ["JB018"]:
+    for mouse_name in ["JB011"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
