@@ -124,10 +124,22 @@ def add_daq_times_to_trial(
         decimal=3,
     )
 
+
     # Bit of monkey patching but oh well
     for state in trial.states_info:
         state.start_time_daq = bpod_to_daq(state.start_time).astype(float)
         state.end_time_daq = bpod_to_daq(state.end_time).astype(float)
+        
+        # Align the trial_start_time_daq to the start_time_daq of the state 'spacer_high_00'
+        if state.name == "spacer_high_00":
+            trial.trial_start_time_daq = state.start_time_daq
+            trial.trial_end_time_daq = trial.trial_start_time_daq + (
+                trial.trial_end_time - trial.trial_start_time
+            ) * daq_sampling_rate
+            print(trial.trial_start_time_daq)
+            print(trial.trial_end_time_daq)
+            # break
+    for state in trial.states_info:
         state.closest_frame_start = int(
             np.argmin(np.abs(valid_frame_times - state.start_time_daq))
         )
@@ -177,6 +189,9 @@ def add_imaging_info_to_trials(
 
     print(f"Length of frame clock: {len(frame_clock)}")
     print(f"Length of behaviour clock: {len(behaviour_clock)}")
+    print(f"Min behaviour clock: {np.min(behaviour_clock)}")
+    print(f"Max behaviour clock: {np.max(behaviour_clock)}")
+
     behaviour_times, behaviour_chunk_lens =  extract_TTL_chunks(
         behaviour_clock, sampling_rate
     )
@@ -272,6 +287,7 @@ def add_imaging_info_to_trials(
     valid_frame_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_valid_frame_times.npy"
     behaviour_clock_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_clock.npy"
     behaviour_chunk_lens_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_chunk_lens.csv"
+    behaviour_chunk_lens_filename_npy = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_chunk_lens.npy"
     behaviour_clock_template = np.arange(len(behaviour_clock)).astype(float)
     behaviour_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_times.csv"
     print("Before saving")
@@ -279,10 +295,12 @@ def add_imaging_info_to_trials(
     print(f"range of behaviour_times: {behaviour_times[0]} to {behaviour_times[-1]}")
     print(f"range of behaviour_clock: {behaviour_clock_template[0]} to {behaviour_clock_template[-1]}")
     print(f"len behaviour_chunk_lens: {len(behaviour_chunk_lens)}")
+    print(f"len chunk_lens: {len(chunk_lens)}")
     print(f"len number of trials: {len(trials)}")
     print(f"len number of behaviour_times: {len(behaviour_times)}")
     np.savetxt(behaviour_chunk_lens_filename, behaviour_chunk_lens, delimiter=",")
     np.savetxt(behaviour_times_filename, behaviour_times, delimiter=",")
+    np.save(behaviour_chunk_lens_filename_npy, behaviour_chunk_lens)
     
     print(valid_frame_times.dtype)
     print(behaviour_times.dtype)
@@ -458,7 +476,7 @@ def process_session(
 
 if __name__ == "__main__":
 
-    for mouse_name in ["JB011"]:
+    for mouse_name in ["JB018"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:

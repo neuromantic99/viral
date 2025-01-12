@@ -28,29 +28,27 @@ def get_time_position(trial: TrialInfo, wheel_circumference: float) -> np.ndarra
             if state.name in ["trigger_panda", "trigger_panda_post_reward"]
         ]
     )
-    print(f"Len times {len(times)}")
     degrees = np.array(trial.rotary_encoder_position)
     positions = degrees_to_cm(degrees, wheel_circumference)
+    print("positions")
+    print(positions.astype(int))
     assert len(times) == len(positions)
     return np.column_stack((times, positions))
 
 
-def get_speed_time(trial: TrialInfo, wheel_circumference: float, tbehav: np.ndarray) -> np.ndarray:
-    # Settings for speed calculation
-    sampling_rate = 30
-    first_position = 0
-    last_position = 200
-    step_size = 5
-    time_position = get_time_position(trial, wheel_circumference)
-    speed_positions = get_speed_positions(position=time_position[:, 1], first_position=first_position, last_position=last_position, step_size=step_size, sampling_rate=sampling_rate)
-    positions_start, positions_stop, speeds = [speed.position_start for speed in speed_positions], [speed.position_stop for speed in speed_positions], [speed.speed for speed in speed_positions]
-    interpolated_speeds = np.interp(time_position[:, 1], np.concatenate([positions_start, positions_stop]), np.concatenate([speeds, speeds]))
-    speeds_tbehav = np.zeros_like(tbehav)
-    for i, t in enumerate(tbehav):
-        if t in time_position[:, 0]:
-            speeds_tbehav[i] = interpolated_speeds[np.where(time_position[:, 0] == t)[0][0]]
-    return np.column_stack((tbehav, speeds_tbehav))
-
+def get_speed_time(trial: TrialInfo, wheel_circumference: float, trial_times: np.ndarray) -> np.ndarray:
+    time_position = get_time_position(trial, wheel_circumference).astype(int)
+    # Cannot use the "get_speed_positions" function because we would never end up with a speed of 0! (speed as function of position)
+    # speed_positions = get_speed_positions(position=time_position[:, 1], first_position=first_position, last_position=last_position, step_size=step_size, sampling_rate=sampling_rate)
+    # positions_start, positions_stop, speeds = [speed.position_start for speed in speed_positions], [speed.position_stop for speed in speed_positions], [speed.speed for speed in speed_positions]
+    # Need to calculate the speed as a function of time
+    # TODO: Is this ok like this?
+    times_diff = np.diff(time_position[:, 0])
+    positions_diff = np.diff(time_position[:, 1])
+    speeds = (positions_diff / times_diff)
+    return np.column_stack((time_position[:-1, 0], speeds))
+    
+    
 def get_lick_time(trial: TrialInfo, wheel_circumference: float, tbehav: np.ndarray) -> np.ndarray:
     licks_position = licks_to_position(trial, wheel_circumference)
     # licks_binary = np.isin(time_position[:, 1], licks_position).astype(int)
@@ -72,47 +70,38 @@ def get_reward_time(trial: TrialInfo, tbehav: np.ndarray) -> np.ndarray:
     
 
 def get_trial_start_time(trial: TrialInfo) -> float:
-    # TODO: Is this a close enough approximation? Could be slightly off
     return next(
-        (state.start_time_daq for state in trial.states_info if state.name == "trial_start"),
+        (state.start_time_daq for state in trial.states_info if state.name == "spacer_high_00"),
         None
     )
-def get_trial_end_time(trial: TrialInfo) -> float:
-    # TODO: Is this a close enough approximation? Could be slightly off
-    return next(
-        (state.end_time_daq for state in trial.states_info if state.name == "ITI"),
-        None
-    )
+
+# def get_trial_end_time(trial: TrialInfo) -> float:
+#     # TODO: Is this a close enough approximation? Could be slightly off
+#     return next(
+#         (state.end_time_daq for state in trial.states_info if state.name == "ITI"),
+#         None
+#     )
 
 def align_trial_times_tbehav(trials: list[TrialInfo], tbehav: np.ndarray) -> np.ndarray:
     """Extract trial start and end times from trials and align them to tbehav"""
-    trial_start_times = list()
-    trial_end_times = list()
-    for trial in trials:
-        trial_start_time = get_trial_start_time(trial)
-        trial_end_time = get_trial_end_time(trial)
-        assert trial_start_time is not None and trial_end_time is not None, "trial_start_time or trial_end_time is 'None'"
-        assert trial_start_time < trial_end_time, "trial_end_time is sooner than trial_start_time"
-        trial_start_times.append(trial_start_time)
-        trial_end_times.append(trial_end_time)
-
-    # tbehav must cover the range of trial times
-    assert tbehav[0] <= np.min(trial_start_times) and tbehav[-1] >= np.max(trial_end_times), "tbehav does not cover the range of trial times!"
-
-    trial_start_times = np.array(trial_start_times)
-    trial_end_times = np.array(trial_end_times)
-
-    # Check that no more than one trial starts at the same time
-    unique_start_times, start_counts = np.unique(trial_start_times, return_counts=True)
-    unique_end_times, end_counts = np.unique(trial_end_times, return_counts=True)
-    assert np.all(start_counts == 1), f"Duplicate start times found: {trial_start_times[start_counts > 1]}"
-    assert np.all(end_counts == 1), f"Duplicate end times found: {trial_end_times[end_counts > 1]}"
-
-    for start_time, end_time in zip(trial_start_times, trial_end_times):
-        assert start_time in tbehav, f"start_time '{start_time}' is not in tbehav"
-        assert end_time in tbehav, f"end_time '{end_time}' is not in tbehav"
-
-    aligned_trial_times = np.column_stack([trial_start_times, trial_end_times])
+    trial_times = np.array([[trial.trial_start_time_daq, trial.trial_end_time_daq] for trial in trials])
+    print("trial times")
+    print(trial_times)
+    assert len(trials) == trial_times.shape[0], "Number of trials does not match number of trial times"
+    aligned_trial_times = np.empty_like(trial_times, dtype=float)
+    for i, (start, end) in enumerate(trial_times):
+        # closest indices in tbehav
+        start_idx = np.searchsorted(tbehav, start, side="left")
+        end_idx = np.searchsorted(tbehav, end, side="left")
+        
+        # ensure indices are within bounds
+        start_idx = np.clip(start_idx, 0, len(tbehav) - 1)
+        end_idx = np.clip(end_idx, 0, len(tbehav) - 1)
+        
+        # align trial times
+        aligned_trial_times[i, 0] = tbehav[start_idx]
+        aligned_trial_times[i, 1] = tbehav[end_idx]
+    
     return aligned_trial_times
 
 def trim_tbehav(tbehav: np.ndarray, aligned_trial_times: np.ndarray) -> np.ndarray:
@@ -129,26 +118,54 @@ def save_data() -> None:
 
 if __name__ == "__main__":
     # file = "/home/josef/code/viral/data/cached_2p/JB011_2024-10-28.json"
-    file = "/home/josef/code/viral/data/cached_2p/JB011_2024-10-30.json"
+    # file = "/home/josef/code/viral/data/cached_2p/JB011_2024-10-30.json"
+    # file = "/home/josef/code/viral/data/cached_2p/JB011_2024-10-31.json"
+    file = "/home/josef/code/viral/data/cached_2p/JB018_2024-12-05.json"
     with open(file, "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
     # tbehav = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-30_behaviour_times.npy")
-    tbehav = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-30_behaviour_clock.npy")
-    tneural = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-30_valid_frame_times.npy")
+    # tbehav = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-30_behaviour_clock.npy")
+    # tbehav = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-31_behaviour_clock.npy")
+    tbehav = np.load("/home/josef/code/viral/data/cached_2p/JB018_2024-12-05_behaviour_clock.npy")
+    # tneural = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-30_valid_frame_times.npy")
+    # tneural = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-31_valid_frame_times.npy")
+    tneural = np.load("/home/josef/code/viral/data/cached_2p/JB018_2024-12-05_valid_frame_times.npy")
+    # behaviour_chunk_lens = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-30_behaviour_chunk_lens.npy")
+    # behaviour_chunk_lens = np.load("/home/josef/code/viral/data/cached_2p/JB011_2024-10-31_behaviour_chunk_lens.npy")
+    # behaviour chunk lens have trials in there which have not been imaged, hurray
+    
+    # Not ideal, should be saved while caching the sessions
+    if 30 < len(tbehav) / 1000 / 60 < 100:
+        sampling_rate = 1000
+    elif 30 < len(tbehav) / 10000 / 60 < 100:
+        sampling_rate = 10000
+    else:
+        raise ValueError("Could not determine sampling rate")
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
     if not trials:
         print("No trials imaged")
         exit()
+    print("behaviour_clock")
+    print(tbehav.astype(int))
     aligned_trial_times = align_trial_times_tbehav(trials, tbehav)
+    print("aligned trial times")
+    print(aligned_trial_times)
+    print("spacer high times")
+    print([get_trial_start_time(trial) for trial in trials])
+    
     tbehav = trim_tbehav(tbehav, aligned_trial_times)
     
     assert len(trials) == len(aligned_trial_times), "Number of trials and aligned_trial_times do not match"
 
     for trial, (start_time, end_time) in zip(trials, aligned_trial_times):
-        speed_time = get_speed_time(trial, 34.7, tbehav)
-    # plt.figure()
-    # plt.plot(aligned_trial_times)
-    # plt.savefig(f"/home/josef/code/viral/plots/trial_times_test.png")
+        trial_times = np.arange(start=start_time, stop=end_time, step=1)
+        speed_time = get_speed_time(trial, 34.7, trial_times)
+        print(speed_time)
+        print(np.min(speed_time[1]))
+        print(np.max(speed_time[1]))
+        plt.figure()
+        plt.plot(speed_time)
+        plt.savefig(f"/home/josef/code/viral/plots/speed_test.png")
 
     
     # 1/0
