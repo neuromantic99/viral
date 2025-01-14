@@ -281,33 +281,9 @@ def add_imaging_info_to_trials(
     #     color="red",
     # )
 
-    # not ideal
-    
-    valid_behaviour_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_valid_behaviour_times.npy"
-    valid_frame_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_valid_frame_times.npy"
+    # not ideal, could probably make that up from trial times
     behaviour_clock_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_clock.npy"
-    behaviour_chunk_lens_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_chunk_lens.csv"
-    behaviour_chunk_lens_filename_npy = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_chunk_lens.npy"
     behaviour_clock_template = np.arange(len(behaviour_clock)).astype(float)
-    behaviour_times_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_times.csv"
-    print("Before saving")
-    print(f"range of valid_frame_times: {valid_frame_times[0]} to {valid_frame_times[-1]}")
-    print(f"range of behaviour_times: {behaviour_times[0]} to {behaviour_times[-1]}")
-    print(f"range of behaviour_clock: {behaviour_clock_template[0]} to {behaviour_clock_template[-1]}")
-    print(f"len behaviour_chunk_lens: {len(behaviour_chunk_lens)}")
-    print(f"len chunk_lens: {len(chunk_lens)}")
-    print(f"len number of trials: {len(trials)}")
-    print(f"len number of behaviour_times: {len(behaviour_times)}")
-    np.savetxt(behaviour_chunk_lens_filename, behaviour_chunk_lens, delimiter=",")
-    np.savetxt(behaviour_times_filename, behaviour_times, delimiter=",")
-    np.save(behaviour_chunk_lens_filename_npy, behaviour_chunk_lens)
-    
-    print(valid_frame_times.dtype)
-    print(behaviour_times.dtype)
-    print(behaviour_clock.dtype)
-    print(behaviour_clock.shape)
-    # np.save(behaviour_times_filename, behaviour_times.astype(float))
-    np.save(valid_frame_times_filename, valid_frame_times)
     np.save(behaviour_clock_filename, behaviour_clock_template)
     return trials
 
@@ -476,7 +452,7 @@ def process_session(
 
 if __name__ == "__main__":
 
-    for mouse_name in ["JB018"]:
+    for mouse_name in ["JB011"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
