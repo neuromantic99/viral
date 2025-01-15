@@ -20,23 +20,15 @@ from viral.constants import SPREADSHEET_ID, BEHAVIOUR_DATA_PATH, SYNC_FILE_PATH,
 
 # logger = logging.getLogger("2p_cacher")
 
-def align_trial_times_tbehav(trials: list[TrialInfo], tbehav: np.ndarray) -> np.ndarray:
+def align_trial_times(trials: list[TrialInfo]) -> np.ndarray:
     """Extract trial start and end times from trials and align them to tbehav"""
     trial_times = np.array([[trial.trial_start_time_daq, trial.trial_end_time_daq] for trial in trials])
     assert len(trials) == trial_times.shape[0], "Number of trials does not match number of trial times"
     aligned_trial_times = np.empty_like(trial_times, dtype=float)
     for i, (start, end) in enumerate(trial_times):
-        # closest indices in tbehav
-        start_idx = np.searchsorted(tbehav, start, side="left")
-        end_idx = np.searchsorted(tbehav, end, side="left")
-        
-        # ensure indices are within bounds
-        start_idx = np.clip(start_idx, 0, len(tbehav) - 1)
-        end_idx = np.clip(end_idx, 0, len(tbehav) - 1)
-        
         # align trial times
-        aligned_trial_times[i, 0] = tbehav[start_idx]
-        aligned_trial_times[i, 1] = tbehav[end_idx]
+        aligned_trial_times[i, 0] = int(start)
+        aligned_trial_times[i, 1] = int(end)
     
     return aligned_trial_times
 
@@ -119,9 +111,8 @@ def get_lick_time(trial: TrialInfo) -> np.ndarray:
     for start, end in start_end_times.astype(int):
         if end > start:
             segment_times = np.arange(start, end, 1)
-            segment_licks = np.ones_like(segment_times, dtype=int)
-            lick_segments.append(np.column_stack((segment_times, segment_licks)))
-    return np.concatenate(lick_segments) if lick_segments else np.empty((0, 2), dtype=int)
+            lick_segments.append(segment_times)
+    return np.concatenate(lick_segments) if lick_segments else np.empty((0), dtype=int)
 
 def get_reward_time(trial: TrialInfo) -> np.ndarray:
     # Caution: When changing number of rewards, the state names have to be changed
@@ -158,82 +149,31 @@ def get_reward_time(trial: TrialInfo) -> np.ndarray:
     for start, end in start_end_times.astype(int):
         if end > start:
             segment_times = np.arange(start, end, 1)
-            segment_rewards = np.ones_like(segment_times, dtype=int)
-            reward_segments.append(np.column_stack((segment_times, segment_rewards)))
-    return np.concatenate(reward_segments) if reward_segments else np.empty((0, 2), dtype=int)
-    
+            reward_segments.append(segment_times)
+    return np.concatenate(reward_segments) if reward_segments else np.empty((0), dtype=int)
 
 
-def trim_tbehav(tbehav: np.ndarray, aligned_trial_times: np.ndarray) -> np.ndarray:
-    """Trim tbehav to the range of aligned_trial_times"""
-    # Not sure about this, could probably make up the tbehav without having the behaviour_clock cached
-    return tbehav[(tbehav >= aligned_trial_times[0, 0]) & (tbehav <= aligned_trial_times[-1, 1])]
-
-def stack_behaviour_data(tbehav: np.ndarray, arrays: list[np.ndarray]) -> np.ndarray:
-    # TODO: downsample before? the function is currently too slow
-    aligned_arrays = list()
-    for array in arrays:
-        aligned_array = np.zeros((len(tbehav), array.shape[1]))
-        for i in range(array.shape[0]):
-            time_idx = np.where(tbehav == array[i, 0])[0]
-            if len(time_idx) > 0:
-                    time_idx = time_idx[0]
-                    aligned_array[time_idx, :] = array[i, 1:]
-            else:
-               raise ValueError(f"Warning: Time {array[i, 0]} not found in tbehav.")
-    return np.stack(aligned_arrays, axis=-1)
-
-
-def save_data() -> None:
-    # Save spks.py
-    # Save behav.py
-    # Save tbehav.py
-    # Save tneural.py
-    # Save behav_names
-    np.savez()
-
-if __name__ == "__main__":
-    file = "/home/josef/code/viral/data/cached_2p/JB018_2024-12-05.json"
-    with open(file, "r") as f:
+def process_session(wheel_circumference: float) -> None:
+    session_path = "/home/josef/code/viral/data/cached_2p/JB018_2024-12-05.json"
+    tneural_path = "/home/josef/code/viral/data/cached_2p/JB018_2024-12-05_valid_frame_times.npy"
+    with open(session_path, "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
-    tbehav = np.load("/home/josef/code/viral/data/cached_2p/JB018_2024-12-05_behaviour_clock.npy")
-    tneural = np.load("/home/josef/code/viral/data/cached_2p/JB018_2024-12-05_valid_frame_times.npy")
-    
-    # Not ideal, could be saved while caching the sessions
-    if 30 < len(tbehav) / 1000 / 60 < 100:
-        sampling_rate = 1000
-    elif 30 < len(tbehav) / 10000 / 60 < 100:
-        sampling_rate = 10000
-    else:
-        raise ValueError("Could not determine sampling rate")
+    tneural = np.load(tneural_path)
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
     if not trials:
         print("No trials imaged")
         exit()
-    aligned_trial_times = align_trial_times_tbehav(trials, tbehav)
-    
-    tbehav = trim_tbehav(tbehav, aligned_trial_times)
-    # downsample to bpod sampling rate?!!!
-
+    aligned_trial_times = align_trial_times(trials)
     assert len(trials) == len(aligned_trial_times), "Number of trials and aligned_trial_times do not match"
-
     for trial, (start_time, end_time) in zip(trials, aligned_trial_times):
         trial_times = np.arange(start=start_time, stop=end_time, step=1)
-        speed_time = get_speed_time(trial, 34.7, trial_times)
-        print(speed_time)
-        print(np.min(speed_time[1]))
-        print(np.max(speed_time[1]))
-        plt.figure(figsize=(20,7), dpi=300)
-        plt.scatter(x=speed_time[:, 0], y=speed_time[:, 1])
-        plt.savefig(f"/home/josef/code/viral/plots/speed_test.png")
+        speed_time = get_speed_time(trial, wheel_circumference, trial_times)
         lick_time = get_lick_time(trial)
-        plt.figure(figsize=(20,7), dpi=300)
-        plt.scatter(x=lick_time[:, 0], y=lick_time[:, 1])
-        plt.savefig(f"/home/josef/code/viral/plots/lick_test.png")
         reward_time = get_reward_time(trial)
-        plt.figure(figsize=(20,7), dpi=300)
-        plt.scatter(x=reward_time[:, 0], y=reward_time[:, 1])
-        plt.savefig(f"/home/josef/code/viral/plots/reward_test.png")
-        print(stack_behaviour_data(tbehav=tbehav, arrays=[speed_time, lick_time, reward_time]))
+    output_path = "/home/josef/code/viral/data/cached_2p/JB018_2024-12-05.npz"
+    np.savez(output_path, trial_times=trial_times, speed_time=speed_time, lick_time=lick_time, reward_time=reward_time, tneural=tneural)
 
+
+if __name__ == "__main__":
+    process_session(34.1)
     
