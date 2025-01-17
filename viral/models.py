@@ -66,8 +66,8 @@ class MouseSummary(BaseModel):
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
-    trial_start_time_daq: float | None = None
-    trial_end_time_daq: float | None = None
+    trial_start_closest_frame: float | None = None
+    trial_end_closest_frame: float | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]

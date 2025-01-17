@@ -124,22 +124,10 @@ def add_daq_times_to_trial(
         decimal=3,
     )
 
-
-    # Bit of monkey patching but oh well
+    # Bit of monkey patching but oh well 
     for state in trial.states_info:
-        state.start_time_daq = bpod_to_daq(state.start_time).astype(float)
-        state.end_time_daq = bpod_to_daq(state.end_time).astype(float)
-        
-        # Align the trial_start_time_daq to the start_time_daq of the state 'spacer_high_00'
-        if state.name == "spacer_high_00":
-            trial.trial_start_time_daq = state.start_time_daq
-            trial.trial_end_time_daq = trial.trial_start_time_daq + (
-                trial.trial_end_time - trial.trial_start_time
-            ) * daq_sampling_rate
-            print(trial.trial_start_time_daq)
-            print(trial.trial_end_time_daq)
-            # break
-    for state in trial.states_info:
+        state.start_time_daq = bpod_to_daq(state.start_time)
+        state.end_time_daq = bpod_to_daq(state.end_time)
         state.closest_frame_start = int(
             np.argmin(np.abs(valid_frame_times - state.start_time_daq))
         )
@@ -147,12 +135,17 @@ def add_daq_times_to_trial(
             np.argmin(np.abs(valid_frame_times - state.end_time_daq))
         )
 
+        if state.name == "spacer_high_00":
+            trial.trial_start_closest_frame = state.closest_frame_start
+
+    last_state = trial.states_info[-1]
+    trial.trial_end_closest_frame = last_state.closest_frame_end
+
     for event in trial.events_info:
         event.start_time_daq = float(bpod_to_daq(event.start_time))
         event.closest_frame = int(
             np.argmin(np.abs(valid_frame_times - event.start_time_daq))
         )
-
 
 def add_imaging_info_to_trials(
     tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]    
@@ -234,17 +227,6 @@ def add_imaging_info_to_trials(
         == sum(stack_lengths)
         # == len(frame_times) - 2 * len(stack_lengths)
     )
-    
-    print(f"frame_clock: {len(frame_clock)}")
-    print(f"behaviour_clock: {len(behaviour_clock)}")
-    print(f"frame_times: {len(frame_times)}")
-    print(f"frame_times: {(frame_times)}")
-    print(f"valid_frame_times: {len(valid_frame_times)}")
-    print(f"valid_frame_times: {(valid_frame_times)}")
-    print(f"behaviour_times: {len(behaviour_times)}")
-    print(f"behaviour_times: {(behaviour_times)}")
-    print(f"range of valid_frame_times: {valid_frame_times[0]} to {valid_frame_times[-1]}")
-    print(f"range of behaviour_times: {behaviour_times[0]} to {behaviour_times[-1]}")
 
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -280,11 +262,6 @@ def add_imaging_info_to_trials(
     #     ".",
     #     color="red",
     # )
-
-    # not ideal, could probably make that up from trial times
-    behaviour_clock_filename = HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}_behaviour_clock.npy"
-    behaviour_clock_template = np.arange(len(behaviour_clock)).astype(float)
-    np.save(behaviour_clock_filename, behaviour_clock_template)
     return trials
 
 
@@ -452,7 +429,7 @@ def process_session(
 
 if __name__ == "__main__":
 
-    for mouse_name in ["JB011"]:
+    for mouse_name in ["JB018"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
