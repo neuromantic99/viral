@@ -32,6 +32,7 @@ from viral.utils import (
     shaded_line_plot,
     get_sex,
     get_setup,
+    get_session_type,
 )
 
 import seaborn as sns
@@ -803,7 +804,7 @@ if __name__ == "__main__":
     mice: List[MouseSummary] = []
 
     redo = False
-    # cache_mouse("JB022")
+    cache_mouse("JB011")
     # cache_mouse("JB023")
     # cache_mouse("JB026")
     # cache_mouse("JB027")
@@ -855,48 +856,81 @@ if __name__ == "__main__":
     # plot_num_trials_summaries(mice, "pre_reversal")
     # plot_num_trials_summaries(mice, "post_reversal")
 
-    plot_performance_summaries_setup(mice, "pre_reversal")
-    plot_performance_summaries_setup(mice, "post_reversal")
-    plot_performance_summaries_sex(mice, "pre_reversal")
-    plot_performance_summaries_sex(mice, "post_reversal")
-    plot_performance_summaries_genotype_setup(mice, "pre_reversal")
-    plot_performance_summaries_genotype_setup(mice, "post_reversal")
-    plot_performance_summaries_genotype_sex(mice, "pre_reversal")
-    plot_performance_summaries_genotype_sex(mice, "post_reversal")
+    # plot_performance_summaries_setup(mice, "pre_reversal")
+    # plot_performance_summaries_setup(mice, "post_reversal")
+    # plot_performance_summaries_sex(mice, "pre_reversal")
+    # plot_performance_summaries_sex(mice, "post_reversal")
+    # plot_performance_summaries_genotype_setup(mice, "pre_reversal")
+    # plot_performance_summaries_genotype_setup(mice, "post_reversal")
+    # plot_performance_summaries_genotype_sex(mice, "pre_reversal")
+    # plot_performance_summaries_genotype_sex(mice, "post_reversal")
 
     plt.show()
 
     # mouse = mice[1]
-    # window = 50
+    window = 50
 
-    # chance = get_chance_level(mice, window=window)
+    chance = get_chance_level(mice, window=window)
 
-    # mouse = mice[0]
-    # plt.figure()
-    # plot_rolling_performance(
-    #     mouse.sessions,
-    #     window,
-    #     (
-    #         np.percentile(chance, 1).astype(float),
-    #         np.percentile(chance, 99).astype(float),
-    #     ),
-    #     add_text_to_chance=True,
-    # )
+    mouse = mice[0]
+    plt.figure()
+    plot_rolling_performance(
+        mouse.sessions,
+        window,
+        (
+            np.percentile(chance, 1).astype(float),
+            np.percentile(chance, 99).astype(float),
+        ),
+        add_text_to_chance=True,
+    )
 
-    # num_to_reversal = sum(
-    #     len(session.trials)
-    #     for session in mouse.sessions
-    #     if "reversal" not in session.name.lower()
-    # )
+    num_to_reversal = sum(
+        len(session.trials)
+        for session in mouse.sessions
+        if get_session_type(session.name)
+        not in {"reversal", "recall", "recall_reversal"}
+    )
 
-    # plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
-    # plt.text(
-    #     num_to_reversal - window + 10,
-    #     2,
-    #     "Reversal\nStarts",
-    #     color=sns.color_palette()[1],
-    #     fontsize=15,
-    # )
-    # plt.tight_layout()
-    # # plt.savefig(HERE.parent / "plots" / "example-mouse-performance.png")
-    # plt.show()
+    num_to_recall = sum(
+        len(session.trials)
+        for session in mouse.sessions
+        if get_session_type(session.name) not in {"recall", "recall_reversal"}
+    )
+
+    num_to_recall_reversal = sum(
+        len(session.trials)
+        for session in mouse.sessions
+        if get_session_type(session.name) != "recall_reversal"
+    )
+
+    plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
+    plt.text(
+        num_to_reversal - window + 10,
+        2,
+        "Reversal\nStarts",
+        color=sns.color_palette()[1],
+        fontsize=15,
+    )
+
+    plt.axvline(num_to_recall - window, color=sns.color_palette()[2], linestyle="--")
+    plt.text(
+        num_to_recall - window + 10,
+        2,
+        "Memory\nRecall\nStarts",
+        color=sns.color_palette()[2],
+        fontsize=15,
+    )
+
+    plt.axvline(
+        num_to_recall_reversal - window, color=sns.color_palette()[3], linestyle="--"
+    )
+    plt.text(
+        num_to_recall_reversal - window + 10,
+        2,
+        "Recall\nReversal\nStarts",
+        color=sns.color_palette()[3],
+        fontsize=15,
+    )
+    plt.tight_layout()
+    # plt.savefig(HERE.parent / "plots" / "example-mouse-performance.png")
+    plt.show()

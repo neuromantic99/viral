@@ -328,7 +328,19 @@ def get_setup(mouse_name: str) -> str:
     }:
         return "box"
     else:
-        raise ValueError(f"Unknown sex for mouse: {mouse_name}")
+        raise ValueError(f"Unknown setup for mouse: {mouse_name}")
+
+
+def get_session_type(session_name: str) -> str:
+    session_name = session_name.lower().strip()
+    if "reversal" in session_name:
+        return "recall_reversal" if "recall" in session_name else "reversal"
+    elif "recall" in session_name:
+        return "recall"
+    elif "learning" in session_name:
+        return "learning"
+    else:
+        raise ValueError(f"Invalid session type: {session_name}")
 
 
 def shuffle(x: np.ndarray) -> np.ndarray:
