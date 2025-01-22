@@ -201,6 +201,14 @@ def get_reward_index(trial: TrialInfo) -> np.ndarray | None:
         return None
 
 
+def remap_to_continuous_indices(
+    original_indices: np.ndarray, frame_mapping: dict
+) -> np.ndarray:
+    return np.array(
+        [frame_mapping[idx] for idx in original_indices if idx in frame_mapping]
+    )
+
+
 def process_session(session: Cached2pSession, wheel_circumference: float) -> None:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
     spks, xpos, ypos = get_spks_pos(s2p_path)
@@ -220,9 +228,6 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
     rwrds_combined = np.array([], dtype=int)
     pstns_combined = np.empty((0, 2))
     spd_combined = np.empty((0, 2))
-    crrdr_strts_combined = np.column_stack(
-        (aligned_trial_frames[:, 0], aligned_trial_frames[:, -1])
-    )
     crrdr_wdths_combined = aligned_trial_frames[:, 1] - aligned_trial_frames[:, 0]
     for trial, (start, end, rewarded) in zip(trials, aligned_trial_frames):
         trial_frames = np.arange(start, end + 1, 1)
@@ -237,6 +242,20 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
         pstns_combined = np.vstack((pstns_combined, frames_positions))
         spd_combined = np.vstack((spd_combined, speed))
     spks_combined = np.hstack(spks_trials)
+    # TODO: sanity check for the frame mapping
+    continuous_frames = np.arange(pstns_combined.shape[0])
+    discontinuous_frames = pstns_combined[:, 0]
+    frame_mapping = {
+        orig: cont for orig, cont in zip(discontinuous_frames, continuous_frames)
+    }
+    lcks_combined = remap_to_continuous_indices(lcks_combined, frame_mapping)
+    rwrds_combined = remap_to_continuous_indices(rwrds_combined, frame_mapping)
+    crrdr_strts_combined = np.column_stack(
+        (
+            remap_to_continuous_indices(aligned_trial_frames[:, 0], frame_mapping),
+            aligned_trial_frames[:, -1],
+        )
+    )
     # corridor_starts
     # corridor_widths
     # corridor_imgs
@@ -266,6 +285,8 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
         reward_inds=rwrds_combined,
         lick_inds=lcks_combined,
         run=spd_combined[:, 1],
+        corridor_imgs=np.zeros((2, 1200, 100)),
+        sound_inds=np.zeros(1),
     )
     print(f"Done")
 
