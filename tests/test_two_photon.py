@@ -1,6 +1,39 @@
 import numpy as np
 
-from viral.two_photon import sort_matrix_peak
+from viral.models import StateInfo, TrialInfo
+from viral.two_photon import activity_trial_position, sort_matrix_peak
+
+
+def get_state_info(closest_frame: int) -> StateInfo:
+    """Only cares about the closest frame"""
+    return StateInfo(
+        name="trigger_panda",
+        start_time=0,
+        end_time=0,
+        start_time_daq=0,
+        end_time_daq=0,
+        closest_frame_start=closest_frame,
+        closest_frame_end=closest_frame,
+    )
+
+
+def create_test_trial() -> TrialInfo:
+    return TrialInfo(
+        trial_start_time=0,
+        trial_end_time=1,
+        pc_timestamp="timestamp",
+        states_info=
+        events_info=[]
+        rotary_encoder_position=List[float],
+        texture=str,
+        texture_rewarded=bool,
+    )
+
+
+def test_activity_trial_position_SOMETHING() -> None:
+
+    result = activity_trial_position()
+    pass
 
 
 def test_sort_matrix_peak_no_change() -> None:

@@ -113,15 +113,23 @@ def normalize(array: np.ndarray, axis: int) -> np.ndarray:
     return (array - min_val) / (max_val - min_val)
 
 
+def remove_landmarks_from_train_matrix(train_matrix: np.ndarray) -> np.ndarray:
+    """We seem to get a lot of neurons with a peak at the landmark. This removes the landmark from the
+    train matrix so cells do not get sorted by their landmark peak
+    TODO: This will not work if bin_size != 1, originally had an integer division which may deal with this
+    """
+
+    train_matrix[:, 33:40] = 0
+    train_matrix[:, 76:85] = 0
+    train_matrix[:, 120:132] = 0
+    return train_matrix
+
+
 def get_position_activity(
     trials: List[TrialInfo], dff: np.ndarray, wheel_circumference: float
 ) -> np.ndarray:
 
     test_matrices = []
-    # 33, 40
-    # 76, 85
-    # 120, 132
-
     for _ in range(10):
         train_idx = random.sample(range(len(trials)), len(trials) // 2)
         test_idx = [idx for idx in range(len(trials)) if idx not in train_idx]
@@ -136,10 +144,8 @@ def get_position_activity(
             ),
             axis=0,
         )
-        train_matrix[:, 33 // 1 : 40 // 1] = 0
-        train_matrix[:, 76 // 1 : 85 // 1] = 0
-        train_matrix[:, 120 // 1 : 132 // 1] = 0
 
+        train_matrix = remove_landmarks_from_train_matrix(train_matrix)
         peak_indices = np.argmax(train_matrix, axis=1)
         sorted_order = np.argsort(peak_indices)
 
