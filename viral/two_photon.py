@@ -56,8 +56,14 @@ def get_dff(mouse: str, date: str) -> np.ndarray:
 
 
 def activity_trial_position(
-    trial: TrialInfo, dff: np.ndarray, wheel_circumference: float, verbose: bool = False
-) -> np.ndarray | None:
+    trial: TrialInfo,
+    dff: np.ndarray,
+    wheel_circumference: float,
+    bin_size: int = 1,
+    start: int = 10,
+    max_position: int = 170,
+    verbose: bool = False,
+) -> np.ndarray:
 
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference
@@ -73,17 +79,14 @@ def activity_trial_position(
 
     assert len(position) == len(frame_position)
 
-    # Bin frames by position
-    bin_size = 1
-    start = 10
-    max_position = 170
-
     dff_position = []
 
     for bin_start in range(start, max_position, bin_size):
-        frame_idx_bin = frame_position[
-            np.logical_and(position >= bin_start, position < bin_start + bin_size)
-        ]
+        frame_idx_bin = np.unique(
+            frame_position[
+                np.logical_and(position >= bin_start, position < bin_start + bin_size)
+            ]
+        )
         dff_bin = dff[:, frame_idx_bin]
 
         if verbose:
@@ -92,7 +95,6 @@ def activity_trial_position(
             print(f"n_frames in bin: {len(frame_idx_bin)}")
         dff_position.append(np.mean(dff_bin, axis=1))
 
-    print("\n")
     return np.array(dff_position).T
 
 
