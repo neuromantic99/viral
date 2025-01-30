@@ -104,12 +104,8 @@ def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
     return matrix[sorted_order]
 
 
-# def normalize(data):
-#     return (data - np.min(data)) / (np.max(data) - np.min(data))
-
-
 def normalize(array: np.ndarray, axis: int) -> np.ndarray:
-    # Calculate the min and max along the specified axis
+    """Calculate the min and max along the specified axis"""
     min_val = np.min(array, axis=axis, keepdims=True)
     max_val = np.max(array, axis=axis, keepdims=True)
     return (array - min_val) / (max_val - min_val)
@@ -128,7 +124,13 @@ def remove_landmarks_from_train_matrix(train_matrix: np.ndarray) -> np.ndarray:
 
 
 def get_position_activity(
-    trials: List[TrialInfo], dff: np.ndarray, wheel_circumference: float
+    trials: List[TrialInfo],
+    dff: np.ndarray,
+    wheel_circumference: float,
+    bin_size: int = 1,
+    start: int = 10,
+    max_position: int = 170,
+    remove_landmarks: bool = True,
 ) -> np.ndarray:
 
     test_matrices = []
@@ -140,22 +142,38 @@ def get_position_activity(
         train_matrix = np.nanmean(
             np.array(
                 [
-                    activity_trial_position(trials[idx], dff, wheel_circumference)
+                    activity_trial_position(
+                        trials[idx],
+                        dff,
+                        wheel_circumference,
+                        bin_size=bin_size,
+                        start=start,
+                        max_position=max_position,
+                    )
                     for idx in train_idx
                 ]
             ),
             axis=0,
         )
 
-        train_matrix = remove_landmarks_from_train_matrix(train_matrix)
+        if remove_landmarks:
+            train_matrix = remove_landmarks_from_train_matrix(train_matrix)
         peak_indices = np.argmax(train_matrix, axis=1)
         sorted_order = np.argsort(peak_indices)
 
+        # TODO: Review whether this is the best normalisation function
         test_matrix = normalize(
             np.nanmean(
                 np.array(
                     [
-                        activity_trial_position(trials[idx], dff, wheel_circumference)
+                        activity_trial_position(
+                            trials[idx],
+                            dff,
+                            wheel_circumference,
+                            bin_size=bin_size,
+                            start=start,
+                            max_position=max_position,
+                        )
                         for idx in test_idx
                     ]
                 ),

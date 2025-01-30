@@ -1,11 +1,16 @@
 from typing import List
 import numpy as np
+from unittest.mock import patch
+
 
 from viral.models import StateInfo, TrialInfo
-from viral.two_photon import activity_trial_position, sort_matrix_peak
-import matplotlib.pyplot as plt
+from viral.two_photon import (
+    activity_trial_position,
+    get_position_activity,
+    sort_matrix_peak,
+)
 
-WHEEL_CIRCUMPHERENCE = 10
+WHEEL_CIRCUMFERENCE = 10
 
 
 def get_state_info(closest_frame: int) -> StateInfo:
@@ -39,7 +44,7 @@ def create_test_trial(
 def test_activity_trial_position_simple() -> None:
 
     # Evenly spaced full corridor
-    rotary_encoder_position = list(range(200 * 360 // WHEEL_CIRCUMPHERENCE))
+    rotary_encoder_position = list(range(200 * 360 // WHEEL_CIRCUMFERENCE))
 
     trial = create_test_trial(
         rotary_encoder_position=rotary_encoder_position,
@@ -48,7 +53,7 @@ def test_activity_trial_position_simple() -> None:
 
     # cells x frames
     dff = np.ones((10, len(trial.rotary_encoder_position)))
-    result = activity_trial_position(trial, dff, WHEEL_CIRCUMPHERENCE)
+    result = activity_trial_position(trial, dff, WHEEL_CIRCUMFERENCE)
     assert np.array_equal(np.ones((dff.shape[0], 160)), result)
 
 
@@ -67,7 +72,7 @@ def test_activity_trial_position_multiple_frames_per_bin() -> None:
 
     # cells x frames
     result = activity_trial_position(
-        trial, dff, WHEEL_CIRCUMPHERENCE, bin_size=10, start=0, max_position=20
+        trial, dff, WHEEL_CIRCUMFERENCE, bin_size=10, start=0, max_position=20
     )
     expected = np.array([[10, 20], [2, 4]])
     assert np.array_equal(result, expected)
@@ -90,7 +95,7 @@ def test_activity_trial_position_uneven_frame_spacing() -> None:
     result = activity_trial_position(
         trial,
         dff,
-        WHEEL_CIRCUMPHERENCE,
+        WHEEL_CIRCUMFERENCE,
         bin_size=10,
         start=0,
         max_position=20,
@@ -99,6 +104,121 @@ def test_activity_trial_position_uneven_frame_spacing() -> None:
     # Expect the second bin to be only the final frame
     expected = np.array([[7.5, 20], [1.5, 4]])
     assert np.array_equal(result, expected)
+
+
+def test_get_position_activity_all_trials_same_dont_reorder() -> None:
+
+    # Two frames in the first bin, two in the second
+    rotary_encoder_position = [0, 180, 361, 700]
+    states_info = [get_state_info(i) for i in [0, 1, 2, 3]]
+
+    trials = [
+        create_test_trial(
+            rotary_encoder_position=rotary_encoder_position, states_info=states_info
+        )
+        for _ in range(100)
+    ]
+
+    # cells x time
+    dff = np.array([[5, 10, 15, 20], [1, 2, 3, 4]])
+
+    # All the trials are the same so this should be the same result as activity_trial_position
+    expected = np.array([[7.5, 17.5], [1.5, 3.5]])
+
+    # Remove the normalize step to make the test easier to interpret
+    with patch("viral.two_photon.normalize", side_effect=lambda x, axis: x):
+
+        result = get_position_activity(
+            trials=trials,
+            dff=dff,
+            wheel_circumference=WHEEL_CIRCUMFERENCE,
+            bin_size=10,
+            start=0,
+            max_position=20,
+            remove_landmarks=False,
+        )
+
+    assert np.array_equal(result, expected)
+
+
+def test_get_position_activity_all_trials_same_reorder() -> None:
+
+    # Two frames in the first bin, two in the second
+    rotary_encoder_position = [0, 180, 361, 700]
+    states_info = [get_state_info(i) for i in [0, 1, 2, 3]]
+
+    trials = [
+        create_test_trial(
+            rotary_encoder_position=rotary_encoder_position, states_info=states_info
+        )
+        for _ in range(100)
+    ]
+
+    # cells x time
+    dff = np.array([[1, 2, 3, 4], [20, 15, 10, 5]])
+
+    # Order of the cells should be flipped
+    expected = np.array([[17.5, 7.5], [1.5, 3.5]])
+
+    # removes the normalize step to make it clearer
+    with patch("viral.two_photon.normalize", side_effect=lambda x, axis: x):
+
+        result = get_position_activity(
+            trials=trials,
+            dff=dff,
+            wheel_circumference=WHEEL_CIRCUMFERENCE,
+            bin_size=10,
+            start=0,
+            max_position=20,
+            remove_landmarks=False,
+        )
+
+    assert np.array_equal(result, expected)
+
+
+def test_get_position_activity_trials_different() -> None:
+    rotary_encoder_position = [0, 180, 361, 700]
+
+    train_trials = [
+        create_test_trial(
+            rotary_encoder_position=rotary_encoder_position,
+            states_info=[get_state_info(i) for i in [0, 1, 2, 3]],
+        )
+        for _ in range(2)
+    ]
+
+    test_trials = [
+        create_test_trial(
+            rotary_encoder_position=rotary_encoder_position,
+            states_info=[get_state_info(i) for i in [4, 5, 6, 7]],
+        )
+        for _ in range(2)
+    ]
+
+    # cells x time
+    dff = np.array([[1, 2, 3, 4, 8, 7, 6, 5], [20, 15, 10, 5, 5, 10, 15, 20]])
+
+    # Should give the sort order
+    # expected_train = np.array([[17.5, 7.5], [1.5, 3.5]])
+
+    # Expect the cell with the largest activity (that's second in the dff matrix) to be first,
+    # as it peaks first in the train matrix, although it peaks second in the test matrix
+    expected_test = np.array([[7.5, 17.5], [7.5, 5.5]])
+
+    with patch("viral.two_photon.normalize", side_effect=lambda x, axis: x):
+        with patch(
+            "random.sample", side_effect=lambda x, y: [0, 1]
+        ):  # Always take the first two trials in random.sample
+            result = get_position_activity(
+                trials=train_trials + test_trials,
+                dff=dff,
+                wheel_circumference=WHEEL_CIRCUMFERENCE,
+                bin_size=10,
+                start=0,
+                max_position=20,
+                remove_landmarks=False,
+            )
+    assert np.array_equal(result, expected_test)
 
 
 def test_sort_matrix_peak_no_change() -> None:
