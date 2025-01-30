@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from nptdms import TdmsFile
 from ScanImageTiffReader import ScanImageTiffReader
 import numpy as np
+import pandas as pd
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -31,6 +32,7 @@ from viral.single_session import HERE, load_data
 from viral.utils import (
     extract_TTL_chunks,
     find_chunk,
+    get_sampling_rate,
     get_tiff_paths_in_directory,
     time_list_to_datetime,
     trial_is_imaged,
@@ -151,22 +153,19 @@ def add_imaging_info_to_trials(
     stack_lengths, epochs, all_tiff_timestamps = get_tiff_metadata(
         tiff_paths=tiff_paths
     )
+    print("Got tiff metadata")
 
     tdms_file = TdmsFile.read(tdms_path)
     group = tdms_file["Analog"]
     frame_clock = group["AI0"][:]
     behaviour_clock = group["AI1"][:]
+    daq_start_time = pd.Timestamp(
+        group.__dict__["properties"]["StartTime"]
+    ).to_pydatetime()
 
     print(f"Time to load data: {time.time() - t1}")
 
-    # Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
-    # two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
-    if 30 < len(frame_clock) / 1000 / 60 < 100:
-        sampling_rate = 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 100:
-        sampling_rate = 10000
-    else:
-        raise ValueError("Could not determine sampling rate")
+    sampling_rate = get_sampling_rate(frame_clock)
 
     print(f"Sampling rate: {sampling_rate}")
 
@@ -187,18 +186,18 @@ def add_imaging_info_to_trials(
 
     sanity_check_imaging_frames(frame_times, sampling_rate, frame_clock)
 
+    # Consistently, the number of triggers recorded is two more than the number of frames recorded.
+    # This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
+    # from a completed grab).
+    # The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
+    # The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
+    # frame is relaibly correct
+    # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
     assert np.all(
         chunk_lens - stack_lengths == 2
     ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lens}. Stack lengths: {stack_lengths}. This will occcur especially on crashed recordings, think about a fix"
 
-    # assert np.all(
-    #     chunk_lens - stack_lengths > 0
-    # ), "Not very strict check think about this. Maybe correct"
-
-    # This assumes that the final frames are the invalid ones. This is definitely true of the final
-    # frame as we likely abort in the middle of a frame. It's probably true of the penultimate frame too
-    # but i'm not 100% sure.
-
+    # Remove the final two frames from valid frames
     valid_frame_times = np.array([])
     offset = 0
     for stack_len, chunk_len in zip(stack_lengths, chunk_lens, strict=True):
@@ -210,7 +209,7 @@ def add_imaging_info_to_trials(
     assert (
         len(valid_frame_times)
         == sum(stack_lengths)
-        # == len(frame_times) - 2 * len(stack_lengths)
+        == len(frame_times) - 2 * len(stack_lengths)
     )
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -227,25 +226,12 @@ def add_imaging_info_to_trials(
         check_timestamps(
             epochs=epochs,
             trial=trial,
-            behaviour_times=behaviour_times,
             all_tiff_timestamps=all_tiff_timestamps,
             chunk_lens=chunk_lens,
             valid_frame_times=valid_frame_times,
             sampling_rate=sampling_rate,
+            daq_start_time=daq_start_time,
         )
-
-    first_trial_imaged = [trial for trial in trials if trial_is_imaged(trial)][0]
-    # Useful debugging plot
-    downscale = 5 if sampling_rate == 10000 else 1
-    # plt.plot(range(0, len(frame_clock), downscale), frame_clock[::downscale])
-    # plt.plot(behaviour_clock, color="blue")
-    # plt.plot(valid_frame_times, np.ones(len(valid_frame_times)), ".", color="green")
-    # plt.plot(
-    #     [valid_frame_times[first_trial_imaged.states_info[0].closest_frame_start], 10],
-    #     [1, 1],
-    #     ".",
-    #     color="red",
-    # )
 
     return trials
 
@@ -261,6 +247,7 @@ def get_tiff_metadata(
     if use_cache:
         temp_cache_path = Path("/Users/jamesrowland/Code/viral/data/temp_caches")
         if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
+            print("Using cached tiff metadata")
             stack_lengths = np.load(
                 temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy"
             )
@@ -270,6 +257,7 @@ def get_tiff_metadata(
             )
             return stack_lengths, epochs, all_tiff_timestamps
 
+    print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
     tiffs = [ScanImageTiffReader(str(tiff)) for tiff in tiff_paths]
     stack_lengths = [tiff.shape()[0] for tiff in tiffs]
     epochs = []
@@ -300,11 +288,10 @@ def get_tiff_metadata(
 
         diffed = np.diff(tiff_timestamps)
 
-        ############# ADD ME BACK IN  ##################
         # Check no dropped frames in the middle
         assert (
-            round(np.max(diffed), 4) == round(np.min(diffed), 4) == 0.0333
-        ), "Dropped frames in the middle based on tiff timestamps"
+            round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
+        ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
 
     if use_cache:
         for variable, name in zip(
@@ -322,19 +309,22 @@ def get_tiff_metadata(
 def check_timestamps(
     epochs: List[List[float]],
     trial: TrialInfo,
-    behaviour_times: np.ndarray,
     all_tiff_timestamps: np.ndarray,
     chunk_lens: np.ndarray,
     valid_frame_times: np.ndarray,
     sampling_rate: int,
+    daq_start_time: datetime,
 ) -> None:
+    """Compares the timestamps in the tiff to the timestamps in the Daq (the time of the trigger, offset to the timestamp that the daq started)
+    Currently works trial by trial which isn't really necessary.
+    There is a bit of a drift here, frames at the start have a closer match in times to frames at the end. This is probably because the sampling rate
+    is not exactly 10,000. But if they are off by less than 10ms that's fine
+    """
 
     if not trial_is_imaged(trial):
         return
 
     assert len(all_tiff_timestamps) == len(valid_frame_times)
-
-    trial_start_timestamp = trial.pc_timestamp
 
     trial_start_state = [
         state for state in trial.states_info if "spacer_high" in state.name
@@ -342,42 +332,22 @@ def check_timestamps(
 
     trial_end_state = trial.states_info[-1]
 
-    trial_start_daq = trial_start_state.start_time_daq
-
     first_frame_trial = trial_start_state.closest_frame_start
     last_frame_trial = trial_end_state.closest_frame_start
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
 
-    # The datetime of the first frame as recorded on the DAQ should be roughly the same as this
-    datetime_trial_start = datetime.strptime(
-        trial_start_timestamp, "%Y-%m-%dT%H:%M:%S.%f"
-    )
-
-    print("\n New trial")
     for frame in range(first_frame_trial, last_frame_trial):
 
         # The time in the tiff. Not sure if this is the end or the start of the tiff
         frame_datetime = chunk_start + timedelta(seconds=all_tiff_timestamps[frame])
+        frame_daq_time = daq_start_time + timedelta(
+            seconds=valid_frame_times[frame] / sampling_rate
+        )
 
-        # Datetime trial start is recorded in the behaviour file. But is aligned to a frame
-        # via the daq. So corresponds to the end of the frame (I think)
-        time_to_trial_start = (frame_datetime - datetime_trial_start).total_seconds()
-
-        frames_to_trial_start_offset = (
-            trial_start_daq - valid_frame_times[frame]
-        ) / sampling_rate
-
-        frame_timestamp_mismatch = time_to_trial_start + frames_to_trial_start_offset
-
-        # Email vidrio
-        # assert abs(frame_timestamp_mismatch) < 0.04
-
-        # This ~= -0.03. This means that the datetime is 30ms behind the frame clock
-        print(frame_timestamp_mismatch)
-
-    # The frame clock is the end of the frame. This
+        offset = (frame_datetime - frame_daq_time).total_seconds()
+        assert abs(offset) < 0.01, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -415,7 +385,8 @@ def process_session(
 if __name__ == "__main__":
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
-    for mouse_name in ["JB018"]:
+    redo = True
+    for mouse_name in ["JB020"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
@@ -425,8 +396,11 @@ if __name__ == "__main__":
                 session_type = row["Type"].lower()
 
                 if (
-                    HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
-                ).exists():
+                    not redo
+                    and (
+                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
+                    ).exists()
+                ):
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue
 
