@@ -19,7 +19,7 @@ def shaded_line_plot(
 
     mean = np.mean(arr, 0)
     sem = np.std(arr, 0) / np.sqrt(arr.shape[1])
-    plt.plot(x_axis, mean, color=color, label=label, marker="")
+    plt.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
     plt.fill_between(
         x_axis,
         np.subtract(
@@ -47,7 +47,8 @@ def licks_to_position(trial: TrialInfo, wheel_circumference: float) -> np.ndarra
         [
             state.end_time
             for state in trial.states_info
-            if state.name in ["trigger_panda", "trigger_panda_post_reward"]
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
         ]
     )
 
@@ -104,7 +105,7 @@ def get_speed_positions(
         range(first_position + step_size, last_position + 1, step_size),
         strict=True,
     ):
-        # TODO: This will often be zero after the reward is triggered. Deal with this
+        # # TODO: This will often be zero after the reward is triggered. Deal with this
         n = np.sum(np.logical_and(position >= start, position < stop))
         if n == 0 and start < 180:
             raise ValueError("Likely the rotary encoder has jumped in a weird way.")
@@ -183,7 +184,7 @@ def extract_TTL_chunks(
 
 
 def get_wheel_circumference_from_rig(rig: str) -> float:
-    if rig == "2P":
+    if rig in {"2P", "2P_1.5"}:
         return 34.7
         # return 11.05 * math.pi
     elif rig in {"Box", "Box2.0", "Box2.5"}:
@@ -253,7 +254,7 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
 
 
 def get_genotype(mouse_name: str) -> str:
-    if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
+    if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022", "JB022"}:
         return "Oligo-BACE1-KO"
     elif mouse_name in {
         "JB011",
@@ -262,14 +263,83 @@ def get_genotype(mouse_name: str) -> str:
         "JB016",
         "JB017",
         "JB019",
-        "JB023",
         "JB021",
+        "JB023",
     }:
         return "NLGF"
+
     elif mouse_name in {"JB025", "JB024", "JB026", "JB027"}:
         return "WT"
     else:
         raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
+
+
+def get_sex(mouse_name: str) -> str:
+    if mouse_name in {
+        "JB013",
+        "JB014",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+    }:
+        return "male"
+    if mouse_name in {
+        "JB011",
+        "JB012",
+        "JB015",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+    }:
+        return "female"
+    else:
+        raise ValueError(f"Unknown sex for mouse: {mouse_name}")
+
+
+def get_setup(mouse_name: str) -> str:
+    if mouse_name in {
+        "JB011",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+        "JB026",
+        "JB027",
+    }:
+        return "2P"
+    if mouse_name in {
+        "JB012",
+        "JB013",
+        "JB017",
+        "JB024",
+        "JB025",
+    }:
+        return "box"
+    else:
+        raise ValueError(f"Unknown setup for mouse: {mouse_name}")
+
+
+def get_session_type(session_name: str) -> str:
+    session_name = session_name.lower().strip()
+    if "reversal" in session_name:
+        return "recall_reversal" if "recall" in session_name else "reversal"
+    elif "recall" in session_name:
+        return "recall"
+    elif "learning" in session_name:
+        return "learning"
+    else:
+        raise ValueError(f"Invalid session type: {session_name}")
 
 
 def shuffle(x: np.ndarray) -> np.ndarray:
