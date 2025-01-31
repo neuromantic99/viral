@@ -26,13 +26,10 @@ class SpeedPosition(BaseModel):
 
 
 class TrialSummary(BaseModel):
-    speed_AZ: float
-    speed_nonAZ: float
-    trial_speed: float
+    speed_trial: List[SpeedPosition]
     licks_AZ: int
     rewarded: bool
     reward_drunk: bool
-    # trial_time_locomotion: float
     trial_time_overall: float
 
 

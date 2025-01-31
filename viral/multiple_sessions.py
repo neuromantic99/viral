@@ -11,7 +11,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
 sys.path.append(str(HERE.parent))
 
-from typing import List, Tuple
+from typing import List, Tuple, Callable
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -36,6 +36,7 @@ from viral.utils import (
 )
 
 import seaborn as sns
+import pandas as pd
 
 sns.set_theme(context="talk", style="ticks")
 
@@ -84,14 +85,6 @@ def cache_mouse(mouse_name: str) -> None:
                 or "unsupervised" in type_check
             ), f"type {type_check} not understood"
             continue
-        # if "reversal" not in row["Type"].lower():
-        #     continue
-        # if "unsupervised" in row["Type"].lower():
-        #     continue
-        #     # if "reversal" in row["Type"].lower():
-        #     # continue
-
-        print(f"Processing session: {row['Type']}")
 
         print(f"Processing session: {row['Type']}")
 
@@ -108,10 +101,6 @@ def cache_mouse(mouse_name: str) -> None:
         wheel_circumference = get_wheel_circumference_from_rig(row["Rig"])
 
         print(f"Total of {len(trials)} trials")
-
-        print(f"Total of {len(trials)} trials")
-
-        print(f"#trials: {len(trials)}")
         trials = remove_bad_trials(trials, wheel_circumference=wheel_circumference)
         print(f"Total of {len(trials)} after bad removal")
 
@@ -256,34 +245,6 @@ def trials_run(sessions: List[SessionSummary]) -> float:
     return np.mean(num_trials)
 
 
-def plot_rolling_performance(
-    sessions: List[SessionSummary],
-    window: int,
-    chance_level: Tuple[float, float],
-    add_text_to_chance: bool = True,
-) -> None:
-
-    trials = flatten_sessions(sessions)
-    rolling = rolling_performance(trials, window)
-
-    plt.plot(rolling)
-    plt.axhspan(chance_level[0], chance_level[1], color="gray", alpha=0.5)
-    if add_text_to_chance:
-        plt.text(
-            len(rolling),
-            0,
-            "chance level",
-            horizontalalignment="right",
-            verticalalignment="center",
-            color="gray",
-            fontsize=12,
-            weight="bold",
-            clip_on=True,
-        )
-    plt.xlabel("Trial Number")
-    plt.ylabel("Learning metric")
-
-
 def get_rolling_performance(mouse: MouseSummary, window: int) -> dict:
     pre_reversal = [
         session for session in mouse.sessions if "reversal" not in session.name.lower()
@@ -323,10 +284,11 @@ def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
     return result
 
 
-def plot_running_speed_summaries(
-    mice: List[MouseSummary], condition: str = "pre_reversal"
-):
-    running_speed_dict = {}
+def extract_metric(
+    mice: List[MouseSummary], metric_fn: Callable, metric_name: str
+) -> dict:
+    metric_dict = {}
+
     for mouse in mice:
         pre_reversal = [
             session
@@ -337,176 +299,93 @@ def plot_running_speed_summaries(
             session for session in mouse.sessions if "reversal" in session.name.lower()
         ]
         assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
+        # TODO Add the recall conditions
 
-        # overall speed
-        # running_speed_dict[mouse.name] = {
-        #     "pre_reversal_unrewarded": running_speed_overall(
-        #         flatten_sessions(pre_reversal), False
-        #     ),
-        #     "post_reversal_unrewarded": running_speed_overall(
-        #         flatten_sessions(post_reversal), False
-        #     ),
-        #     "pre_reversal_rewarded": running_speed_overall(
-        #         flatten_sessions(pre_reversal), True
-        #     ),
-        #     "post_reversal_rewarded": running_speed_overall(
-        #         flatten_sessions(post_reversal), True
-        #     ),
-        # }
+        if metric_name == "num_trials":
+            metric_dict[mouse.name] = {
+                "pre_reversal": [len(session.trials) for session in pre_reversal],
+                "post_reversal": [len(session.trials) for session in post_reversal],
+            }
+        else:
+            metric_dict[mouse.name] = {
+                "pre_reversal_unrewarded": metric_fn(flatten_sessions(pre_reversal)),
+                "post_reversal_unrewarded": metric_fn(flatten_sessions(post_reversal)),
+                "pre_reversal_rewarded": metric_fn(flatten_sessions(pre_reversal)),
+                "post_reversal_rewarded": metric_fn(flatten_sessions(post_reversal)),
+            }
 
-        # # AZ speed
-        # running_speed_dict[mouse.name] = {
-        #     "pre_reversal_unrewarded": running_speed_AZ(
-        #         flatten_sessions(pre_reversal), False
-        #     ),
-        #     "post_reversal_unrewarded": running_speed_AZ(
-        #         flatten_sessions(post_reversal), False
-        #     ),
-        #     "pre_reversal_rewarded": running_speed_AZ(
-        #         flatten_sessions(pre_reversal), True
-        #     ),
-        #     "post_reversal_rewarded": running_speed_AZ(
-        #         flatten_sessions(post_reversal), True
-        #     ),
-        # }
+    return metric_dict
 
-        # non-AZ speed
-        running_speed_dict[mouse.name] = {
-            "pre_reversal_unrewarded": running_speed_nonAZ(
-                flatten_sessions(pre_reversal), False
-            ),
-            "post_reversal_unrewarded": running_speed_nonAZ(
-                flatten_sessions(post_reversal), False
-            ),
-            "pre_reversal_rewarded": running_speed_nonAZ(
-                flatten_sessions(pre_reversal), True
-            ),
-            "post_reversal_rewarded": running_speed_nonAZ(
-                flatten_sessions(post_reversal), True
-            ),
-        }
 
-    to_plot = {
-        "NLGF\nRewarded": [
-            data[f"{condition}_rewarded"]
-            for mouse, data in running_speed_dict.items()
-            if data[f"{condition}_rewarded"] > 1
-            if get_genotype(mouse) == "NLGF"
-        ],
-        "NLGF\nUnrewarded": [
-            data[f"{condition}_unrewarded"]
-            for mouse, data in running_speed_dict.items()
-            if data[f"{condition}_unrewarded"] > 1
-            if get_genotype(mouse) == "NLGF"
-        ],
-        "Oligo-Bace1\nKnockout\nRewarded": [
-            data[f"{condition}_rewarded"]
-            for mouse, data in running_speed_dict.items()
-            if data[f"{condition}_rewarded"] > 1
-            if get_genotype(mouse) == "Oligo-BACE1-KO"
-        ],
-        "Oligo-Bace1\nKnockout\nUnrewarded": [
-            data[f"{condition}_unrewarded"]
-            for mouse, data in running_speed_dict.items()
-            if data[f"{condition}_unrewarded"] > 1
-            if get_genotype(mouse) == "Oligo-BACE1-KO"
-        ],
-        "WT\nRewarded": [
-            data[f"{condition}_rewarded"]
-            for mouse, data in running_speed_dict.items()
-            if data[f"{condition}_rewarded"] > 1
-            if get_genotype(mouse) == "WT"
-        ],
-        "WT\nUnrewarded": [
-            data[f"{condition}_unrewarded"]
-            for mouse, data in running_speed_dict.items()
-            if data[f"{condition}_unrewarded"] > 1
-            if get_genotype(mouse) == "WT"
-        ],
-    }
-    plt.ylabel(f"Running speed (cm/s)")
+def prepare_plot_by_genotype_and_condition(
+    metric_dict: dict, condition: str, metric_name: str
+) -> pd.DataFrame:
+    genotypes = [
+        "WT",
+        "NLGF",
+        "Oligo-BACE1-KO",
+    ]  # TODO: Probably not brilliant to hard-code it in here
+    reward_conditions = ["unrewarded", "rewarded"]
+    plot_data = list()
+
+    if metric_name == "num_trials":
+        # Session-level metrics
+        for genotype in genotypes:
+            for mouse, data in metric_dict.items():
+                if get_genotype(mouse) == genotype:
+                    for session_value in data[condition]:
+                        label = f"{get_genotype(mouse)}_{condition}"
+                        plot_data.append(
+                            {
+                                "genotype": genotype,
+                                "value": session_value,
+                                condition: condition,
+                            }
+                        )
+    else:
+        # Trial-level metrics
+        for genotype in genotypes:
+            for genotype in genotypes:
+                for reward_condition in reward_conditions:
+                    key = f"{condition}_{reward_condition}"
+                    for mouse, data in metric_dict.items():
+                        if get_genotype(mouse) == genotype:
+                            plot_data.append(
+                                {
+                                    "genotype": genotype,
+                                    "value": data[key],
+                                    "condition": f"{condition}_{reward_condition}",
+                                }
+                            )
+    return pd.DataFrame(plot_data)
+
+
+def plot_metric(
+    mice: List[MouseSummary],
+    metric_fn: Callable,
+    metric_name: str,
+    y_label: str,
+    condition: str = "pre_reversal",
+) -> None:
+    metric_dict = extract_metric(mice, metric_fn, metric_name)
+    to_plot = prepare_plot_by_genotype_and_condition(
+        metric_dict, condition, metric_name
+    )
+    plt.figure()
+    sns.boxplot(data=to_plot, showfliers=False)
+    sns.stripplot(data=to_plot, edgecolor="black", linewidth=1)
+    plt.ylabel(y_label)
     plt.title(condition.replace("_", " ").capitalize())
-
-    sns.boxplot(to_plot, showfliers=False)
-    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
     plt.tight_layout()
-    plt.savefig(HERE.parent / "plots" / f"behaviour-summaries-running-speed{condition}")
+    plt.savefig(
+        HERE.parent / "plots" / f"behaviour-summaries-{metric_name}_{condition}"
+    )
     plt.show()
 
 
-def plot_trial_time_summaries(
-    mice: List[MouseSummary], condition: str = "pre_reversal"
-):
-    trial_time_dict = {}
-    for mouse in mice:
-        pre_reversal = [
-            session
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
-        post_reversal = [
-            session for session in mouse.sessions if "reversal" in session.name.lower()
-        ]
-        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
-
-        # overall speed
-        trial_time_dict[mouse.name] = {
-            "pre_reversal_unrewarded": trial_time(
-                flatten_sessions(pre_reversal), False
-            ),
-            "post_reversal_unrewarded": trial_time(
-                flatten_sessions(post_reversal), False
-            ),
-            "pre_reversal_rewarded": trial_time(flatten_sessions(pre_reversal), True),
-            "post_reversal_rewarded": trial_time(flatten_sessions(post_reversal), True),
-        }
-
-    to_plot = {
-        "NLGF\nRewarded": [
-            data[f"{condition}_rewarded"]
-            for mouse, data in trial_time_dict.items()
-            if data[f"{condition}_rewarded"] > 1
-            if get_genotype(mouse) == "NLGF"
-        ],
-        "NLGF\nUnrewarded": [
-            data[f"{condition}_unrewarded"]
-            for mouse, data in trial_time_dict.items()
-            if data[f"{condition}_unrewarded"] > 1
-            if get_genotype(mouse) == "NLGF"
-        ],
-        "Oligo-Bace1\nKnockout\nRewarded": [
-            data[f"{condition}_rewarded"]
-            for mouse, data in trial_time_dict.items()
-            if data[f"{condition}_rewarded"] > 1
-            if get_genotype(mouse) == "Oligo-BACE1-KO"
-        ],
-        "Oligo-Bace1\nKnockout\nUnrewarded": [
-            data[f"{condition}_unrewarded"]
-            for mouse, data in trial_time_dict.items()
-            if data[f"{condition}_unrewarded"] > 1
-            if get_genotype(mouse) == "Oligo-BACE1-KO"
-        ],
-        "WT\nRewarded": [
-            data[f"{condition}_rewarded"]
-            for mouse, data in trial_time_dict.items()
-            if data[f"{condition}_rewarded"] > 1
-            if get_genotype(mouse) == "WT"
-        ],
-        "WT\nUnrewarded": [
-            data[f"{condition}_unrewarded"]
-            for mouse, data in trial_time_dict.items()
-            if data[f"{condition}_unrewarded"] > 1
-            if get_genotype(mouse) == "WT"
-        ],
-    }
-    plt.ylabel(f"Trial time (s)")
-    plt.title(condition.replace("_", " ").capitalize())
-
-    sns.boxplot(to_plot, showfliers=False)
-    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
-    plt.tight_layout()
-    plt.savefig(HERE.parent / "plots" / f"behaviour-summaries-trial-time-{condition}")
-    plt.show()
+def trials_per_session_metric(sessions: list[SessionSummary]) -> float:
+    num_trials = [session.num_trials for session in sessions]
+    return np.mean(num_trials).astype(float)
 
 
 def plot_num_trials_summaries(

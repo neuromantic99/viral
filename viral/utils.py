@@ -185,7 +185,7 @@ def extract_TTL_chunks(
 
 
 def get_wheel_circumference_from_rig(rig: str) -> float:
-    if rig == "2P":
+    if rig in {"2P", "2P_1.5"}:
         return 34.7
         # return 11.05 * math.pi
     elif rig in {"Box", "Box2.0", "Box2.5"}:

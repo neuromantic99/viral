@@ -28,8 +28,8 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB023"
-DATE = "2024-12-13"
+MOUSE = "JB015"
+DATE = "2025-01-30"
 SESSION_NUMBER = "002"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
@@ -380,27 +380,13 @@ def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummar
     )
 
     return TrialSummary(
-        speed_AZ=get_speed_positions(
-            position=position,
-            first_position=150,
-            last_position=180,
-            step_size=30,
-            sampling_rate=30,
-        )[0].speed,
-        speed_nonAZ=get_speed_positions(
+        speed_trial=get_speed_positions(
             position=position,
             first_position=0,
-            last_position=150,
-            step_size=30,
+            last_position=200,
+            step_size=20,
             sampling_rate=30,
-        )[0].speed,
-        trial_speed=get_speed_positions(
-            position=position,
-            first_position=0,
-            last_position=180,
-            step_size=30,
-            sampling_rate=30,
-        )[0].speed,
+        ),
         licks_AZ=get_anticipatory_licking(
             licks_to_position(trial, wheel_circumference)
         ),
