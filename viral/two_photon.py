@@ -307,23 +307,3 @@ if __name__ == "__main__":
         place_cells_unsupervised(session, dff)
     else:
         place_cells(session, dff)
-
-    # all_trial_activity = []
-    # for trial in session.trials:
-    #     if not trial_is_imaged(trial):
-    #         continue
-
-    #     trial_activity = activity_trial_position(
-    #         trial, dff, get_wheel_circumference_from_rig("2P")
-    #     )
-
-    #     if trial_activity is None:
-    #         continue
-
-    #     all_trial_activity.append(trial_activity)
-
-    # averaged = np.mean(np.array(all_trial_activity), axis=0)
-
-    # for cell in range(averaged.shape[0]):
-    #     plt.plot(averaged[cell, :] + cell * 0.5)
-    # plt.show()
