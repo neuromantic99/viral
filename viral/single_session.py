@@ -380,12 +380,41 @@ def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummar
     )
 
     return TrialSummary(
-        speed_trial=get_speed_positions(
-            position=position,
-            first_position=0,
-            last_position=200,
-            step_size=20,
-            sampling_rate=30,
+        speed_AZ=np.mean(
+            list(
+                entry.speed
+                for entry in get_speed_positions(
+                    position=position,
+                    first_position=150,
+                    last_position=180,
+                    step_size=30,
+                    sampling_rate=30,
+                )
+            )
+        ),
+        speed_nonAZ=np.mean(
+            list(
+                entry.speed
+                for entry in get_speed_positions(
+                    position=position,
+                    first_position=0,
+                    last_position=150,
+                    step_size=30,
+                    sampling_rate=30,
+                )
+            )
+        ),
+        trial_speed=np.mean(
+            list(
+                entry.speed
+                for entry in get_speed_positions(
+                    position=position,
+                    first_position=0,
+                    last_position=180,
+                    step_size=30,
+                    sampling_rate=30,
+                )
+            )
         ),
         licks_AZ=get_anticipatory_licking(
             licks_to_position(trial, wheel_circumference)
