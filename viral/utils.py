@@ -1,13 +1,13 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import List, Tuple, TypeVar
+from typing import List, Tuple, TypeVar, Any
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
 
-from .constants import ENCODER_TICKS_PER_TURN
-from .models import SpeedPosition, TrialInfo
+from viral.constants import ENCODER_TICKS_PER_TURN
+from viral.models import SpeedPosition, TrialInfo
 
 
 def shaded_line_plot(
@@ -182,6 +182,17 @@ def extract_TTL_chunks(
     # Add the final frame to allow the diff to work on the last chunk
     chunk_starts = np.append(chunk_starts, len(frame_times))
     return frame_times, np.diff(chunk_starts)
+
+
+def pad_to_max_length(sequences: Any, fill_value=np.nan):
+    """Return numpy array with the length of the longest sequence, padded with NaN values"""
+    max_len = max(len(seq) for seq in sequences)
+    return np.array(
+        [
+            np.pad(seq, (0, max_len - len(seq)), constant_values=fill_value)
+            for seq in sequences
+        ]
+    )
 
 
 def get_wheel_circumference_from_rig(rig: str) -> float:

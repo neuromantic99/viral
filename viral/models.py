@@ -26,7 +26,9 @@ class SpeedPosition(BaseModel):
 
 
 class TrialSummary(BaseModel):
-    speed_trial: List[SpeedPosition]
+    speed_AZ: float
+    speed_nonAZ: float
+    trial_speed: float
     licks_AZ: int
     rewarded: bool
     reward_drunk: bool
@@ -57,6 +59,9 @@ class SessionSummary(BaseModel):
 
 class MouseSummary(BaseModel):
     name: str
+    genotype: str
+    sex: str
+    setup: str  # TODO As of now, we had one mouse which had to switch for the recall, think about a fix
     sessions: List[SessionSummary]
 
 

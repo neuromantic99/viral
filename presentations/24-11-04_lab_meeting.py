@@ -38,17 +38,6 @@ from viral.constants import BEHAVIOUR_DATA_PATH, HERE
 from viral.models import TrialSummary, SessionSummary
 
 
-def pad_to_max_length(sequences: typing.Any, fill_value=np.nan):
-    """Return numpy array with the length of the longest sequence, padded with NaN values"""
-    max_len = max(len(seq) for seq in sequences)
-    return np.array(
-        [
-            np.pad(seq, (0, max_len - len(seq)), constant_values=fill_value)
-            for seq in sequences
-        ]
-    )
-
-
 def rolling_performance_cumulative(
     mouse_list: list[str], window: int
 ) -> Tuple[List[float], List[float], Tuple[float, float]]:
