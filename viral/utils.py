@@ -183,7 +183,7 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
-def pad_to_max_length(sequences: Any, fill_value=np.nan):
+def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
     """Return numpy array with the length of the longest sequence, padded with NaN values"""
     max_len = max(len(seq) for seq in sequences)
     return np.array(
@@ -261,7 +261,7 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
 
 
 def get_genotype(mouse_name: str) -> str:
-    if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022", "JB022"}:
+    if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
     elif mouse_name in {
         "JB011",
