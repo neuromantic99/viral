@@ -90,6 +90,11 @@ def activity_trial_position(
                 np.logical_and(position >= bin_start, position < bin_start + bin_size)
             ]
         )
+        frame_idx_bin = np.unique(
+            frame_position[
+                np.logical_and(position >= bin_start, position < bin_start + bin_size)
+            ]
+        )
         dff_bin = dff[:, frame_idx_bin]
 
         if verbose:
@@ -109,9 +114,22 @@ def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
 
 def normalize(array: np.ndarray, axis: int) -> np.ndarray:
     """Calculate the min and max along the specified axis"""
+    """Calculate the min and max along the specified axis"""
     min_val = np.min(array, axis=axis, keepdims=True)
     max_val = np.max(array, axis=axis, keepdims=True)
     return (array - min_val) / (max_val - min_val)
+
+
+def remove_landmarks_from_train_matrix(train_matrix: np.ndarray) -> np.ndarray:
+    """We seem to get a lot of neurons with a peak at the landmark. This removes the landmark from the
+    train matrix so cells do not get sorted by their landmark peak
+    TODO: This will not work if bin_size != 1, originally had an integer division which may deal with this
+    """
+
+    train_matrix[:, 33:40] = 0
+    train_matrix[:, 76:85] = 0
+    train_matrix[:, 120:132] = 0
+    return train_matrix
 
 
 def remove_landmarks_from_train_matrix(train_matrix: np.ndarray) -> np.ndarray:
@@ -552,9 +570,27 @@ if __name__ == "__main__":
             < dff.shape[1]
         ), "Tiff is too short"
 
-        if "unsupervised" in session.session_type.lower():
-            # place_cells_unsupervised(session, dff)
-            speed_cells_unsupervised(session, dff)
-        else:
-            # place_cells(session, dff)
-            speed_cells(session, dff)
+    if "unsupervised" in session.session_type.lower():
+        place_cells_unsupervised(session, dff)
+    else:
+        place_cells(session, dff)
+
+    # all_trial_activity = []
+    # for trial in session.trials:
+    #     if not trial_is_imaged(trial):
+    #         continue
+
+    #     trial_activity = activity_trial_position(
+    #         trial, dff, get_wheel_circumference_from_rig("2P")
+    #     )
+
+    #     if trial_activity is None:
+    #         continue
+
+    #     all_trial_activity.append(trial_activity)
+
+    # averaged = np.mean(np.array(all_trial_activity), axis=0)
+
+    # for cell in range(averaged.shape[0]):
+    #     plt.plot(averaged[cell, :] + cell * 0.5)
+    # plt.show()

@@ -12,7 +12,6 @@ from nptdms import TdmsFile
 from ScanImageTiffReader import ScanImageTiffReader
 import numpy as np
 import pandas as pd
-import pandas as pd
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -33,7 +32,6 @@ from viral.single_session import HERE, load_data
 from viral.utils import (
     extract_TTL_chunks,
     find_chunk,
-    get_sampling_rate,
     get_sampling_rate,
     get_tiff_paths_in_directory,
     time_list_to_datetime,
@@ -155,24 +153,22 @@ def add_imaging_info_to_trials(
     stack_lengths_tiffs, epochs, all_tiff_timestamps = get_tiff_metadata(
         tiff_paths=tiff_paths
     )
-    print("Got tiff metadata")
-    print("Got tiff metadata")
 
     tdms_file = TdmsFile.read(tdms_path)
     group = tdms_file["Analog"]
     frame_clock = group["AI0"][:]
     behaviour_clock = group["AI1"][:]
-    daq_start_time = pd.Timestamp(
-        group.__dict__["properties"]["StartTime"]
-    ).to_pydatetime()
-    daq_start_time = pd.Timestamp(
-        group.__dict__["properties"]["StartTime"]
-    ).to_pydatetime()
 
     print(f"Time to load data: {time.time() - t1}")
 
-    sampling_rate = get_sampling_rate(frame_clock)
-    sampling_rate = get_sampling_rate(frame_clock)
+    # Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
+    # two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
+    if 30 < len(frame_clock) / 1000 / 60 < 100:
+        sampling_rate = 1000
+    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+        sampling_rate = 10000
+    else:
+        raise ValueError("Could not determine sampling rate")
 
     print(f"Sampling rate: {sampling_rate}")
 
@@ -239,10 +235,20 @@ def add_imaging_info_to_trials(
             chunk_lens=chunk_lengths_daq,
             valid_frame_times=valid_frame_times,
             sampling_rate=sampling_rate,
-            daq_start_time=daq_start_time,
         )
-            daq_start_time=daq_start_time,
-        )
+
+    first_trial_imaged = [trial for trial in trials if trial_is_imaged(trial)][0]
+    # Useful debugging plot
+    downscale = 5 if sampling_rate == 10000 else 1
+    # plt.plot(range(0, len(frame_clock), downscale), frame_clock[::downscale])
+    # plt.plot(behaviour_clock, color="blue")
+    # plt.plot(valid_frame_times, np.ones(len(valid_frame_times)), ".", color="green")
+    # plt.plot(
+    #     [valid_frame_times[first_trial_imaged.states_info[0].closest_frame_start], 10],
+    #     [1, 1],
+    #     ".",
+    #     color="red",
+    # )
 
     return trials
 
@@ -258,8 +264,6 @@ def get_tiff_metadata(
     if use_cache:
         temp_cache_path = Path("/Users/jamesrowland/Code/viral/data/temp_caches")
         if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
-            print("Using cached tiff metadata")
-            print("Using cached tiff metadata")
             stack_lengths = np.load(
                 temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy"
             )
@@ -269,8 +273,6 @@ def get_tiff_metadata(
             )
             return stack_lengths, epochs, all_tiff_timestamps
 
-    print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
-    print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
     tiffs = [ScanImageTiffReader(str(tiff)) for tiff in tiff_paths]
     stack_lengths = [tiff.shape()[0] for tiff in tiffs]
     epochs = []
@@ -303,10 +305,8 @@ def get_tiff_metadata(
 
         # Check no dropped frames in the middle
         assert (
-            round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
-        ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
-            round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
-        ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
+            round(np.max(diffed), 4) == round(np.min(diffed), 4) == 0.0333
+        ), "Dropped frames in the middle based on tiff timestamps"
 
     if use_cache:
         for variable, name in zip(
@@ -328,8 +328,6 @@ def check_timestamps(
     chunk_lens: np.ndarray,
     valid_frame_times: np.ndarray,
     sampling_rate: int,
-    daq_start_time: datetime,
-    daq_start_time: datetime,
 ) -> None:
     """Compares the timestamps in the tiff to the timestamps in the Daq (the time of the trigger, offset to the timestamp that the daq started)
     Currently works trial by trial which isn't really necessary.
@@ -359,18 +357,24 @@ def check_timestamps(
 
         # The time in the tiff. Not sure if this is the end or the start of the tiff
         frame_datetime = chunk_start + timedelta(seconds=all_tiff_timestamps[frame])
-        frame_daq_time = daq_start_time + timedelta(
-            seconds=valid_frame_times[frame] / sampling_rate
-        )
 
-        offset = (frame_datetime - frame_daq_time).total_seconds()
-        assert abs(offset) < 0.01, "Tiff timestamp does not match daq timestamp"
-        frame_daq_time = daq_start_time + timedelta(
-            seconds=valid_frame_times[frame] / sampling_rate
-        )
+        # Datetime trial start is recorded in the behaviour file. But is aligned to a frame
+        # via the daq. So corresponds to the end of the frame (I think)
+        time_to_trial_start = (frame_datetime - datetime_trial_start).total_seconds()
 
-        offset = (frame_datetime - frame_daq_time).total_seconds()
-        assert abs(offset) < 0.01, "Tiff timestamp does not match daq timestamp"
+        frames_to_trial_start_offset = (
+            trial_start_daq - valid_frame_times[frame]
+        ) / sampling_rate
+
+        frame_timestamp_mismatch = time_to_trial_start + frames_to_trial_start_offset
+
+        # Email vidrio
+        # assert abs(frame_timestamp_mismatch) < 0.04
+
+        # This ~= -0.03. This means that the datetime is 30ms behind the frame clock
+        print(frame_timestamp_mismatch)
+
+    # The frame clock is the end of the frame. This
 
 
 def process_session(
@@ -408,8 +412,7 @@ def process_session(
 if __name__ == "__main__":
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
-    redo = True
-    for mouse_name in ["JB011"]:
+    for mouse_name in ["JB018"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
