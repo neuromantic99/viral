@@ -47,7 +47,8 @@ def licks_to_position(trial: TrialInfo, wheel_circumference: float) -> np.ndarra
         [
             state.end_time
             for state in trial.states_info
-            if state.name in ["trigger_panda", "trigger_panda_post_reward"]
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
         ]
     )
 
