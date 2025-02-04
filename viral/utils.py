@@ -235,11 +235,7 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
 
     # A little but of a error in this calculation is allowed here as the frame rate is not exactly 30.
     # Possibly you will get a false positive if the trial is stopped exactly at the end but unlikely
-    trial_imaged = (
-        length_trial_bpod - 0.5 <= length_trial_frames <= length_trial_bpod + 0.5
-    )
-
-    return trial_imaged
+    return length_trial_bpod - 0.5 <= length_trial_frames <= length_trial_bpod + 0.5
 
 
 def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
@@ -278,3 +274,14 @@ def shuffle(x: np.ndarray) -> np.ndarray:
     x = np.ravel(x)
     np.random.shuffle(x)
     return x.reshape(shape)
+
+
+def get_sampling_rate(frame_clock: np.ndarray) -> int:
+    """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
+    two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
+    """
+    if 30 < len(frame_clock) / 1000 / 60 < 100:
+        return 1000
+    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+        return 10000
+    raise ValueError("Could not determine sampling rate")
