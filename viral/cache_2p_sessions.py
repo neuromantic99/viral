@@ -150,7 +150,7 @@ def add_imaging_info_to_trials(
 
     tiff_paths = sorted(get_tiff_paths_in_directory(tiff_directory))
 
-    stack_lengths, epochs, all_tiff_timestamps = get_tiff_metadata(
+    stack_lengths_tiffs, epochs, all_tiff_timestamps = get_tiff_metadata(
         tiff_paths=tiff_paths
     )
     print("Got tiff metadata")
@@ -182,9 +182,9 @@ def add_imaging_info_to_trials(
         behaviour_chunk_lens, num_spacers_per_trial
     ), "Spacers recorded in txt file do not match sync"
 
-    frame_times, chunk_lens = extract_TTL_chunks(frame_clock, sampling_rate)
+    frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
-    sanity_check_imaging_frames(frame_times, sampling_rate, frame_clock)
+    sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
     # Consistently, the number of triggers recorded is two more than the number of frames recorded.
     # This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
@@ -194,22 +194,24 @@ def add_imaging_info_to_trials(
     # frame is relaibly correct
     # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
     assert np.all(
-        chunk_lens - stack_lengths == 2
-    ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lens}. Stack lengths: {stack_lengths}. This will occcur especially on crashed recordings, think about a fix"
+        chunk_lengths_daq - stack_lengths_tiffs == 2
+    ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lengths_daq}. Stack lengths: {stack_lengths_tiffs}. This will occcur especially on crashed recordings, think about a fix"
 
     # Remove the final two frames from valid frames
     valid_frame_times = np.array([])
     offset = 0
-    for stack_len, chunk_len in zip(stack_lengths, chunk_lens, strict=True):
+    for stack_len_tiff, chunk_len_daq in zip(
+        stack_lengths_tiffs, chunk_lengths_daq, strict=True
+    ):
         valid_frame_times = np.append(
-            valid_frame_times, frame_times[offset : offset + stack_len]
+            valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
         )
-        offset += chunk_len
+        offset += chunk_len_daq
 
     assert (
         len(valid_frame_times)
-        == sum(stack_lengths)
-        == len(frame_times) - 2 * len(stack_lengths)
+        == sum(stack_lengths_tiffs)
+        == len(frame_times_daq) - 2 * len(stack_lengths_tiffs)
     )
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -227,7 +229,7 @@ def add_imaging_info_to_trials(
             epochs=epochs,
             trial=trial,
             all_tiff_timestamps=all_tiff_timestamps,
-            chunk_lens=chunk_lens,
+            chunk_lens=chunk_lengths_daq,
             valid_frame_times=valid_frame_times,
             sampling_rate=sampling_rate,
             daq_start_time=daq_start_time,
@@ -318,7 +320,8 @@ def check_timestamps(
     """Compares the timestamps in the tiff to the timestamps in the Daq (the time of the trigger, offset to the timestamp that the daq started)
     Currently works trial by trial which isn't really necessary.
     There is a bit of a drift here, frames at the start have a closer match in times to frames at the end. This is probably because the sampling rate
-    is not exactly 10,000. But if they are off by less than 10ms that's fine
+    is not exactly 10,000. But if they are off by less than 10ms that's fine.
+    This will not process ITI frames in the original version of task.py but will after we added the position storage
     """
 
     if not trial_is_imaged(trial):
