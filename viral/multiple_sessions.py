@@ -535,7 +535,9 @@ def plot_performance_summaries(
     plt.show()
 
 
-def get_num_to_x(sessions: List[SessionSummary], excluded_session_types: List) -> int:
+def get_num_to_x(
+    sessions: List[SessionSummary], excluded_session_types: List[str]
+) -> int:
     return sum(
         len(session.trials)
         for session in sessions
@@ -603,23 +605,23 @@ if __name__ == "__main__":
 
     # TODO: Probably should check that every mouse is unique
     for mouse_name in [
-        "JB011",
-        "JB012",
-        "JB013",
-        "JB014",
-        "JB015",
-        "JB016",
+        # "JB011",
+        # "JB012",
+        # "JB013",
+        # "JB014",
+        # "JB015",
+        # "JB016",
         "JB017",
-        "JB018",
-        "JB019",
-        "JB020",
-        "JB021",
-        "JB022",
-        "JB023",
-        "JB024",
-        "JB025",
-        "JB026",
-        "JB027",
+        # "JB018",
+        # "JB019",
+        # "JB020",
+        # "JB021",
+        # "JB022",
+        # "JB023",
+        # "JB024",
+        # "JB025",
+        # "JB026",
+        # "JB027",
     ]:
 
         print(f"\nProcessing {mouse_name}...")
