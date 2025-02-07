@@ -15,6 +15,7 @@ from viral.utils import (
 )
 from viral.models import Cached2pSession
 from viral.constants import TIFF_UMBRELLA
+from viral.two_photon import compute_dff, subtract_neuropil
 
 
 def get_spks_pos(s2p_path: str) -> tuple[np.ndarray]:
@@ -25,6 +26,13 @@ def get_spks_pos(s2p_path: str) -> tuple[np.ndarray]:
     xpos = pos[:, 0]
     ypos = pos[:, 1]
     return spks, xpos, ypos
+
+
+def get_dff(s2p_path: str) -> np.ndarray:
+    iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+    f_raw = np.load(s2p_path / "F.npy")[iscell, :]
+    f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
+    return compute_dff(subtract_neuropil(f_raw, f_neu))
 
 
 def align_trial_frames(trials: list[TrialInfo], ITI: bool = False) -> np.ndarray:
@@ -57,13 +65,15 @@ def get_ITI_start_frame(trial: TrialInfo) -> float:
     return ITI_start_frame
 
 
-def get_spks_for_trials(spks: np.ndarray, trial_frames: np.ndarray) -> list[np.ndarray]:
-    "Return spks for trials"
-    spks_trials = list()
+def get_signal_for_trials(
+    signal: np.ndarray, trial_frames: np.ndarray
+) -> list[np.ndarray]:
+    "Return spks or dff for trials"
+    signal_trials = list()
     for trial in trial_frames:
         trial_start, trial_end, _ = trial.astype(int)
-        spks_trials.append(spks[:, trial_start : trial_end + 1])
-    return spks_trials
+        signal_trials.append(signal[:, trial_start : trial_end + 1])
+    return signal_trials
 
 
 def get_frame_position(
@@ -220,7 +230,7 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
     assert len(trials) == len(
         aligned_trial_frames
     ), "Number of trials and aligned_trial_frames do not match"
-    spks_trials = get_spks_for_trials(trial_frames=aligned_trial_frames, spks=spks)
+    spks_trials = get_signal_for_trials(signal=spks, trial_frames=aligned_trial_frames)
     assert len(trials) == len(
         spks_trials
     ), "Number of trials and number of spks for trials do not match"
@@ -285,8 +295,8 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
         reward_inds=rwrds_combined,
         lick_inds=lcks_combined,
         run=spd_combined[:, 1],
-        corridor_imgs=np.zeros((2, 1200, 100)),
-        sound_inds=np.zeros(1),
+        corridor_imgs=np.zeros((2, 1200, 100)),  # placeholder
+        sound_inds=np.zeros(1),  # placeholder
     )
     print(f"Done")
 
