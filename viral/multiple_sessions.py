@@ -809,12 +809,12 @@ if __name__ == "__main__":
     # cache_mouse("JB027")
 
     for mouse_name in [
-        "JB011",
-        "JB012",
-        "JB013",
-        "JB014",
-        "JB015",
-        "JB016",
+        # "JB011",
+        # "JB012",
+        # "JB013",
+        # "JB014",
+        # "JB015",
+        # "JB016",
         "JB017",
         "JB018",
         "JB019",

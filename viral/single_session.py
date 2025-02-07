@@ -28,9 +28,9 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB011"
-DATE = "2025-01-10"
-SESSION_NUMBER = "001"
+MOUSE = "JB019"
+DATE = "2025-01-30"
+SESSION_NUMBER = "002"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
