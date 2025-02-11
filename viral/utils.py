@@ -92,7 +92,6 @@ def get_speed_positions(
 
     Currently only works for evenly spaced integer positions
 
-    TODO: Add tests for this function
     """
 
     assert (
