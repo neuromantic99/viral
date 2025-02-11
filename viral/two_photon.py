@@ -49,8 +49,7 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
     return f_raw - f_neu * 0.7
 
 
-def get_dff(mouse: str, date: str) -> np.ndarray:
-    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+def get_dff(s2p_path: str) -> np.ndarray:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
     f_raw = np.load(s2p_path / "F.npy")[iscell, :]
@@ -452,7 +451,8 @@ def get_speed_activity(
 
 
 def get_assert_dff(session: Cached2pSession) -> np.ndarray:
-    dff = get_dff(session.mouse_name, session.date)
+    s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
+    dff = get_dff(s2p_path)
 
     assert (
         max(

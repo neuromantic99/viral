@@ -98,8 +98,6 @@ def add_daq_times_to_trial(
     # Sanity check the above logic
     assert len(trial_spacer_daq_times) == count_spacers(trial)
 
-    # trial.valid_frame_times = valid_frame_times
-
     trial_spacer_bpod_times = np.array(
         [state.start_time for state in trial.states_info if "spacer_high" in state.name]
     )
@@ -128,8 +126,8 @@ def add_daq_times_to_trial(
 
     # Bit of monkey patching but oh well
     for state in trial.states_info:
-        state.start_time_daq = bpod_to_daq(state.start_time)
-        state.end_time_daq = bpod_to_daq(state.end_time)
+        state.start_time_daq = bpod_to_daq(state.start_time).astype(float)
+        state.end_time_daq = bpod_to_daq(state.end_time).astype(float)
         state.closest_frame_start = int(
             np.argmin(np.abs(valid_frame_times - state.start_time_daq))
         )
@@ -177,11 +175,6 @@ def add_imaging_info_to_trials(
     sampling_rate = get_sampling_rate(frame_clock)
 
     print(f"Sampling rate: {sampling_rate}")
-
-    print(f"Length of frame clock: {len(frame_clock)}")
-    print(f"Length of behaviour clock: {len(behaviour_clock)}")
-    print(f"Min behaviour clock: {np.min(behaviour_clock)}")
-    print(f"Max behaviour clock: {np.max(behaviour_clock)}")
 
     behaviour_times, behaviour_chunk_lens = extract_TTL_chunks(
         behaviour_clock, sampling_rate
@@ -262,7 +255,8 @@ def get_tiff_metadata(
 
     # For debugging, remove eventually
     if use_cache:
-        temp_cache_path = Path("/home/josef/code/viral/data/temp_caches")
+        temp_cache_path = Path(HERE.parent / "data/temp_caches")
+        print(temp_cache_path)
         if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
             print("Using cached tiff metadata")
             stack_lengths = np.load(

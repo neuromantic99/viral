@@ -17,11 +17,7 @@ from viral.utils import (
 )
 from viral.models import Cached2pSession
 from viral.constants import TIFF_UMBRELLA
-from viral.two_photon import (
-    compute_dff,
-    subtract_neuropil,
-    normalize,
-)
+from viral.two_photon import compute_dff, subtract_neuropil, normalize, get_dff
 
 
 def get_spks_pos(s2p_path: str) -> tuple[np.ndarray]:
@@ -29,39 +25,42 @@ def get_spks_pos(s2p_path: str) -> tuple[np.ndarray]:
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])
-    xpos = pos[:, 0]
-    ypos = pos[:, 1]
+    xpos = pos[:, 1]
+    ypos = -1 * pos[:, 0]  # y-axis is inverted
     return spks, xpos, ypos
 
 
-def get_dff(s2p_path: str) -> np.ndarray:
-    iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    f_raw = np.load(s2p_path / "F.npy")[iscell, :]
-    f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
-    return compute_dff(subtract_neuropil(f_raw, f_neu))
+def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray:
+    """Align trial frames and return array with trial frames and reward condition.
 
+    Args:
+        trials (List[TrialInfo]):       A list of TrialInfo objects.
+        ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to False.
 
-def align_trial_frames(trials: list[TrialInfo], ITI: bool = False) -> np.ndarray:
-    """Extract trial start and end frames, reward condition"""
+    Returns:
+        np.ndarray:                     A Numpy array of shape (n_trials, 3). Each row representing a trial with
+            - start_frame (int)
+            - end_frame (int)
+            - rewarded (bool)
+    """
     trial_frames = np.array(
         [
             [trial.trial_start_closest_frame, trial.trial_end_closest_frame]
             for trial in trials
         ]
     )
-    if ITI == False:
+    if not ITI:
         ITI_start_frames = np.array([get_ITI_start_frame(trial) for trial in trials])
         trial_frames[:, 1] = ITI_start_frames
     assert (
         len(trials) == trial_frames.shape[0]
     ), "Number of trials does not match number of trial times"
-    sorted_trial_frames = trial_frames[np.argsort(trial_frames[:, 0])]
-    for i in range(len(sorted_trial_frames) - 1):
+    for i in range(len(trial_frames) - 1):
         assert (
-            sorted_trial_frames[i, 1] < sorted_trial_frames[i + 1, 0]
+            trial_frames[i, 1] < trial_frames[i + 1, 0]
         ), "Overlapping frames for trials"
     rewarded = np.array([trial.texture_rewarded for trial in trials])
-    return np.column_stack((sorted_trial_frames, rewarded))
+    return np.column_stack((trial_frames, rewarded))
 
 
 def get_ITI_start_frame(trial: TrialInfo) -> float:
@@ -88,7 +87,20 @@ def get_frame_position(
     wheel_circumference: float,
     ITI: bool = False,
 ) -> np.ndarray:
-    if ITI == True:
+    """Get the position for every frame and return frames and positions as array.
+
+    Args:
+        trial (TrialInfo):              A TrialInfo object representing the trial to be analysed.
+        trial_frames (np.ndarray):      Numpy array representing the frames in the trial.
+        wheel_circumference (float):    The circumference of the wheel on the rig used in centimetres.
+        ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to False.
+
+    Returns:
+        np.ndarray:                     A Numpy array of shape (frames, 2). Each row representing a frame with:
+            frame_idx (int)
+            position (float)
+    """
+    if ITI:
         frames_start_end = np.array(
             [
                 [state.closest_frame_start, state.closest_frame_end]
@@ -226,7 +238,9 @@ def remap_to_continuous_indices(
 
 
 def process_session(session: Cached2pSession, wheel_circumference: float) -> None:
-    s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
+    # s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
+    s2p_path = Path("/Volumes/hard_drive/2024-11-03_JB011")
+    print(f"{session.date} - {session.mouse_name}")
     spks, xpos, ypos = get_spks_pos(s2p_path)
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
     if not trials:
@@ -249,9 +263,9 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
     crrdr_wdths_combined = aligned_trial_frames[:, 1] - aligned_trial_frames[:, 0]
     for trial, (start, end, rewarded) in zip(trials, aligned_trial_frames):
         trial_frames = np.arange(start, end + 1, 1)
-        activity_trial_speed(
-            trial, dff, trial_frames, wheel_circumference=wheel_circumference
-        )
+        # activity_trial_speed(
+        #     trial, dff, trial_frames, wheel_circumference=wheel_circumference
+        # )
         licks = get_lick_index(trial)
         rewards = get_reward_index(trial)
         frames_positions = get_frame_position(trial, trial_frames, wheel_circumference)
@@ -313,94 +327,94 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
 
 
 # Move eventually, but do it here for now
-def activity_trial_speed(
-    trial: TrialInfo,
-    dff: np.ndarray,
-    trial_frames: np.ndarray,
-    wheel_circumference: float,
-    remove_landmarks: bool = True,
-) -> np.ndarray:
-    """Return frames x position x speed"""
+# def activity_trial_speed(
+#     trial: TrialInfo,
+#     dff: np.ndarray,
+#     trial_frames: np.ndarray,
+#     wheel_circumference: float,
+#     remove_landmarks: bool = True,
+# ) -> np.ndarray:
+#     """Return frames x position x speed"""
 
-    frames_positions = get_frame_position(trial, trial_frames, wheel_circumference)
-    speed = get_speed_frame(frames_positions)
-    frames_positions_speed_activity = np.column_stack(
-        [
-            frames_positions,
-            speed[
-                :,
-                1,
-            ],
-            get_signal_for_trials(dff, trial_frames),
-        ]
-    )
+#     frames_positions = get_frame_position(trial, trial_frames, wheel_circumference)
+#     speed = get_speed_frame(frames_positions)
+#     frames_positions_speed_activity = np.column_stack(
+#         [
+#             frames_positions,
+#             speed[
+#                 :,
+#                 1,
+#             ],
+#             get_signal_for_trials(dff, trial_frames),
+#         ]
+#     )
 
-    1 / 0
+#     1 / 0
 
 
-def get_speed_activity(
-    trials: List[TrialInfo],
-    aligned_trial_frames: np.ndarray,
-    dff: np.ndarray,
-    wheel_circumference: float,
-    bin_size: int = 1,
-    start: int = 10,
-    max_position: int = 170,
-    remove_landmarks: bool = True,
-) -> np.ndarray:
+# def get_speed_activity(
+#     trials: List[TrialInfo],
+#     aligned_trial_frames: np.ndarray,
+#     dff: np.ndarray,
+#     wheel_circumference: float,
+#     bin_size: int = 1,
+#     start: int = 10,
+#     max_position: int = 170,
+#     remove_landmarks: bool = True,
+# ) -> np.ndarray:
 
-    test_matrices = []
-    for _ in range(10):
-        train_idx = random.sample(range(len(trials)), len(trials) // 2)
-        test_idx = [idx for idx in range(len(trials)) if idx not in train_idx]
+#     test_matrices = []
+#     for _ in range(10):
+#         train_idx = random.sample(range(len(trials)), len(trials) // 2)
+#         test_idx = [idx for idx in range(len(trials)) if idx not in train_idx]
 
-        # Find the order in which to sort neurons in a random 50% of the trials
-        train_matrix = np.nanmean(
-            np.array(
-                [
-                    activity_trial_position(
-                        trials[idx],
-                        dff,
-                        wheel_circumference,
-                        bin_size=bin_size,
-                        start=start,
-                        max_position=max_position,
-                    )
-                    for idx in train_idx
-                ]
-            ),
-            axis=0,
-        )
+#         # Find the order in which to sort neurons in a random 50% of the trials
+#         train_matrix = np.nanmean(
+#             np.array(
+#                 [
+#                     activity_trial_position(
+#                         trials[idx],
+#                         dff,
+#                         wheel_circumference,
+#                         bin_size=bin_size,
+#                         start=start,
+#                         max_position=max_position,
+#                     )
+#                     for idx in train_idx
+#                 ]
+#             ),
+#             axis=0,
+#         )
 
-        if remove_landmarks:
-            train_matrix = remove_landmarks_from_train_matrix(train_matrix)
-        peak_indices = np.argmax(train_matrix, axis=1)
-        sorted_order = np.argsort(peak_indices)
+#         if remove_landmarks:
+#             train_matrix = remove_landmarks_from_train_matrix(train_matrix)
+#         peak_indices = np.argmax(train_matrix, axis=1)
+#         sorted_order = np.argsort(peak_indices)
 
-        # TODO: Review whether this is the best normalisation function
-        test_matrix = normalize(
-            np.nanmean(
-                np.array(
-                    [
-                        activity_trial_position(
-                            trials[idx],
-                            dff,
-                            wheel_circumference,
-                            bin_size=bin_size,
-                            start=start,
-                            max_position=max_position,
-                        )
-                        for idx in test_idx
-                    ]
-                ),
-                axis=0,
-            ),
-            axis=1,
-        )
+#         # TODO: Review whether this is the best normalisation function
+#         test_matrix = normalize(
+#             np.nanmean(
+#                 np.array(
+#                     [
+#                         activity_trial_position(
+#                             trials[idx],
+#                             dff,
+#                             wheel_circumference,
+#                             bin_size=bin_size,
+#                             start=start,
+#                             max_position=max_position,
+#                         )
+#                         for idx in test_idx
+#                     ]
+#                 ),
+#                 axis=0,
+#             ),
+#             axis=1,
+#         )
 
-        test_matrices.append(test_matrix[sorted_order, :])
+#         test_matrices.append(test_matrix[sorted_order, :])
 
-    return np.mean(np.array(test_matrices), 0)
+#     return np.mean(np.array(test_matrices), 0)
 
 
 if __name__ == "__main__":
