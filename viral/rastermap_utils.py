@@ -20,7 +20,7 @@ from viral.constants import TIFF_UMBRELLA
 from viral.two_photon import compute_dff, subtract_neuropil, normalize, get_dff
 
 
-def get_spks_pos(s2p_path: str) -> tuple[np.ndarray]:
+def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray]:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
@@ -67,8 +67,8 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray
 def get_ITI_start_frame(trial: TrialInfo) -> float:
     for state in trial.states_info:
         if state.name == "ITI":
-            ITI_start_frame = state.closest_frame_start
-    return ITI_start_frame
+            return state.closest_frame_start
+    raise ValueError("ITI state not found")
 
 
 def get_signal_for_trials(
@@ -230,83 +230,97 @@ def get_reward_index(trial: TrialInfo) -> np.ndarray | None:
         return None
 
 
+def create_frame_mapping(positions_combined: np.ndarray) -> dict:
+    """Create a frame_mapping dictionary with original and continuous frame indices"""
+    # TODO: sanity check for the frame mapping
+    continuous_frames = np.arange(positions_combined.shape[0])
+    discontinuous_frames = positions_combined[:, 0]
+    return {orig: cont for orig, cont in zip(discontinuous_frames, continuous_frames)}
+
+
 def remap_to_continuous_indices(
     original_indices: np.ndarray, frame_mapping: dict
 ) -> np.ndarray:
+    """Re-assign frame indices to be continuous, according to the frame_mapping dictionary."""
     return np.array(
         [frame_mapping[idx] for idx in original_indices if idx in frame_mapping]
     )
 
 
-def process_session(session: Cached2pSession, wheel_circumference: float) -> None:
-    # s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
-    s2p_path = Path("/Volumes/hard_drive/2024-11-03_JB011")
-    print(f"{session.date} - {session.mouse_name}")
+def load_data(session: Cached2pSession, s2p_path: Path) -> tuple:
+    """Return spks, xpos, ypos and trials loaded from cache."""
     spks, xpos, ypos = get_spks_pos(s2p_path)
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
     if not trials:
         print("No trials imaged")
         exit()
+    return spks, xpos, ypos, trials
+
+
+def align_validate_data(spks: np.ndarray, trials: List[TrialInfo]) -> tuple:
+    """Alignes frames and spikes to trial data."""
     aligned_trial_frames = align_trial_frames(trials)
     assert len(trials) == len(
         aligned_trial_frames
     ), "Number of trials and aligned_trial_frames do not match"
-    spks_trials = get_signal_for_trials(signal=spks, trial_frames=aligned_trial_frames)
-    dff = get_dff(s2p_path)
-    # dff_trials = get_signal_for_trials(signal=dff, trial_frames=aligned_trial_frames)
+    spikes_trials = get_signal_for_trials(
+        signal=spks, trial_frames=aligned_trial_frames
+    )
     assert len(trials) == len(
-        spks_trials
+        spikes_trials
     ), "Number of trials and number of spks for trials do not match"
-    lcks_combined = np.array([], dtype=int)
-    rwrds_combined = np.array([], dtype=int)
-    pstns_combined = np.empty((0, 2))
-    spd_combined = np.empty((0, 2))
-    crrdr_wdths_combined = aligned_trial_frames[:, 1] - aligned_trial_frames[:, 0]
+
+    return aligned_trial_frames, spikes_trials
+
+
+def process_behavioural_data(
+    trials: List[TrialInfo], aligned_trial_frames: np.ndarray
+) -> tuple:
+    """Process behavioural data and return licks, rewards, positions and speed as arrays."""
+    licks_combined = np.array([], dtype=int)
+    rewards_combined = np.array([], dtype=int)
+    positions_combined = np.empty((0, 2))
+    speed_combined = np.empty((0, 2))
+
     for trial, (start, end, rewarded) in zip(trials, aligned_trial_frames):
         trial_frames = np.arange(start, end + 1, 1)
-        # activity_trial_speed(
-        #     trial, dff, trial_frames, wheel_circumference=wheel_circumference
-        # )
         licks = get_lick_index(trial)
         rewards = get_reward_index(trial)
         frames_positions = get_frame_position(trial, trial_frames, wheel_circumference)
         speed = get_speed_frame(frames_positions)
         if licks is not None:
-            lcks_combined = np.concatenate((lcks_combined, licks))
+            licks_combined = np.concatenate((licks_combined, licks))
         if rewards is not None:
-            rwrds_combined = np.concatenate((rwrds_combined, rewards))
-        pstns_combined = np.vstack((pstns_combined, frames_positions))
-        spd_combined = np.vstack((spd_combined, speed))
-    spks_combined = np.hstack(spks_trials)
-    # TODO: sanity check for the frame mapping
-    continuous_frames = np.arange(pstns_combined.shape[0])
-    discontinuous_frames = pstns_combined[:, 0]
-    frame_mapping = {
-        orig: cont for orig, cont in zip(discontinuous_frames, continuous_frames)
-    }
-    lcks_combined = remap_to_continuous_indices(lcks_combined, frame_mapping)
-    rwrds_combined = remap_to_continuous_indices(rwrds_combined, frame_mapping)
-    crrdr_strts_combined = np.column_stack(
-        (
-            remap_to_continuous_indices(aligned_trial_frames[:, 0], frame_mapping),
-            aligned_trial_frames[:, -1],
-        )
-    )
-    # corridor_starts
-    # corridor_widths
-    # corridor_imgs
-    # VRpos
-    # reward_inds
-    # sound_inds
-    # lick_inds
-    # run
+            rewards_combined = np.concatenate((rewards_combined, rewards))
+        positions_combined = np.vstack((positions_combined, frames_positions))
+        speed_combined = np.vstack((speed_combined, speed))
+    return licks_combined, rewards_combined, positions_combined, speed_combined
+
+
+def save_neural_data(
+    session: Cached2pSession,
+    spikes_combined: np.ndarray,
+    xpos: np.ndarray,
+    ypos: np.ndarray,
+) -> None:
     neur_path = (
         HERE.parent
         / "data"
         / "cached_for_rastermap"
         / f"{session.mouse_name}_{session.date}_corridor_neur.npz"
     )
-    np.savez(neur_path, spks=spks_combined, xpos=xpos, ypos=ypos)
+    np.savez(neur_path, spks=spikes_combined, xpos=xpos, ypos=ypos)
+
+
+def save_behavioural_data(
+    session: Cached2pSession,
+    corridor_starts_combined: np.ndarray,
+    corridor_widths_combined: np.ndarray,
+    positions_combined: np.ndarray,
+    rewards_combined: np.ndarray,
+    licks_combined: np.ndarray,
+    speed_combined: np.ndarray,
+) -> None:
     behavior_path = (
         HERE.parent
         / "data"
@@ -315,16 +329,56 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
     )
     np.savez(
         behavior_path,
-        corridor_starts=crrdr_strts_combined,
-        corridor_widths=crrdr_wdths_combined,
-        VRpos=pstns_combined[:, 1],
-        reward_inds=rwrds_combined,
-        lick_inds=lcks_combined,
-        run=spd_combined[:, 1],
+        corridor_starts=corridor_starts_combined,
+        corridor_widths=corridor_widths_combined,
+        VRpos=positions_combined[:, 1],
+        reward_inds=rewards_combined,
+        lick_inds=licks_combined,
+        run=speed_combined[:, 1],
         corridor_imgs=np.zeros((2, 1200, 100)),  # placeholder
         sound_inds=np.zeros(1),  # placeholder
     )
-    print(f"Done")
+
+
+def process_session(session: Cached2pSession, wheel_circumference: float) -> None:
+    s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
+    print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
+    spks, xpos, ypos, trials = load_data(session, s2p_path)
+    aligned_trial_frames, spikes_trials = align_validate_data(spks, trials)
+    licks_combined, rewards_combined, positions_combined, speed_combined = (
+        process_behavioural_data(trials, aligned_trial_frames)
+    )
+    corridor_widths_combined = aligned_trial_frames[:, 1] - aligned_trial_frames[:, 0]
+    spikes_combined = np.hstack(spikes_trials)
+    frame_mapping = create_frame_mapping(positions_combined)
+    licks_combined = remap_to_continuous_indices(licks_combined, frame_mapping)
+    rewards_combined = remap_to_continuous_indices(rewards_combined, frame_mapping)
+    corridor_starts_combined = np.column_stack(
+        (
+            remap_to_continuous_indices(aligned_trial_frames[:, 0], frame_mapping),
+            aligned_trial_frames[:, -1],
+        )
+    )
+    # rastermap paper fig2 input template
+    # corridor_starts
+    # corridor_widths
+    # corridor_imgs
+    # VRpos
+    # reward_inds
+    # sound_inds
+    # lick_inds
+    # run
+    save_neural_data(session, spikes_combined, xpos, ypos)
+    save_behavioural_data(
+        session,
+        corridor_starts_combined,
+        corridor_widths_combined,
+        positions_combined,
+        rewards_combined,
+        licks_combined,
+        speed_combined,
+    )
+    print(f"Successfully cached 2P session for rastermap!")
 
 
 # Move eventually, but do it here for now
