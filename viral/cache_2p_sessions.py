@@ -256,7 +256,6 @@ def get_tiff_metadata(
     # For debugging, remove eventually
     if use_cache:
         temp_cache_path = Path(HERE.parent / "data/temp_caches")
-        print(temp_cache_path)
         if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
             print("Using cached tiff metadata")
             stack_lengths = np.load(

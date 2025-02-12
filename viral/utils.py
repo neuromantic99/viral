@@ -105,7 +105,7 @@ def get_speed_positions(
         range(first_position + step_size, last_position + 1, step_size),
         strict=True,
     ):
-        # # TODO: This will often be zero after the reward is triggered. Deal with this
+        # TODO: This will often be zero after the reward is triggered. Deal with this
         n = np.sum(np.logical_and(position >= start, position < stop))
         if n == 0 and start < 180:
             raise ValueError("Likely the rotary encoder has jumped in a weird way.")
