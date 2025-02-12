@@ -337,6 +337,18 @@ def create_metric_dict(
     include_reward_status: bool = True,
     window: Optional[int] = None,
 ) -> dict:
+    """Create a dictionary for metric data to be plotted.
+
+    Args:
+        mice (List[MouseSummary]):      A list of MouseSummary objects.
+        metric_fn (Callable):           A function which takes raw data and processes it for a metric, e.g. extracting speed.
+        flat_sessions (bool):           Whether to flatten sessions. Is needed for metrices which are computed on a trial-by-trial basis. Defaults to true.
+        include_reward_status (bool):   Whether to distinguish between rewarded and unrewarded trials. Defaults to true.
+        window (Optional[int]):         The window size for analyses (if needed). Defaults to None.
+    Returns:
+        dict:                           The dictionary of metric data to be plotted.
+    """
+    # Initiating the metric_dict dictionary
     metric_dict = dict()
     session_types = [
         "learning",
@@ -345,35 +357,48 @@ def create_metric_dict(
         "recall_reversal",
     ]  # TODO Probably shouldn't be hardcoded here
 
+    # Checks whether the given metric function takes 'window' as an argument to decide whether to use the 'window' input
     metric_fn_params = inspect.signature(metric_fn).parameters
     has_window_param = "window" in metric_fn_params
     use_window = has_window_param and (window is not None)
 
+    # Iterating through the list of MouseSummary objects
     for mouse in mice:
+        # Initiating a dictionary for each mouse called 'mouse_metrics'
         mouse_metrics = dict()
+        # Creates a dictionary of session types with the session type as key and a list of SessionSummary objects as values
         sessions = {
             s_type: filter_sessions_by_session_type(mouse, s_type)
             for s_type in session_types
         }
         reward_statuses = [True, False] if include_reward_status else [None]
+        # Iterating through the different session types
         for s_type in session_types:
+            # Flattening the sessions to be a list of TrialSummary objects if specified
             processed_sessions = (
                 flatten_sessions(sessions[s_type])
                 if flat_sessions
                 else sessions[s_type]
             )
+            # Iterating through the reward statuses
             for reward_status in reward_statuses:
+                # Creating a key for each category in the mouse_metric dictionary
+                # If reward status is to be included, the key will look like this: 'session_type_rewarded' / 'session_type_unrewarded'
+                # Else, the key will look like this: 'session_type'
                 key = (
                     f"{s_type}_{"rewarded" if reward_status else "unrewarded"}"
                     if include_reward_status
                     else f"{s_type}"
                 )
-                args = [processed_sessions]
+                # Build the kwargs
+                kwargs = {}
                 if include_reward_status:
-                    args.append(reward_status)
+                    kwargs["rewarded"] = reward_status
                 if use_window:
-                    args.append(window)
-                mouse_metrics[key] = metric_fn(*args)
+                    kwargs["window"] = window
+                mouse_metrics[key] = metric_fn(processed_sessions, **kwargs)
+                # Careful! The metric functions have to take the trials/sessions as first positional argument, the rest is handled though
+        # Adding the mouse_metrics dictionary as the value for the mouse_name in the overall metric_dict dictionary
         metric_dict[mouse.name] = mouse_metrics
     return metric_dict
 
@@ -399,7 +424,7 @@ def prepare_plot_data(
             f"{genotype}_{reward_status}": [
                 data[f"{session_type}_{reward_status}"]
                 for mouse, data in metric_dict.items()
-                if data[f"{session_type}_{reward_status}"] > 1
+                if data[f"{session_type}_{reward_status}"]
                 and get_genotype(mouse) == genotype
             ]
             for genotype in genotypes
@@ -601,24 +626,24 @@ if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
-    redo = False
+    redo = True
 
     # TODO: Probably should check that every mouse is unique
     for mouse_name in [
-        # "JB011",
-        # "JB012",
-        # "JB013",
-        # "JB014",
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB014",
         # "JB015",
         # "JB016",
-        "JB017",
-        # "JB018",
-        # "JB019",
+        # "JB017",
+        "JB018",
+        "JB019",
         # "JB020",
         # "JB021",
         # "JB022",
         # "JB023",
-        # "JB024",
+        "JB024",
         # "JB025",
         # "JB026",
         # "JB027",

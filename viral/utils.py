@@ -5,6 +5,7 @@ from typing import List, Tuple, TypeVar, Any
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
+from enum import Enum
 
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import SpeedPosition, TrialInfo
@@ -336,14 +337,25 @@ def get_setup(mouse_name: str) -> str:
         raise ValueError(f"Unknown setup for mouse: {mouse_name}")
 
 
+class SessionType(Enum):
+    REVERSAl = "reversal"
+    RECALL_REVERSAL = "recall_reversal"
+    RECALL = "recall"
+    LEARNING = "learning"
+
+
 def get_session_type(session_name: str) -> str:
     session_name = session_name.lower().strip()
     if "reversal" in session_name:
-        return "recall_reversal" if "recall" in session_name else "reversal"
+        return (
+            SessionType.RECALL_REVERSAL.value
+            if "recall" in session_name
+            else SessionType.REVERSAl.value
+        )
     elif "recall" in session_name:
-        return "recall"
+        return SessionType.RECALL.value
     elif "learning" in session_name:
-        return "learning"
+        return SessionType.LEARNING.value
     else:
         raise ValueError(f"Invalid session type: {session_name}")
 
