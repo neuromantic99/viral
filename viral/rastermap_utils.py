@@ -36,6 +36,7 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray
     Args:
         trials (List[TrialInfo]):       A list of TrialInfo objects.
         ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to False.
+                                        If ITI, is False, then trial end is defined as the start of the ITI
 
     Returns:
         np.ndarray:                     A Numpy array of shape (n_trials, 3). Each row representing a trial with
