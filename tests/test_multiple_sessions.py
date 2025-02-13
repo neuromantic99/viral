@@ -41,6 +41,7 @@ def mock_metric_fcn(trials, rewarded=None, window=None):
 
 
 def test_create_metric_dict_include_reward_status():
+    """Test that the trials get sorted correctly by session type and reward condition"""
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
         mice=[mock_mouse],
@@ -60,7 +61,9 @@ def test_create_metric_dict_include_reward_status():
         "recall_reversal_rewarded",
         "recall_reversal_unrewarded",
     }
+    # Test that the expected keys are in the dictionary
     assert set(mouse_metric.keys()) == expected_keys
+    # Test that the number of trials for each session_type and condition in the sorted data is still the same as in the raw data
     assert mouse_metric["learning_rewarded"] == 2
     assert mouse_metric["learning_unrewarded"] == 3
     assert mouse_metric["reversal_rewarded"] == 2
@@ -72,6 +75,7 @@ def test_create_metric_dict_include_reward_status():
 
 
 def test_create_metric_dict_no_reward_status():
+    """Test that the trials get sorted correctly by session type."""
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
         mice=[mock_mouse],
@@ -82,7 +86,9 @@ def test_create_metric_dict_no_reward_status():
     assert "mock_mouse" in metric_dict
     mouse_metric = metric_dict["mock_mouse"]
     expected_keys = {"learning", "reversal", "recall", "recall_reversal"}
+    # Test that the expected keys are in the dicitonary
     assert set(mouse_metric.keys()) == expected_keys
+    # Test that the number of trials for each session_type in the sorted data is still the same as in the raw data
     assert mouse_metric["learning"] == 5
     assert mouse_metric["reversal"] == 5
     assert mouse_metric["recall"] == 5
@@ -90,16 +96,21 @@ def test_create_metric_dict_no_reward_status():
 
 
 def test_create_metric_dict_sessions():
+    """Test that the sessions get sorted correctly by session type."""
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
         mice=[mock_mouse],
         metric_fn=mock_metric_fcn,
         flat_sessions=False,
+        include_reward_status=False,
     )
+    # Realised that flat_sessions and include_reward_status have to be set to False so that the session dictionary works
     assert "mock_mouse" in metric_dict
     mouse_metric = metric_dict["mock_mouse"]
     expected_keys = {"learning", "reversal", "recall", "recall_reversal"}
+    # Test that the expected keys are in the dictionary
     assert set(mouse_metric.keys()) == expected_keys
+    # Test that the number of sessions for each session_type in the sorted data is still the same as in the raw data
     assert mouse_metric["learning"] == 1
     assert mouse_metric["reversal"] == 1
     assert mouse_metric["recall"] == 1

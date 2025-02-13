@@ -233,6 +233,8 @@ def get_reward_index(trial: TrialInfo) -> np.ndarray | None:
 def create_frame_mapping(positions_combined: np.ndarray) -> dict:
     """Create a frame_mapping dictionary with original and continuous frame indices"""
     # TODO: sanity check for the frame mapping
+    # Takes postions_combined array and takes the first column with the frame indices
+    # (The positions array is the one that should have all frames in an imaged trial)
     continuous_frames = np.arange(positions_combined.shape[0])
     discontinuous_frames = positions_combined[:, 0]
     return {orig: cont for orig, cont in zip(discontinuous_frames, continuous_frames)}
@@ -274,7 +276,9 @@ def align_validate_data(spks: np.ndarray, trials: List[TrialInfo]) -> tuple:
 
 
 def process_behavioural_data(
-    trials: List[TrialInfo], aligned_trial_frames: np.ndarray
+    trials: List[TrialInfo],
+    aligned_trial_frames: np.ndarray,
+    wheel_circumference: float,
 ) -> tuple:
     """Process behavioural data and return licks, rewards, positions and speed as arrays."""
     licks_combined = np.array([], dtype=int)
@@ -335,8 +339,8 @@ def save_behavioural_data(
         reward_inds=rewards_combined,
         lick_inds=licks_combined,
         run=speed_combined[:, 1],
-        corridor_imgs=np.zeros((2, 1200, 100)),  # placeholder
-        sound_inds=np.zeros(1),  # placeholder
+        corridor_imgs=np.zeros((2, 1200, 100)),  # TODO: placeholder, remove eventually
+        sound_inds=np.zeros(1),  # TODO: placeholder, remove eventually
     )
 
 
@@ -346,7 +350,7 @@ def process_session(session: Cached2pSession, wheel_circumference: float) -> Non
     spks, xpos, ypos, trials = load_data(session, s2p_path)
     aligned_trial_frames, spikes_trials = align_validate_data(spks, trials)
     licks_combined, rewards_combined, positions_combined, speed_combined = (
-        process_behavioural_data(trials, aligned_trial_frames)
+        process_behavioural_data(trials, aligned_trial_frames, wheel_circumference)
     )
     corridor_widths_combined = aligned_trial_frames[:, 1] - aligned_trial_frames[:, 0]
     spikes_combined = np.hstack(spikes_trials)
