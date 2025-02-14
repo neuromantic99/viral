@@ -181,7 +181,9 @@ def plot_licking_all_trials(
     plt.show()
 
 
-def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
+def plot_rewarded_vs_unrewarded_licking(
+    trials: List[TrialInfo], wheel_circumference: float
+) -> None:
 
     rewarded = [
         licks_to_position(trial, wheel_circumference)
@@ -249,7 +251,9 @@ def plot_position_habituation(
     plt.ylabel("Position (m)")
 
 
-def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
+def plot_speed_all_trials(
+    trials: List[TrialInfo], sampling_rate: int, wheel_circumference: float
+) -> None:
     plt.figure(figsize=(10, 6))
 
     first_position = 0
@@ -437,8 +441,7 @@ def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
     plt.show()
 
 
-if __name__ == "__main__":
-
+def main() -> None:
     trials = load_data(SESSION_PATH)
 
     metadata = gsheet2df(SPREADSHEET_ID, MOUSE, 1)
@@ -467,8 +470,14 @@ if __name__ == "__main__":
         print(
             f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
         )
-        plot_rewarded_vs_unrewarded_licking(trials)
+        plot_rewarded_vs_unrewarded_licking(
+            trials, wheel_circumference=wheel_circumference
+        )
         plot_speed_reward_unrewarded(
             trials, sampling_rate=30, wheel_circumference=wheel_circumference
         )
     plt.show()
+
+
+if __name__ == "__main__":
+    main()
