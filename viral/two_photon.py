@@ -46,7 +46,8 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
 
 
 def get_dff(mouse: str, date: str) -> np.ndarray:
-    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    # s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    s2p_path = Path("/Volumes/hard_drive/2024-11-03_JB011")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
     f_raw = np.load(s2p_path / "F.npy")[iscell, :]
@@ -106,8 +107,9 @@ def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
 
 def normalize(array: np.ndarray, axis: int) -> np.ndarray:
     """Calculate the min and max along the specified axis"""
-    min_val = np.min(array, axis=axis, keepdims=True)
-    max_val = np.max(array, axis=axis, keepdims=True)
+    # NaN save
+    min_val = np.nanmin(array, axis=axis, keepdims=True)
+    max_val = np.nanmax(array, axis=axis, keepdims=True)
     return (array - min_val) / (max_val - min_val)
 
 
@@ -282,8 +284,8 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
 
 if __name__ == "__main__":
 
-    mouse = "JB018"
-    date = "2024-12-06"
+    mouse = "JB011"
+    date = "2024-11-03"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
