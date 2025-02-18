@@ -183,17 +183,6 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
-def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
-    """Return numpy array with the length of the longest sequence, padded with NaN values"""
-    max_len = max(len(seq) for seq in sequences)
-    return np.array(
-        [
-            np.pad(seq, (0, max_len - len(seq)), constant_values=fill_value)
-            for seq in sequences
-        ]
-    )
-
-
 def get_wheel_circumference_from_rig(rig: str) -> float:
     if rig in {"2P", "2P_1.5"}:
         return 34.7
@@ -377,3 +366,29 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
     elif 30 < len(frame_clock) / 10000 / 60 < 100:
         return 10000
     raise ValueError("Could not determine sampling rate")
+
+
+def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
+    """Return numpy array with the length of the longest sequence, padded with NaN values"""
+    max_len = max(len(seq) for seq in sequences)
+    return np.array(
+        [
+            np.pad(seq, (0, max_len - len(seq)), constant_values=fill_value)
+            for seq in sequences
+        ]
+    )
+
+
+def pad_to_max_length_bins(
+    sequences: List[np.ndarray], fill_value=np.nan
+) -> np.ndarray:
+    """Pad all (cells, bins) arrays to the maximum bin count."""
+    max_bins = max(seq.shape[1] for seq in sequences)
+    return np.array(
+        [
+            np.pad(
+                seq, ((0, 0), (0, max_bins - seq.shape[1])), constant_values=fill_value
+            )
+            for seq in sequences
+        ]
+    )
