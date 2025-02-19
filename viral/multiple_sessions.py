@@ -394,10 +394,13 @@ def create_metric_dict(
                 kwargs = {}
                 if include_reward_status:
                     kwargs["rewarded"] = reward_status
+                if flat_sessions:
+                    kwargs["trials"] = processed_sessions
+                if not flat_sessions:
+                    kwargs["sessions"] = processed_sessions
                 if use_window:
                     kwargs["window"] = window
-                mouse_metrics[key] = metric_fn(processed_sessions, **kwargs)
-                # Careful! The metric functions have to take the trials/sessions as first positional argument, the rest is handled though
+                mouse_metrics[key] = metric_fn(**kwargs)
         # Adding the mouse_metrics dictionary as the value for the mouse_name in the overall metric_dict dictionary
         metric_dict[mouse.name] = mouse_metrics
     return metric_dict
@@ -632,19 +635,19 @@ if __name__ == "__main__":
     for mouse_name in [
         "JB011",
         "JB012",
-        "JB013",
+        # "JB013",
         "JB014",
         # "JB015",
         # "JB016",
         # "JB017",
         "JB018",
-        "JB019",
+        # "JB019",
         # "JB020",
         # "JB021",
         # "JB022",
         # "JB023",
-        "JB024",
-        # "JB025",
+        # "JB024",
+        "JB025",
         # "JB026",
         # "JB027",
     ]:

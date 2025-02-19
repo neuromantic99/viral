@@ -127,33 +127,75 @@ def get_frame_position(
         frames_positions_combined.append([frames_start_end[i, 1], positions[i]])
     frames_positions_combined = np.array(frames_positions_combined)
     unique_frames_positions = np.unique(frames_positions_combined, axis=0)
+    # Backfilling with the first recorded position as there is no position being recorded for the first frame, hence, the interpolation would error
+    if trial_frames[0] < unique_frames_positions[0, 0]:
+        first_position = np.array([[trial_frames[0], unique_frames_positions[0, 1]]])
+        unique_frames_positions = np.vstack([first_position, unique_frames_positions])
+    # Backfilling with last recorded position as there might not be a position recorded for the last frame, hence, the interpolation would error
+    if trial_frames[-1] > np.max(unique_frames_positions[-1, 0]):
+        last_position = np.array([trial_frames[-1], unique_frames_positions[-1, 1]])
+        unique_frames_positions = np.vstack([unique_frames_positions, last_position])
     # Interpolation is needed as the position is not stored when the reward comes on, hence position for several frames might be missing
     interp_func = interp1d(
         unique_frames_positions[:, 0],
         unique_frames_positions[:, 1],
         kind="linear",
-        fill_value="extrapolate",
+        fill_value="interpolate",
     )
     interpolated_positions = interp_func(trial_frames)
+    assert (interpolated_positions >= -15).all(), "one or more position(s) are negative"
+    # Wanted to account for the mouse rolling backwardwards/forwards resulting in slightly negative values
+    # 15 is obviously a bit arbitrary
     assert len(trial_frames) == len(
         interpolated_positions
     ), "# of trial frames is unequal to # of interpolated positions"
     return np.column_stack((trial_frames, interpolated_positions))
 
 
-def get_speed_frame(frame_position: np.ndarray) -> np.ndarray:
-    # TODO: Is this ok like this?
-    frames_diff = np.diff(frame_position[:, 0])
-    positions_diff = np.diff(frame_position[:, 1])
-    speeds = positions_diff / frames_diff
-    # little hack, have to account for one more frame
-    last_speed = speeds[-1] if len(speeds) > 0 else 0
-    # Add last frame with speed of the last computed frame
-    new_frame = np.array([[frame_position[-1, 0], last_speed]])
-    return np.vstack([np.column_stack((frame_position[:-1, 0], speeds)), new_frame])
+def get_speed_frame(frame_position: np.ndarray, bin_size: int = 5) -> np.ndarray:
+    """Get the speed for every frame and return frames and speed as array.
+
+    Args:
+        frame_position (np.ndarray):    A Numpy array of shape (frames, 2). Each row representing a frame with frame index and corresponding speed.
+        bin_size (int):                 How many frames to bin over. Defaults to 5.
+
+    Returns:
+        np.ndarray:                     A Numpy array of shape (frames, 2). Each row representing a frame with:
+            frame_idx (int)
+            speed (float)
+    """
+    n_frames = frame_position.shape[0]
+    n_bins = n_frames // bin_size
+    speeds = np.zeros(frame_position.shape[0])
+    for i in range(n_bins):
+        start_idx = i * bin_size
+        end_idx = start_idx + bin_size
+        start_frame, start_pos = frame_position[start_idx]
+        end_frame, end_pos = frame_position[end_idx - 1]
+        time_diff = end_frame - start_frame
+        pos_diff = end_pos - start_pos
+        speed = (
+            pos_diff / time_diff if time_diff != 0 else 0
+        )  # TODO: wait does this make sense?
+        speeds[start_idx:end_idx] = speed
+
+    remaining = n_frames % bin_size
+    if remaining > 0:
+        start_idx = n_bins * bin_size
+        start_frame, start_pos = frame_position[start_idx]
+        end_frame, end_pos = frame_position[-1]
+
+        time_diff = end_frame - start_frame
+        pos_diff = end_pos - start_pos
+        speed = pos_diff / time_diff if time_diff != 0 else 0
+
+        speeds[start_idx:] = speed
+    result = np.column_stack((frame_position[:, 0], speeds))
+    return result
 
 
 def get_lick_index(trial: TrialInfo) -> np.ndarray | None:
+    """Return frame indices of frames when licks occured."""
     licks_start = np.array(
         [event.closest_frame for event in trial.events_info if event.name == "Port1In"]
     )
@@ -164,7 +206,6 @@ def get_lick_index(trial: TrialInfo) -> np.ndarray | None:
     if len(licks_start) == 0 or len(licks_end) == 0:
         return None
     # Cutting of pairs with e.g. missing end frame
-    # TODO: is this a good approach?
     valid_pairs = list()
     start_idx, end_idx = 0, 0
     while start_idx < len(licks_start) and end_idx < len(licks_end):
@@ -188,6 +229,7 @@ def get_lick_index(trial: TrialInfo) -> np.ndarray | None:
 
 
 def get_reward_index(trial: TrialInfo) -> np.ndarray | None:
+    """Return frame indices of frames when rewards came on."""
     # Caution: When changing number of rewards, the state names have to be changed
     start_frames = np.array(
         [
@@ -206,8 +248,18 @@ def get_reward_index(trial: TrialInfo) -> np.ndarray | None:
     # Handle trial w/o rewards
     if len(start_frames) == 0 or len(end_frames) == 0:
         return None
+    allowed_rewards = {"reward_on1", "reward_on2", "reward_on3"}
+    # Ensuring that all allowed reward_on states are to be found in the states info
+    for reward in allowed_rewards:
+        assert any(
+            state.name == reward for state in trial.states_info
+        ), f"'{reward}' is not in states_info"
+
+    # Ensuring no other "reward_onX" states exist (e.g. 'reward_on4')
+    for state in trial.states_info:
+        if state.name.startswith("reward_on") and state.name not in allowed_rewards:
+            raise AssertionError(f"Unexpected reward state found: {state.name}")
     # Cutting of pairs with e.g. missing end time
-    # TODO: is this a good approach?
     valid_pairs = list()
     start_idx, end_idx = 0, 0
     while start_idx < len(start_frames) and end_idx < len(end_frames):

@@ -115,16 +115,70 @@ def test_get_frame_position() -> None:
     # TODO: another test with ITI?
 
 
+def test_get_frame_position_no_start_no_end() -> None:
+    """Test that the position for each frame is given correctly even though there are no positions for the beginning and start frames."""
+    trial = Mock()
+    trial.rotary_encoder_position = [0, 90, 180]
+    state1 = Mock()
+    state1.name = "trigger_panda"
+    state1.closest_frame_start = 1
+    state1.closest_frame_end = 1
+    state2 = Mock()
+    state2.name = "trigger_panda"
+    state2.closest_frame_start = 2
+    state2.closest_frame_end = 3
+    state3 = Mock()
+    state3.name = "trigger_panda"
+    state3.closest_frame_start = 5
+    state3.closest_frame_end = 5
+    trial.states_info = [state1, state2, state3]
+
+    trial_frames = np.array([0, 1, 2, 3, 4, 5, 6])
+
+    wheel_circumference = 100
+    manual_position = np.array([0, 25, 50])  # 0, 0; 90, 25; 180, 50
+
+    expected_positions = np.array([0, 0, 25, 25, 37.5, 50, 50])
+    expected = np.column_stack((trial_frames, expected_positions))
+
+    with patch("viral.utils.degrees_to_cm", return_value=manual_position):
+        result = get_frame_position(trial, trial_frames, wheel_circumference)
+
+    assert np.array_equal(result, expected)
+
+
 def test_get_speed_frame() -> None:
     """Test that the speed for a given array of frame indices and positions will return the right speeds."""
-    frame_position = np.array([[0, 10], [1, 20], [2, 30]])
-    expected = np.array([[0, 10], [1, 10], [2, 10]])
+    frame_position = np.array(
+        [[0, 10], [1, 20], [2, 30], [3, 40], [4, 50], [5, 80], [6, 100]]
+    )
+    expected = np.array([[0, 10], [1, 10], [2, 10], [3, 10], [4, 10], [5, 20], [6, 20]])
     result = get_speed_frame(frame_position)
     assert np.array_equal(result, expected)
 
     # Test with no change of position in between two frames
-    frame_position = np.array([[0, 0], [1, 10], [2, 10]])
-    expected = np.array([[0, 10], [1, 0], [2, 0]])
+    frame_position = np.array(
+        [
+            [0, 10],
+            [1, 20],
+            [2, 30],
+            [3, 40],
+            [4, 50],
+            [5, 60],
+            [6, 60],
+        ]
+    )
+    expected = np.array(
+        [
+            [0, 10],
+            [1, 10],
+            [2, 10],
+            [3, 10],
+            [4, 10],
+            [5, 0],
+            [6, 0],
+        ]
+    )
     result = get_speed_frame(frame_position)
     assert np.array_equal(result, expected)
 
@@ -165,7 +219,7 @@ def test_get_lick_index_no_licks() -> None:
 
     expected = None
     result = get_lick_index(trial)
-    assert np.array_equal(result, expected)
+    assert result is expected is None
 
 
 def test_get_lick_index_missing_end_frame() -> None:
@@ -199,25 +253,56 @@ def test_get_reward_index() -> None:
     trial = Mock()
     state1 = Mock()
     state1.name = "reward_on1"
-    state1.closest_frame_start = 0
+    state1.closest_frame_start = 1
     state2 = Mock()
-    state2.name = "reward_off3"
-    state2.closest_frame_start = 1
+    state2.name = "reward_on2"
+    state2.closest_frame_start = 2
     state3 = Mock()
-    state3.name = "reward_on1"
+    state3.name = "reward_on3"
     state3.closest_frame_start = 3
     state4 = Mock()
     state4.name = "reward_off3"
     state4.closest_frame_start = 4
     state5 = Mock()
     state5.name = "reward_on1"
-    state5.closest_frame_start = 7
+    state5.closest_frame_start = 6
     state6 = Mock()
-    state6.name = "reward_off3"
-    state6.closest_frame_start = 9
-    trial.states_info = [state1, state2, state3, state4, state5, state6]
+    state6.name = "reward_on2"
+    state6.closest_frame_start = 7
+    state7 = Mock()
+    state7.name = "reward_on3"
+    state7.closest_frame_start = 8
+    state8 = Mock()
+    state8.name = "reward_off3"
+    state8.closest_frame_start = 9
+    state9 = Mock()
+    state9.name = "reward_on1"
+    state9.closest_frame_start = 11
+    state10 = Mock()
+    state10.name = "reward_on2"
+    state10.closest_frame_start = 12
+    state11 = Mock()
+    state11.name = "reward_on3"
+    state11.closest_frame_start = 13
+    state12 = Mock()
+    state12.name = "reward_off3"
+    state12.closest_frame_start = 14
+    trial.states_info = [
+        state1,
+        state2,
+        state3,
+        state4,
+        state5,
+        state6,
+        state7,
+        state8,
+        state9,
+        state10,
+        state11,
+        state12,
+    ]
 
-    expected = np.array([0, 1, 3, 4, 7, 8, 9])
+    expected = np.array([1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14])
     result = get_reward_index(trial)
     assert np.array_equal(result, expected)
 
@@ -237,25 +322,90 @@ def test_get_reward_index_missing_end_frame() -> None:
     trial = Mock()
     state1 = Mock()
     state1.name = "reward_on1"
-    state1.closest_frame_start = 0
+    state1.closest_frame_start = 1
     state2 = Mock()
-    state2.name = "reward_off3"
-    state2.closest_frame_start = 1
+    state2.name = "reward_on2"
+    state2.closest_frame_start = 2
     state3 = Mock()
-    state3.name = "reward_on1"
+    state3.name = "reward_on3"
     state3.closest_frame_start = 3
     state4 = Mock()
     state4.name = "reward_off3"
     state4.closest_frame_start = 4
-    # Creating one reward without an end (i.e. missing the 'reward_off3' state)
     state5 = Mock()
     state5.name = "reward_on1"
-    state5.closest_frame_start = 7
-    trial.states_info = [state1, state2, state3, state4, state5]
+    state5.closest_frame_start = 6
+    state6 = Mock()
+    state6.name = "reward_on2"
+    state6.closest_frame_start = 7
+    state7 = Mock()
+    state7.name = "reward_on3"
+    state7.closest_frame_start = 8
+    # Creating one reward without an end (i.e. missing the 'reward_off3' state)
+    trial.states_info = [state1, state2, state3, state4, state5, state6, state7]
 
-    expected = np.array([0, 1, 3, 4])
+    expected = np.array([1, 2, 3, 4])
     result = get_reward_index(trial)
     assert np.array_equal(result, expected)
+
+
+def test_missing_reward_state() -> None:
+    """Test that an AssertionError is raised if one of the valid reward_on states is not present."""
+    trial = Mock()
+    state1 = Mock()
+    state1.name = "reward_on1"
+    state1.closest_frame_start = 1
+    state2 = Mock()
+    state2.name = "reward_on2"
+    state2.closest_frame_start = 2
+    state3 = Mock()
+    state3.name = "reward_off3"
+    state3.closest_frame_start = 4
+    trial.states_info = [state1, state2, state3]
+
+    try:
+        allowed_rewards = {"reward_on1", "reward_on2", "reward_on3"}
+        for reward in allowed_rewards:
+            assert any(
+                state.name == reward for state in trial.states_info
+            ), f"'{reward}' is not in states_info"
+    except AssertionError as e:
+        print(f"test_missing_reward_state passed. Caught exception: {e}")
+        return
+
+    raise AssertionError(f"test_missing_reward_state failed. Exception not caught.")
+
+
+def test_unexpected_reward_state() -> None:
+    """Test that an AssertionError is raised if one of the valid reward_on states is not present."""
+    trial = Mock()
+    state1 = Mock()
+    state1.name = "reward_on1"
+    state1.closest_frame_start = 1
+    state2 = Mock()
+    state2.name = "reward_on2"
+    state2.closest_frame_start = 2
+    state3 = Mock()
+    state3.name = "reward_on3"
+    state3.closest_frame_start = 3
+    state4 = Mock()
+    state4.name = "reward_on4"
+    state4.closest_frame_start = 3
+    state5 = Mock()
+    state5.name = "reward_off3"
+    state5.closest_frame_start = 4
+    trial.states_info = [state1, state2, state3, state4, state5]
+
+    try:
+        allowed_rewards = {"reward_on1", "reward_on2", "reward_on3"}
+        for state in trial.states_info:
+            if state.name.startswith("reward_on") and state.name not in allowed_rewards:
+                raise AssertionError(f"Unexpected reward state found: {state.name}")
+    except AssertionError as e:
+        print(f"test_unexpected_reward_state passed. Caught exception: {e}")
+        return
+
+    raise AssertionError(f"test_unexpected_reward_state failed. Exception not caught.")
 
 
 def test_create_frame_mapping() -> None:
