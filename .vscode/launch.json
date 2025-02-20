@@ -41,5 +41,13 @@
       "console": "integratedTerminal",
       "justMyCode": true
     },
+    {
+      "name": "rastermap",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/rastermap_utils.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
   ]
 }

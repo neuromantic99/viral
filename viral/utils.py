@@ -1,13 +1,14 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import List, Tuple, TypeVar
+from typing import List, Tuple, TypeVar, Any
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
+from enum import Enum
 
-from .constants import ENCODER_TICKS_PER_TURN
-from .models import SpeedPosition, TrialInfo
+from viral.constants import ENCODER_TICKS_PER_TURN
+from viral.models import SpeedPosition, TrialInfo
 
 
 def shaded_line_plot(
@@ -19,7 +20,7 @@ def shaded_line_plot(
 
     mean = np.mean(arr, 0)
     sem = np.std(arr, 0) / np.sqrt(arr.shape[1])
-    plt.plot(x_axis, mean, color=color, label=label, marker="")
+    plt.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
     plt.fill_between(
         x_axis,
         np.subtract(
@@ -92,7 +93,6 @@ def get_speed_positions(
 
     Currently only works for evenly spaced integer positions
 
-    TODO: Add tests for this function
     """
 
     assert (
@@ -183,8 +183,19 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
+def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
+    """Return numpy array with the length of the longest sequence, padded with NaN values"""
+    max_len = max(len(seq) for seq in sequences)
+    return np.array(
+        [
+            np.pad(seq, (0, max_len - len(seq)), constant_values=fill_value)
+            for seq in sequences
+        ]
+    )
+
+
 def get_wheel_circumference_from_rig(rig: str) -> float:
-    if rig == "2P":
+    if rig in {"2P", "2P_1.5"}:
         return 34.7
         # return 11.05 * math.pi
     elif rig in {"Box", "Box2.0", "Box2.5"}:
@@ -259,14 +270,94 @@ def get_genotype(mouse_name: str) -> str:
         "JB016",
         "JB017",
         "JB019",
-        "JB023",
         "JB021",
+        "JB023",
     }:
         return "NLGF"
+
     elif mouse_name in {"JB025", "JB024", "JB026", "JB027"}:
         return "WT"
     else:
         raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
+
+
+def get_sex(mouse_name: str) -> str:
+    if mouse_name in {
+        "JB013",
+        "JB014",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+    }:
+        return "male"
+    if mouse_name in {
+        "JB011",
+        "JB012",
+        "JB015",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+    }:
+        return "female"
+    else:
+        raise ValueError(f"Unknown sex for mouse: {mouse_name}")
+
+
+def get_setup(mouse_name: str) -> str:
+    if mouse_name in {
+        "JB011",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+        "JB026",
+        "JB027",
+    }:
+        return "2P"
+    if mouse_name in {
+        "JB012",
+        "JB013",
+        "JB017",
+        "JB024",
+        "JB025",
+    }:
+        return "box"
+    else:
+        raise ValueError(f"Unknown setup for mouse: {mouse_name}")
+
+
+class SessionType(Enum):
+    REVERSAl = "reversal"
+    RECALL_REVERSAL = "recall_reversal"
+    RECALL = "recall"
+    LEARNING = "learning"
+
+
+def get_session_type(session_name: str) -> str:
+    session_name = session_name.lower().strip()
+    if "reversal" in session_name:
+        return (
+            SessionType.RECALL_REVERSAL.value
+            if "recall" in session_name
+            else SessionType.REVERSAl.value
+        )
+    elif "recall" in session_name:
+        return SessionType.RECALL.value
+    elif "learning" in session_name:
+        return SessionType.LEARNING.value
+    else:
+        raise ValueError(f"Invalid session type: {session_name}")
 
 
 def shuffle(x: np.ndarray) -> np.ndarray:
