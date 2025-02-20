@@ -46,14 +46,20 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
 
 
 def get_dff(mouse: str, date: str) -> np.ndarray:
-    # s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
-    s2p_path = Path("/Volumes/hard_drive/2024-11-03_JB011")
+    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    # s2p_path = Path("/Volumes/hard_drive/2024-11-03_JB011")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
     f_raw = np.load(s2p_path / "F.npy")[iscell, :]
     f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
     # return spks
     return compute_dff(subtract_neuropil(f_raw, f_neu))
+
+
+def get_spks(mouse: str, date: str) -> np.ndarray:
+    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+    return np.load(s2p_path / "spks.npy")[iscell, :]
 
 
 def activity_trial_position(

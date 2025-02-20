@@ -27,7 +27,7 @@ from viral.utils import (
 
 from viral.models import Cached2pSession, TrialInfo
 
-from viral.two_photon import normalize
+from viral.two_photon import normalize, get_dff, get_spks
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -336,7 +336,36 @@ def speed_cells(
     )
 
 
-# TODO: Find speed cells through PCA or something like this??
+# TODO: Plot deconvoluted spikes (-> mean firing rate) against speed
+# 1) load deconvoluted signal
+# 2) compute mean firing rate
+def get_firing_rate(spks: np.ndarray) -> np.ndarray:
+    return np.sum(spks, axis=0)
+
+
+def get_speed_firing_rate(
+    session: Cached2pSession, wheel_circumference: float, bin_size: int = 10
+) -> None:
+    trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+    spks = get_spks(session.mouse_name, session.date)
+    aligned_trial_frames = align_trial_frames(trials, False)
+    trials_spks = get_signal_for_trials(spks, aligned_trial_frames)
+    for idx, trial in enumerate(trials):
+        frame_position = get_frame_position(
+            trial, aligned_trial_frames[idx, :], wheel_circumference, False
+        )
+        frame_speed = get_speed_frame(frame_position)
+        frame_spks = trials_spks[idx]
+        firing_rate = get_firing_rate(frame_spks)
+        speed_firing_rate = np.column_stack([frame_speed[:, 1], firing_rate[]])
+    plt.figure()
+    plt.plot()
+
+# TODO: You will have to bin over frames, I am afraid
+
+# 3) prepare data
+# 4) plot data
+# see Gois et al. 2018 (rat hippocampus speed cells)
 
 if __name__ == "__main__":
 
