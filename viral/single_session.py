@@ -49,12 +49,32 @@ def load_data(session_path: Path) -> List[TrialInfo]:
 def plot_lick_raster(
     lick_positions: List[np.ndarray],
     title: str,
-    rolling_y_lim: float | None = None,
+    y_max_histogram: float | None = None,
     jitter: float = 0.0,
     x_label: str = "Position (cm)",
     x_max: int = 200,
     bins: np.ndarray | None = None,
 ) -> float | None:
+    """Plots a raster of lick times with a row for each trial.
+    Also plots a histogram, a count of the number of licks in each bin across all trials.
+
+    Args:
+        lick_positions: List of n_trials length containing np arrays of lick times
+        title: plot title
+        y_max_histogram: Set the y max of the histogram, allows for axis height matching across multiple
+                         instances of this plot
+        jitter: Apply noise to the y-position of the raster points, allows you to resolve multiple licks
+                in the same x position in the same trial.
+        x_label: shared across the whole plot
+        x_max: of both plots
+        bins: bin edges for the histogram
+
+    Returns
+        A float containg the maximum bin size of the histogram. Allows you to match histogram heights across
+        multiple plot instances without guessing the height before hand
+
+    """
+
     f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     f.suptitle(title)
     # f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
@@ -82,7 +102,7 @@ def plot_lick_raster(
     n, _, _ = a1.hist(all_trials, bins)
     a1.set_ylabel("Total # licks")
     a1.set_xlabel(x_label)
-    a1.set_ylim(0, rolling_y_lim)
+    a1.set_ylim(0, y_max_histogram)
     a1.set_xlim(0, x_max)
     a1.axvspan(180, 200, color="gray", alpha=0.5)
 
