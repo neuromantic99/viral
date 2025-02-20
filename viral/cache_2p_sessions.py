@@ -36,6 +36,7 @@ from viral.utils import (
     get_tiff_paths_in_directory,
     time_list_to_datetime,
     trial_is_imaged,
+    degrees_to_cm,
 )
 
 import logging
@@ -134,6 +135,12 @@ def add_daq_times_to_trial(
             np.argmin(np.abs(valid_frame_times - state.end_time_daq))
         )
 
+        if state.name == "spacer_high_00":
+            trial.trial_start_closest_frame = state.closest_frame_start
+
+    last_state = trial.states_info[-1]
+    trial.trial_end_closest_frame = last_state.closest_frame_end
+
     for event in trial.events_info:
         event.start_time_daq = float(bpod_to_daq(event.start_time))
         event.closest_frame = int(
@@ -213,6 +220,7 @@ def add_imaging_info_to_trials(
         == sum(stack_lengths_tiffs)
         == len(frame_times_daq) - 2 * len(stack_lengths_tiffs)
     )
+
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
         add_daq_times_to_trial(
@@ -247,7 +255,7 @@ def get_tiff_metadata(
 
     # For debugging, remove eventually
     if use_cache:
-        temp_cache_path = Path("/Users/jamesrowland/Code/viral/data/temp_caches")
+        temp_cache_path = Path(HERE.parent / "data/temp_caches")
         if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
             print("Using cached tiff metadata")
             stack_lengths = np.load(

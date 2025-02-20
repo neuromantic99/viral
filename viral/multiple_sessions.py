@@ -4,14 +4,14 @@ from pathlib import Path
 import random
 import re
 import sys
-
+import inspect
 from pydantic import ValidationError
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
 sys.path.append(str(HERE.parent))
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Callable, Optional
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -30,9 +30,13 @@ from viral.utils import (
     get_genotype,
     get_wheel_circumference_from_rig,
     shaded_line_plot,
+    get_sex,
+    get_setup,
+    get_session_type,
 )
 
 import seaborn as sns
+import pandas as pd
 
 sns.set_theme(context="talk", style="ticks")
 
@@ -125,6 +129,7 @@ def cache_mouse(mouse_name: str) -> None:
                 ),
             )
         )
+        print(f"Session summary for {row["Type"]} / {row["Date"]}")
 
     with open(
         HERE.parent / "data" / "behaviour_summaries" / f"{mouse_name}.json", "w"
@@ -133,6 +138,9 @@ def cache_mouse(mouse_name: str) -> None:
             MouseSummary(
                 sessions=session_summaries,
                 name=mouse_name,
+                genotype=get_genotype(mouse_name),
+                sex=get_sex(mouse_name),
+                setup=get_setup(mouse_name),
             ).model_dump(),
             f,
         )
@@ -214,6 +222,33 @@ def rolling_performance(trials: List[TrialSummary], window: int) -> List[float]:
     ]
 
 
+def running_speed_overall(trials: List[TrialSummary], rewarded: bool) -> float:
+    speeds = [trial.trial_speed for trial in trials if trial.rewarded == rewarded]
+    return np.mean(speeds)
+
+
+def running_speed_AZ(trials: List[TrialSummary], rewarded: bool) -> float:
+    speeds = [trial.speed_AZ for trial in trials if trial.rewarded == rewarded]
+    return np.mean(speeds)
+
+
+def running_speed_nonAZ(trials: List[TrialSummary], rewarded: bool) -> float:
+    speeds = [trial.speed_nonAZ for trial in trials if trial.rewarded == rewarded]
+    return np.mean(speeds)
+
+
+def trial_time(trials: List[TrialSummary], rewarded: bool) -> float:
+    trial_times = [
+        trial.trial_time_overall for trial in trials if trial.rewarded == rewarded
+    ]
+    return np.mean(trial_times)
+
+
+def trials_run(sessions: List[SessionSummary]) -> float:
+    num_trials = [session.num_trials for session in sessions]
+    return np.mean(num_trials)
+
+
 def plot_rolling_performance(
     sessions: List[SessionSummary],
     window: int,
@@ -262,56 +297,331 @@ def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
     return result
 
 
-def plot_performance_summaries(mice: List[SessionSummary]):
-    rolling_performance_dict = {}
-    window = 40
-
-    for mouse in mice:
-        pre_reversal = [
-            session
-            for session in mouse.sessions
-            if "reversal" not in session.name.lower()
-        ]
-        post_reversal = [
-            session for session in mouse.sessions if "reversal" in session.name.lower()
-        ]
-        assert len(pre_reversal) + len(post_reversal) == len(mouse.sessions)
-
-        rolling_performance_dict[mouse.name] = {
-            "pre_reversal": np.array(
-                rolling_performance(flatten_sessions(pre_reversal), window)
-            ),
-            "post_reversal": np.array(
-                rolling_performance(flatten_sessions(post_reversal), window)
-            ),
-        }
-
-    key = "pre_reversal"
-    to_plot = {
-        "NLGF": [
-            np.where(data[key] > 1)[0][0] + window
-            for mouse, data in rolling_performance_dict.items()
-            if get_genotype(mouse) == "NLGF"
-        ],
-        "Oligo-Bace1\nKnockout": [
-            np.where(data[key] > 1)[0][0] + window
-            for mouse, data in rolling_performance_dict.items()
-            if get_genotype(mouse) == "Oligo-BACE1-KO"
-        ],
-        "WT": [
-            np.where(data[key] > 1)[0][0] + window
-            for mouse, data in rolling_performance_dict.items()
-            if get_genotype(mouse) == "WT"
-        ],
+def filter_sessions_by_session_type(
+    mouse: MouseSummary, session_type: str = "learning"
+) -> List[SessionSummary]:
+    """Filter sessions by session type"""
+    session_categories: dict = {
+        "learning": [],
+        "reversal": [],
+        "recall": [],
+        "recall_reversal": [],
     }
 
-    plt.ylabel(f"Trials to criterion")
-    plt.title(key.replace("_", " ").capitalize())
+    assert session_type in session_categories.keys(), "Invalid session type provided"
+
+    for session in mouse.sessions:
+        type = get_session_type(session_name=session.name)
+        if type == "learning":
+            session_categories["learning"].append(session)
+        elif type == "reversal":
+            session_categories["reversal"].append(session)
+        elif type == "recall":
+            session_categories["recall"].append(session)
+        elif type == "recall_reversal":
+            session_categories["recall_reversal"].append(session)
+        else:
+            raise ValueError(f"Invalid session type: {type} for session {session.name}")
+
+    assert sum(len(lst) for lst in session_categories.values()) == len(
+        mouse.sessions
+    ), "Length of session categories does not match total number of sessions"
+
+    return session_categories[session_type]
+
+
+def create_metric_dict(
+    mice: List[MouseSummary],
+    metric_fn: Callable,
+    flat_sessions: bool = True,
+    include_reward_status: bool = True,
+    window: Optional[int] = None,
+) -> dict:
+    """Create a dictionary for metric data to be plotted.
+
+    Args:
+        mice (List[MouseSummary]):      A list of MouseSummary objects.
+        metric_fn (Callable):           A function which takes raw data and processes it for a metric, e.g. extracting speed.
+        flat_sessions (bool):           Whether to flatten sessions. Is needed for metrices which are computed on a trial-by-trial basis. Defaults to true.
+        include_reward_status (bool):   Whether to distinguish between rewarded and unrewarded trials. Defaults to true.
+        window (Optional[int]):         The window size for analyses (if needed). Defaults to None.
+    Returns:
+        dict:                           The dictionary of metric data to be plotted.
+    """
+    # Initiating the metric_dict dictionary
+    metric_dict = dict()
+    session_types = [
+        "learning",
+        "reversal",
+        "recall",
+        "recall_reversal",
+    ]  # TODO Probably shouldn't be hardcoded here
+
+    # Checks whether the given metric function takes 'window' as an argument to decide whether to use the 'window' input
+    metric_fn_params = inspect.signature(metric_fn).parameters
+    has_window_param = "window" in metric_fn_params
+    use_window = has_window_param and (window is not None)
+
+    # Iterating through the list of MouseSummary objects
+    for mouse in mice:
+        # Initiating a dictionary for each mouse called 'mouse_metrics'
+        mouse_metrics = dict()
+        # Creates a dictionary of session types with the session type as key and a list of SessionSummary objects as values
+        sessions = {
+            s_type: filter_sessions_by_session_type(mouse, s_type)
+            for s_type in session_types
+        }
+        reward_statuses = [True, False] if include_reward_status else [None]
+        # Iterating through the different session types
+        for s_type in session_types:
+            # Flattening the sessions to be a list of TrialSummary objects if specified
+            processed_sessions = (
+                flatten_sessions(sessions[s_type])
+                if flat_sessions
+                else sessions[s_type]
+            )
+            # Iterating through the reward statuses
+            for reward_status in reward_statuses:
+                # Creating a key for each category in the mouse_metric dictionary
+                # If reward status is to be included, the key will look like this: 'session_type_rewarded' / 'session_type_unrewarded'
+                # Else, the key will look like this: 'session_type'
+                key = (
+                    f"{s_type}_{"rewarded" if reward_status else "unrewarded"}"
+                    if include_reward_status
+                    else f"{s_type}"
+                )
+                # Build the kwargs
+                kwargs = {}
+                if include_reward_status:
+                    kwargs["rewarded"] = reward_status
+                if flat_sessions:
+                    kwargs["trials"] = processed_sessions
+                if not flat_sessions:
+                    kwargs["sessions"] = processed_sessions
+                if use_window:
+                    kwargs["window"] = window
+                mouse_metrics[key] = metric_fn(**kwargs)
+        # Adding the mouse_metrics dictionary as the value for the mouse_name in the overall metric_dict dictionary
+        metric_dict[mouse.name] = mouse_metrics
+    return metric_dict
+
+
+def prepare_plot_data(
+    metric_dict: dict,
+    session_type: str,
+    genotypes: list[str],
+    include_reward_status: bool = True,
+) -> dict:
+    """Prepare plot data by session type and reward status"""
+    if include_reward_status is False:
+        return {
+            f"{genotype}": [
+                data[f"{session_type}"]
+                for mouse, data in metric_dict.items()
+                if get_genotype(mouse) == genotype
+            ]
+            for genotype in genotypes
+        }
+    else:
+        return {
+            f"{genotype}_{reward_status}": [
+                data[f"{session_type}_{reward_status}"]
+                for mouse, data in metric_dict.items()
+                if data[f"{session_type}_{reward_status}"]
+                and get_genotype(mouse) == genotype
+            ]
+            for genotype in genotypes
+            for reward_status in ["rewarded", "unrewarded"]
+        }
+
+
+def plot_running_speed_summaries(
+    mice: List[MouseSummary],
+    session_type: str = "learning",
+    speed_function: Callable = running_speed_overall,
+) -> None:
+    running_speed_dict = create_metric_dict(
+        mice, speed_function, flat_sessions=True, include_reward_status=True
+    )
+
+    to_plot = prepare_plot_data(
+        running_speed_dict, session_type, ["NLGF", "Oligo-BACE1-KO", "WT"]
+    )
+
+    to_plot = {
+        key: [value for value in values if value is not None]
+        for key, values in to_plot.items()
+    }
+
+    plt.ylabel(f"Running speed (cm/s)")
+    plt.title(session_type.replace("_", " ").capitalize())
+
+    sns.boxplot(to_plot, showfliers=False)
+    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+
+    ax = plt.gca()
+    new_labels = [label.get_text().replace("_", "\n") for label in ax.get_xticklabels()]
+    ax.set_xticklabels(new_labels)
+
+    plt.tight_layout()
+    plt.savefig(
+        HERE.parent
+        / "plots"
+        / f"behaviour-summaries-{speed_function.__name__}-{session_type}"
+    )
+    plt.show()
+
+
+def plot_trial_time_summaries(mice: List[MouseSummary], session_type: str = "learning"):
+    trial_time_dict = create_metric_dict(
+        mice, trial_time, flat_sessions=True, include_reward_status=True
+    )
+
+    to_plot = prepare_plot_data(
+        trial_time_dict, session_type, ["NLGF", "Oligo-BACE1-KO", "WT"]
+    )
+
+    to_plot = {
+        key: [value for value in values if value is not None]
+        for key, values in to_plot.items()
+    }
+
+    plt.ylabel(f"Trial time (s)")
+    plt.title(session_type.replace("_", "").capitalize())
+
+    sns.boxplot(to_plot, showfliers=False)
+    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+
+    ax = plt.gca()
+    new_labels = [label.get_text().replace("_", "\n") for label in ax.get_xticklabels()]
+    ax.set_xticklabels(new_labels)
+
+    plt.tight_layout()
+    plt.savefig(
+        HERE.parent / "plots" / f"behaviour-summaries-trial-time-{session_type}"
+    )
+    plt.show()
+
+
+def plot_num_trials_summaries(mice: List[MouseSummary], session_type: str = "learning"):
+    num_trials_dict = create_metric_dict(
+        mice, trials_run, flat_sessions=False, include_reward_status=False
+    )
+
+    to_plot = prepare_plot_data(
+        num_trials_dict, session_type, ["NLGF", "Oligo-BACE1-KO", "WT"], False
+    )
+
+    to_plot = {
+        key: [value for value in values if value is not None]
+        for key, values in to_plot.items()
+    }
+    plt.ylabel(f"# Trials per Sessions")
+    plt.title(session_type.replace("_", " ").capitalize())
 
     sns.boxplot(to_plot, showfliers=False)
     sns.stripplot(to_plot, edgecolor="black", linewidth=1)
     plt.tight_layout()
-    plt.savefig(HERE.parent / "plots" / f"behaviour-summaries-{key}")
+    plt.savefig(
+        HERE.parent / "plots" / f"behaviour-summaries-num-trials-{session_type}"
+    )
+    plt.show()
+
+
+def plot_performance_summaries(
+    mice: List[MouseSummary], session_type: str, group_by: list[str], window: int = 50
+):
+    rolling_performance_dict = create_metric_dict(
+        mice, rolling_performance, True, False, window
+    )
+    to_plot: Dict[str, list] = dict()
+
+    for mouse in mice:
+        data = rolling_performance_dict[mouse.name]
+        group_label = "\n".join(getattr(mouse, attr) for attr in group_by)
+        if group_label not in to_plot:
+            to_plot[group_label] = list()
+        if session_type in data:
+            try:
+                session_data = np.array(data[session_type])
+                first_threshold_idx = np.where(session_data > 1)[0][0] + window
+                to_plot[group_label].append(first_threshold_idx)
+            except IndexError:
+                print(f"There us no valid data for {mouse.name} in {session_type}")
+                continue
+
+    plt.ylabel(f"Trials to criterion")
+    plt.title(session_type.replace("_", " ").capitalize())
+
+    sns.boxplot(to_plot, showfliers=False)
+    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+    plt.tight_layout()
+    group_suffix = "-".join(group_by)
+    plt.savefig(
+        HERE.parent / "plots" / f"behaviour-summaries-{group_suffix}-{session_type}"
+    )
+    plt.show()
+
+
+def get_num_to_x(
+    sessions: List[SessionSummary], excluded_session_types: List[str]
+) -> int:
+    return sum(
+        len(session.trials)
+        for session in sessions
+        if get_session_type(session.name) not in excluded_session_types
+    )
+
+
+def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
+    # TODO: Have a think: Should we compute chance level for each mouse?
+    chance = get_chance_level([mouse], window=window)
+    plt.figure()
+    plot_rolling_performance(
+        mouse.sessions,
+        window,
+        (
+            np.percentile(chance, 1).astype(float),
+            np.percentile(chance, 99).astype(float),
+        ),
+        add_text_to_chance=True,
+    )
+    phases = [
+        {
+            "name": "reversal",
+            "label": "Reversal\nStarts",
+            "excluded_session_types": ["reversal", "recall", "recall_reversal"],
+            "colour": sns.color_palette()[0],
+        },
+        {
+            "name": "recall",
+            "label": "Memory\nRecall\nStarts",
+            "excluded_session_types": ["recall", "recall_reversal"],
+            "colour": sns.color_palette()[1],
+        },
+        {
+            "name": "recall_reversal",
+            "label": "Recall\nReversal\nStarts",
+            "excluded_session_types": ["recall_reversal"],
+            "colour": sns.color_palette()[2],
+        },
+    ]
+    for phase in phases:
+        num_to_x = get_num_to_x(
+            sessions=mouse.sessions,
+            excluded_session_types=phase["excluded_session_types"],
+        )
+        plt.axvline(num_to_x - window, color=phase["colour"], linestyle="--")
+        plt.text(
+            num_to_x - window + 10,
+            2,
+            phase["label"],
+            color=phase["colour"],
+            fontsize=15,
+        )
+    plt.title(mouse.name)
+    plt.tight_layout()
+    plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.png")
     plt.show()
 
 
@@ -319,23 +629,25 @@ if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
-    redo = False
+    redo = True
+
+    # TODO: Probably should check that every mouse is unique
     for mouse_name in [
-        # "JB011",
-        # "JB012",
+        "JB011",
+        "JB012",
         # "JB013",
-        # "JB014",
+        "JB014",
         # "JB015",
         # "JB016",
-        "JB017",
-        # "JB018",
+        # "JB017",
+        "JB018",
         # "JB019",
         # "JB020",
         # "JB021",
         # "JB022",
         # "JB023",
         # "JB024",
-        # "JB025",
+        "JB025",
         # "JB026",
         # "JB027",
     ]:
@@ -355,39 +667,8 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    window = 50
-
-    plot_performance_summaries(mice)
-    plt.show()
-
-    chance = get_chance_level(mice, window=window)
-
-    mouse = mice[0]
-    plt.figure()
-    plot_rolling_performance(
-        mouse.sessions,
-        window,
-        (
-            np.percentile(chance, 1).astype(float),
-            np.percentile(chance, 99).astype(float),
-        ),
-        add_text_to_chance=True,
-    )
-
-    num_to_reversal = sum(
-        len(session.trials)
-        for session in mouse.sessions
-        if "reversal" not in session.name.lower()
-    )
-
-    plt.axvline(num_to_reversal - window, color=sns.color_palette()[1], linestyle="--")
-    plt.text(
-        num_to_reversal - window + 10,
-        2,
-        "Reversal\nStarts",
-        color=sns.color_palette()[1],
-        fontsize=15,
-    )
-    plt.tight_layout()
-    # plt.savefig(HERE.parent / "plots" / "example-mouse-performance.png")
-    plt.show()
+    plot_performance_summaries(mice, "recall_reversal", ["genotype", "sex"], window=40)
+    plot_mouse_performance(mice[3])
+    plot_running_speed_summaries(mice, "recall", running_speed_AZ)
+    plot_trial_time_summaries(mice, "learning")
+    plot_num_trials_summaries(mice, "learning")

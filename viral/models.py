@@ -27,9 +27,12 @@ class SpeedPosition(BaseModel):
 
 class TrialSummary(BaseModel):
     speed_AZ: float
+    speed_nonAZ: float
+    trial_speed: float
     licks_AZ: int
     rewarded: bool
     reward_drunk: bool
+    trial_time_overall: float
 
 
 class SessionSummary(BaseModel):
@@ -38,15 +41,35 @@ class SessionSummary(BaseModel):
     rewarded_licks: List[int]
     unrewarded_licks: List[int]
 
+    @computed_field
+    @property
+    def num_trials(self) -> int:
+        return len(self.trials)
+
+    @computed_field
+    @property
+    def num_rewarded_trials(self) -> int:
+        return sum(trial.rewarded for trial in self.trials)
+
+    @computed_field
+    @property
+    def num_unrewarded_trials(self) -> int:
+        return self.num_trials - self.num_rewarded_trials
+
 
 class MouseSummary(BaseModel):
     name: str
+    genotype: str
+    sex: str
+    setup: str  # TODO As of now, we had one mouse which had to switch for the recall, think about a fix
     sessions: List[SessionSummary]
 
 
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
+    trial_start_closest_frame: float | None = None
+    trial_end_closest_frame: float | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]

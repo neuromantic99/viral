@@ -10,6 +10,7 @@ from viral.utils import (
     find_chunk,
     get_speed_positions,
     threshold_detect_edges,
+    get_session_type,
 )
 
 
@@ -220,3 +221,25 @@ def test_chunk_len_correct() -> None:
     assert len(chunk_lens) == 3
     assert chunk_lens[0] == 3 and chunk_lens[1] == 4 and chunk_lens[2] == 3
     assert len(frame_times) == np.sum(frame_clock == 5)
+
+
+def test_get_session_type():
+    session_name = "Learning day 1"
+    expected = "learning"
+    result = get_session_type(session_name)
+    assert result == expected
+
+    session_name = "Reversal learning day 2"
+    expected = "reversal"
+    result = get_session_type(session_name)
+    assert result == expected
+
+    session_name = "Recall learning day 3"
+    expected = "recall"
+    result = get_session_type(session_name)
+    assert result == expected
+
+    session_name = "Recall reversal learning day 4"
+    expected = "recall_reversal"
+    result = get_session_type(session_name)
+    assert result == expected
