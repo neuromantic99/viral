@@ -114,6 +114,17 @@ def activity_trial_speed(
     return np.array(dff_speed).T
 
 
+# TODO: for sanity testing, remove eventually
+def create_random_activity_data(cells, speed_bins) -> np.ndarray:
+    data = np.random.rand(cells, speed_bins)
+    for i in range(cells):
+        data[i] += np.exp(-0.5 * ((np.arange(speed_bins) - i) ** 2) / 2)
+    data /= data.sum(axis=1, keepdims=True)
+    peak_indices = np.argmax(data, axis=1)
+    sorted_order = np.argsort(peak_indices)
+    return data[sorted_order, :]
+
+
 def get_speed_activity(
     trials: List[TrialInfo],
     aligned_trial_frames: np.ndarray,
@@ -218,7 +229,9 @@ def get_speed_activity(
         metrices_padded = normalize(
             np.nanmean(pad_to_max_length_bins(metrices_raw), axis=0), axis=1
         )
-        return metrices_padded
+        peak_indices = np.argmax(metrices_padded, axis=1)
+        sorted_order = np.argsort(peak_indices)
+        return metrices_padded[sorted_order, :]
 
 
 # TODO: Test get_speed_activity
@@ -240,6 +253,8 @@ def speed_cells(
     plt.figure()
     plt.title("Rewarded trials")
     # TODO: add train-test split back in!
+    # Testing with artificial data
+    # speed_activity_rewarded = create_random_activity_data(cells=100, speed_bins=10)
     speed_activity_rewarded = get_speed_activity(
         [
             trial
@@ -250,7 +265,7 @@ def speed_cells(
         dff,
         wheel_circumference,
         bin_size,
-        False,
+        True,
     )
     speed_activity_rewarded = speed_activity_rewarded[
         :, ~np.isnan(speed_activity_rewarded).all(axis=0)
@@ -293,7 +308,7 @@ def speed_cells(
         dff,
         wheel_circumference,
         bin_size,
-        False,
+        True,
     )
     speed_activity_unrewarded = speed_activity_unrewarded[
         :, ~np.isnan(speed_activity_unrewarded).all(axis=0)
