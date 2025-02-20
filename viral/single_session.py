@@ -49,12 +49,32 @@ def load_data(session_path: Path) -> List[TrialInfo]:
 def plot_lick_raster(
     lick_positions: List[np.ndarray],
     title: str,
-    rolling_y_lim: float | None = None,
+    y_max_histogram: float | None = None,
     jitter: float = 0.0,
     x_label: str = "Position (cm)",
     x_max: int = 200,
     bins: np.ndarray | None = None,
 ) -> float | None:
+    """Plots a raster of lick times with a row for each trial.
+    Also plots a histogram, a count of the number of licks in each bin across all trials.
+
+    Args:
+        lick_positions: List of n_trials length containing np arrays of lick times
+        title: plot title
+        y_max_histogram: Set the y max of the histogram, allows for axis height matching across multiple
+                         instances of this plot
+        jitter: Apply noise to the y-position of the raster points, allows you to resolve multiple licks
+                in the same x position in the same trial.
+        x_label: shared across the whole plot
+        x_max: of both plots
+        bins: bin edges for the histogram
+
+    Returns
+        A float containg the maximum bin size of the histogram. Allows you to match histogram heights across
+        multiple plot instances without guessing the height before hand
+
+    """
+
     f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     f.suptitle(title)
     # f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
@@ -82,15 +102,32 @@ def plot_lick_raster(
     n, _, _ = a1.hist(all_trials, bins)
     a1.set_ylabel("Total # licks")
     a1.set_xlabel(x_label)
-    a1.set_ylim(0, rolling_y_lim)
+    a1.set_ylim(0, y_max_histogram)
     a1.set_xlim(0, x_max)
     a1.axvspan(180, 200, color="gray", alpha=0.5)
 
     return max(n)
 
 
-def get_anticipatory_licking(lick_positions: np.ndarray) -> int:
-    return np.sum(np.logical_and(lick_positions > 150, lick_positions < 179))
+def get_anticipatory_licking(trial: TrialInfo, wheel_circumference: float) -> int:
+
+    lick_positions = licks_to_position(trial, wheel_circumference)
+    lick_times = np.array(
+        [event.start_time for event in trial.events_info if event.name == "Port1In"]
+    )
+    assert len(lick_positions) == len(lick_times)
+
+    (reward_state_time,) = (
+        state.start_time for state in trial.states_info if state.name == "reward_on1"
+    )
+
+    # 0.1 added to account roughly for the time the water takes to get to the mouse
+    return np.sum(
+        np.logical_and(
+            np.logical_and(lick_positions > 150, lick_positions < 180),
+            lick_times < reward_state_time + 0.1,
+        )
+    )
 
 
 def plot_trial_length(trials: List[TrialInfo]) -> None:
@@ -143,26 +180,41 @@ def plot_previous_trial_dependent_licking(
     trials: List[TrialInfo], wheel_circumference: float
 ) -> None:
     prev_rewarded = [
-        licks_to_position(trials[idx], wheel_circumference)
+        trials[idx]
         for idx in range(len(trials))
-        if trials[idx - 1].texture_rewarded
+        if trials[idx - 1].texture_rewarded and idx > 0
     ]
     prev_unrewarded = [
-        licks_to_position(trials[idx], wheel_circumference)
+        trials[idx]
         for idx in range(len(trials))
-        if not trials[idx - 1].texture_rewarded
+        if not trials[idx - 1].texture_rewarded and idx > 0
     ]
+
     jitter = 0
-    y_max = plot_lick_raster(prev_rewarded, "prev_rewaredd", None, jitter=jitter)
-    plot_lick_raster(prev_unrewarded, "prev_unrewarded", None, jitter=jitter)
+    plot_lick_raster(
+        [licks_to_position(trial, wheel_circumference) for trial in prev_rewarded],
+        "prev_rewarded",
+        None,
+        jitter=jitter,
+    )
+    plot_lick_raster(
+        [licks_to_position(trial, wheel_circumference) for trial in prev_unrewarded],
+        "prev_unrewarded",
+        None,
+        jitter=jitter,
+    )
 
     plt.figure()
     plt.title("Anticipatory licking")
     sns.boxplot(
         {
-            "rewarded": [get_anticipatory_licking(trial) for trial in prev_rewarded],
+            "rewarded": [
+                get_anticipatory_licking(trial, wheel_circumference=wheel_circumference)
+                for trial in prev_rewarded
+            ],
             "unrewarded": [
-                get_anticipatory_licking(trial) for trial in prev_unrewarded
+                get_anticipatory_licking(trial, wheel_circumference=wheel_circumference)
+                for trial in prev_unrewarded
             ],
         }
     )
@@ -181,28 +233,36 @@ def plot_licking_all_trials(
     plt.show()
 
 
-def plot_rewarded_vs_unrewarded_licking(trials: List[TrialInfo]) -> None:
+def plot_rewarded_vs_unrewarded_licking(
+    trials: List[TrialInfo], wheel_circumference: float
+) -> None:
 
-    rewarded = [
-        licks_to_position(trial, wheel_circumference)
-        for trial in trials
-        if trial.texture_rewarded
-    ]
-    unrewarded = [
-        licks_to_position(trial, wheel_circumference)
-        for trial in trials
-        if not trial.texture_rewarded
-    ]
+    rewarded = [trial for trial in trials if trial.texture_rewarded]
+    unrewarded = [trial for trial in trials if not trial.texture_rewarded]
 
     jitter = 0.1
-    y_max = plot_lick_raster(rewarded, "Rewarded Trials", None, jitter=jitter)
-    plot_lick_raster(unrewarded, "Unrewarded Trials", y_max, jitter=jitter)
+    y_max = plot_lick_raster(
+        [licks_to_position(trial, wheel_circumference) for trial in rewarded],
+        "Rewarded Trials",
+        None,
+        jitter=jitter,
+    )
+    plot_lick_raster(
+        [licks_to_position(trial, wheel_circumference) for trial in unrewarded],
+        "Unrewarded Trials",
+        y_max,
+        jitter=jitter,
+    )
 
     plt.figure()
     plt.title("Anticipatory licking")
 
-    rewarded_anticipatory = [get_anticipatory_licking(trial) for trial in rewarded]
-    unrewarded_anticipatory = [get_anticipatory_licking(trial) for trial in unrewarded]
+    rewarded_anticipatory = [
+        get_anticipatory_licking(trial, wheel_circumference) for trial in rewarded
+    ]
+    unrewarded_anticipatory = [
+        get_anticipatory_licking(trial, wheel_circumference) for trial in unrewarded
+    ]
 
     sns.boxplot(
         {
@@ -249,7 +309,9 @@ def plot_position_habituation(
     plt.ylabel("Position (m)")
 
 
-def plot_speed_all_trials(trials: List[TrialInfo], sampling_rate: int) -> None:
+def plot_speed_all_trials(
+    trials: List[TrialInfo], sampling_rate: int, wheel_circumference: float
+) -> None:
     plt.figure(figsize=(10, 6))
 
     first_position = 0
@@ -416,9 +478,7 @@ def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummar
                 )
             )
         ),
-        licks_AZ=get_anticipatory_licking(
-            licks_to_position(trial, wheel_circumference)
-        ),
+        licks_AZ=get_anticipatory_licking(trial, wheel_circumference),
         rewarded=trial.texture_rewarded,
         reward_drunk=reward_drunk(trial, wheel_circumference),
         trial_time_overall=trial.trial_end_time - trial.trial_start_time,
@@ -466,8 +526,7 @@ def az_speed_histogram(trial_summaries: List[TrialSummary]) -> None:
     plt.show()
 
 
-if __name__ == "__main__":
-
+def main() -> None:
     trials = load_data(SESSION_PATH)
 
     metadata = gsheet2df(SPREADSHEET_ID, MOUSE, 1)
@@ -496,8 +555,14 @@ if __name__ == "__main__":
         print(
             f"Percent Timed Out: {(total_number_trials -  len(trials) ) / total_number_trials}"
         )
-        plot_rewarded_vs_unrewarded_licking(trials)
+        plot_rewarded_vs_unrewarded_licking(
+            trials, wheel_circumference=wheel_circumference
+        )
         plot_speed_reward_unrewarded(
             trials, sampling_rate=30, wheel_circumference=wheel_circumference
         )
     plt.show()
+
+
+if __name__ == "__main__":
+    main()

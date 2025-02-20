@@ -183,6 +183,17 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
+def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
+    """Return numpy array with the length of the longest sequence, padded with NaN values"""
+    max_len = max(len(seq) for seq in sequences)
+    return np.array(
+        [
+            np.pad(seq, (0, max_len - len(seq)), constant_values=fill_value)
+            for seq in sequences
+        ]
+    )
+
+
 def get_wheel_circumference_from_rig(rig: str) -> float:
     if rig in {"2P", "2P_1.5"}:
         return 34.7

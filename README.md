@@ -23,8 +23,8 @@
 * Go to oauth consent screen and put your app into production from testing
 
 
-## Multisession analysis
-* Update the DATA_PATH in constants.py to the path to the server
+## Constants
+* You will need to set your local path to the server. To do this, make a copy of constants_TEMPLATE.py and rename it to constants.py. Then fill out appropriate values.
 
 
 
