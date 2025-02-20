@@ -18,4 +18,4 @@ ENCODER_TICKS_PER_TURN = 360
 # The ID of your google sheet can be found in the URL:
 # https://docs.google.com/spreadsheets/d/ID-GOES-HERE
 
-SPREADSHEET_ID = "YOUR-SPREADSHEET-IDk"
+SPREADSHEET_ID = "YOUR-SPREADSHEET-ID"
