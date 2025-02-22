@@ -3,9 +3,11 @@ import logging
 from pathlib import Path
 import random
 import sys
+import os
 from typing import List
-from scipy.stats import zscore
+from scipy.stats import zscore, pearsonr
 import seaborn as sns
+import math
 
 
 # Allow you to run the file directly, remove if exporting as a proper module
@@ -50,27 +52,36 @@ from viral.rastermap_utils import (
 
 def activity_trial_speed(
     trial: TrialInfo,
-    dff: np.ndarray,
+    signal: np.ndarray,
     trial_frames: np.ndarray,
     wheel_circumference: float,
+    aggregation_fcn: str = "mean",
     bin_size: int = 5,
+    return_raw: bool = False,
     verbose: bool = False,
 ) -> np.ndarray:
     """Bin frames with their respective activity according to speed and return the activity for each cell.
 
     Args:
         trial (TrialInfo):              A TrialInfo object representing the trial to be analysed.
-        trial_frames (np.ndarray):      Numpy array representing the frames in the trial.
+        signal (np.ndarray):            A Numpy array with the signal (e.g. dff or spks) for the trial.
+        trial_frames (np.ndarray):      A Numpy array representing the frames in the trial.
         wheel_circumference (float):    The circumference of the wheel on the rig used in centimetres.
+        aggregation_fcn (str):          The aggregation function to be used (mean or sum). Defaults to "mean".
         bin_size (int):                 Bin size for speed binning. Defaults to 5.
+        return_raw (bool):              Whether to return the raw activity. Defaults to False.
         verbose (bool):                 Whether to print additional information. Defaults to False.
 
     Returns:
-        np.ndarray:                     A Numpy array of shape (cells, binned_speeds) where:
+        - If return_raw=True: A 3D Numpy array of shape(cells, speed_bins, frames) where:
+            - The first dimension corresponds to cells.
+            - The second dimension corresponds to speed bins.
+            - The third dimension corresponds to frames within each speed bin (padded with NaNs).
+        - If `return_raw=False`: A 2D array of shape (cells, speed_bins) where:
             - Rows correspond to cells.
             - Columns correspond to speed bins.
-            - Values represent activity of given cell in given speed bin.
-            - NaN values can be returned if no frame falls into given speed bin.
+            - Values represent the aggregated activity (mean or sum) of each cell in each speed bin.
+            - NaN values appear in bins with no associated frames.
 
     """
 
@@ -88,7 +99,7 @@ def activity_trial_speed(
 
     frames = np.arange(0, len(trial_frames), 1)  # Continuous frames to index the dff
 
-    dff_speed = list()
+    signal_speed = list()
 
     for bin_start in range(0, max_speed, bin_size):
         # search for indices of frame that have the bin speed
@@ -101,17 +112,38 @@ def activity_trial_speed(
             else frames[speed >= bin_start]
         )
 
-        dff_bin = dff[:, frame_idx_bin]
+        signal_bin = signal[:, frame_idx_bin]
 
         if verbose:
             print(f"bin_start: {bin_start}")
             print(f"bin_end: {bin_start + bin_size}")
             print(f"n_frames in bin: {len(frame_idx_bin)}")
 
-        # Can and will return NaN for speed bins without frames!
-        dff_speed.append(np.mean(dff_bin, axis=1))
+        if return_raw:
+            signal_speed.append(signal_bin)
+        else:
+            # Can and will return NaN for speed bins without frames!
+            if aggregation_fcn == "mean":
+                signal_speed.append(np.mean(signal_bin, axis=1))
+            elif aggregation_fcn == "sum":
+                signal_speed.append(np.sum(signal_bin, axis=1))
+            else:
+                raise AttributeError("aggregation_fcn must be either 'mean' or 'sum'")
 
-    return np.array(dff_speed).T
+    if return_raw:
+        # max_cols = max(arr.shape[1] for arr in signal_speed)
+        # padded_arrays = [
+        #     np.pad(
+        #         arr,
+        #         ((0, 0), (0, max_cols - arr.shape[1])),
+        #         constant_values=np.nan,
+        #     )
+        #     for arr in signal_speed
+        # ]
+        return pad_to_max_length_bins(signal_speed).transpose(1, 0, 2)
+        # return np.array(padded_arrays).transpose(1, 0, 2)
+    else:
+        return np.array(signal_speed).T
 
 
 # TODO: for sanity testing, remove eventually
@@ -336,36 +368,115 @@ def speed_cells(
     )
 
 
-# TODO: Plot deconvoluted spikes (-> mean firing rate) against speed
-# 1) load deconvoluted signal
-# 2) compute mean firing rate
-def get_firing_rate(spks: np.ndarray) -> np.ndarray:
-    return np.sum(spks, axis=0)
-
-
+# TODO: Testing!
 def get_speed_firing_rate(
-    session: Cached2pSession, wheel_circumference: float, bin_size: int = 10
-) -> None:
-    trials = [trial for trial in session.trials if trial_is_imaged(trial)]
-    spks = get_spks(session.mouse_name, session.date)
-    aligned_trial_frames = align_trial_frames(trials, False)
-    trials_spks = get_signal_for_trials(spks, aligned_trial_frames)
+    trials: List[TrialInfo],
+    aligned_trial_frames: np.ndarray,
+    spks: np.ndarray,
+    wheel_circumference: float,
+    bin_size: int = 5,
+) -> np.ndarray:
+    spks_trials = get_signal_for_trials(spks, aligned_trial_frames)
+    speed_firing_rates_list = list()
     for idx, trial in enumerate(trials):
-        frame_position = get_frame_position(
-            trial, aligned_trial_frames[idx, :], wheel_circumference, False
+        trial_start_end_frames = aligned_trial_frames[idx, [0, 1]]
+        speed_activity = activity_trial_speed(
+            trial,
+            spks_trials[idx],
+            np.arange(trial_start_end_frames[0], trial_start_end_frames[1]),
+            wheel_circumference,
+            bin_size=bin_size,
+            return_raw=True,
         )
-        frame_speed = get_speed_frame(frame_position)
-        frame_spks = trials_spks[idx]
-        firing_rate = get_firing_rate(frame_spks)
-        speed_firing_rate = np.column_stack([frame_speed[:, 1], firing_rate[]])
-    plt.figure()
-    plt.plot()
+        speed_firing_rate = np.nansum(speed_activity, axis=2) / np.sum(
+            ~np.isnan(speed_activity), axis=2
+        )
+        speed_firing_rates_list.append(speed_firing_rate)
+    speed_firing_rates = pad_to_max_length_bins(speed_firing_rates_list)
+    return np.nanmean(speed_firing_rates, axis=0)
 
-# TODO: You will have to bin over frames, I am afraid
 
-# 3) prepare data
-# 4) plot data
-# see Gois et al. 2018 (rat hippocampus speed cells)
+def plot_speed_firing_rate(session: Cached2pSession) -> None:
+    # TODO: Add bin size, better path handling
+    if not os.path.exists(
+        Path(HERE.parent)
+        / "data"
+        / f"{session.mouse_name}-{session.date}-speed_firing_rate.npy"
+    ):
+        spks = get_spks(session.mouse_name, session.date)
+        trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+        aligned_trial_frames = align_trial_frames(trials)
+        speed_firing_rate = get_speed_firing_rate(
+            trials, aligned_trial_frames, spks, 34.7, 5
+        )
+        np.save(
+            Path(HERE.parent)
+            / "data"
+            / f"{session.mouse_name}-{session.date}-speed_firing_rate.npy",
+            speed_firing_rate,
+        )
+    else:
+        speed_firing_rate = np.load(
+            Path(HERE.parent)
+            / "data"
+            / f"{session.mouse_name}-{session.date}-speed_firing_rate.npy"
+        )
+
+    speed_bins = np.arange(speed_firing_rate.shape[1])
+    pearson_values = list()
+    p_values = list()
+
+    for cell_idx in range(speed_firing_rate.shape[0]):
+        firing_rates = speed_firing_rate[cell_idx, :]
+        valid_indices = ~np.isnan(firing_rates)
+        valid_speeds = speed_bins[valid_indices]
+        valid_firing_rates = firing_rates[valid_indices]
+
+        pearson, p_value = pearsonr(valid_speeds, valid_firing_rates)
+        pearson_values.append(pearson)
+        p_values.append(p_value)
+
+    sorted_order = np.argsort(np.abs(pearson_values))[::-1]
+    speed_firing_rate = speed_firing_rate[sorted_order, :]
+    pearson_arr = np.array(pearson_values)[sorted_order]
+    p_arr = np.array(p_values)[sorted_order]
+
+    n_max_cells = 10
+    n_cols = 5
+    n_rows = math.ceil(n_max_cells / n_cols)
+
+    max_cells = speed_firing_rate[:n_max_cells, :]
+    fig, ax = plt.subplots(
+        ncols=n_cols, nrows=n_rows, figsize=(n_cols * 10, n_rows * 5)
+    )
+    ax = np.ravel(ax)
+    for i in range(n_max_cells):
+        firing_rates = max_cells[i, :]
+        ax[i].scatter(speed_bins, firing_rates, s=10)
+        ax[i].text(
+            0.50,
+            0.95,
+            f"r = {pearson_arr[i]:.2f}\np = {p_arr[i]:.2f}",
+            transform=ax[i].transAxes,
+            fontsize=8,
+            verticalalignment="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="black"),
+        )
+        ax[i].set_xticks(speed_bins)
+        ax[i].set_xticklabels([f"{x * 5}" for x in speed_bins], fontsize=8)
+        ax[i].set_xlabel("Speed (cm/s)")
+        ax[i].set_ylabel("Firing Rate")
+        ax[i].set_title(f"Cell {i + 1}")
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig(
+        Path(HERE.parent)
+        / "plots"
+        / "speed_firing_rate"
+        / f"{session.mouse_name}-{session.date}-speed_firing_rate.png",
+        dpi=300,
+    )
+
 
 if __name__ == "__main__":
 
@@ -379,20 +490,21 @@ if __name__ == "__main__":
         f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
     )
 
-    dff = get_dff(mouse, date)
-    # dff = "/Volumes/hard_drive/2024-11-03_JB011"
+    # dff = get_dff(mouse, date)
 
-    assert (
-        max(
-            trial.states_info[-1].closest_frame_start
-            for trial in session.trials
-            if trial.states_info[-1].closest_frame_start is not None
-        )
-        < dff.shape[1]
-    ), "Tiff is too short"
+    # assert (
+    #     max(
+    #         trial.states_info[-1].closest_frame_start
+    #         for trial in session.trials
+    #         if trial.states_info[-1].closest_frame_start is not None
+    #     )
+    #     < dff.shape[1]
+    # ), "Tiff is too short"
 
     if "unsupervised" in session.session_type.lower():
         # TODO: speed cells for unsupervised sessions
-        speed_cells(session, dff, 34.7)
+        print()
+        # speed_cells(session, dff, 34.7)
     else:
-        speed_cells(session, dff, 34.7)
+        # speed_cells(session, dff, 34.7)
+        plot_speed_firing_rate(session)
