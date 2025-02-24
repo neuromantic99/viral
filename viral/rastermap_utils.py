@@ -3,6 +3,7 @@ import sys
 import random
 from pathlib import Path
 from scipy.interpolate import interp1d
+from sklearn.preprocessing import MinMaxScaler
 from typing import List
 
 HERE = Path(__file__).parent
@@ -30,13 +31,11 @@ def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray]:
     return spks, xpos, ypos
 
 
-def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray:
+def align_trial_frames(trials: List[TrialInfo]) -> np.ndarray:
     """Align trial frames and return array with trial frames and reward condition.
 
     Args:
         trials (List[TrialInfo]):       A list of TrialInfo objects.
-        ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to False.
-                                        If ITI, is False, then trial end is defined as the start of the ITI
 
     Returns:
         np.ndarray:                     A Numpy array of shape (n_trials, 3). Each row representing a trial with
@@ -50,9 +49,6 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray
             for trial in trials
         ]
     )
-    if not ITI:
-        ITI_start_frames = np.array([get_ITI_start_frame(trial) for trial in trials])
-        trial_frames[:, 1] = ITI_start_frames
     assert (
         len(trials) == trial_frames.shape[0]
     ), "Number of trials does not match number of trial times"
@@ -64,7 +60,7 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray
     return np.column_stack((trial_frames, rewarded))
 
 
-def get_ITI_start_frame(trial: TrialInfo) -> float:
+def get_ITI_start_frame(trial: TrialInfo) -> int:
     for state in trial.states_info:
         if state.name == "ITI":
             return state.closest_frame_start
@@ -86,7 +82,6 @@ def get_frame_position(
     trial: TrialInfo,
     trial_frames: np.ndarray,
     wheel_circumference: float,
-    ITI: bool = False,
 ) -> np.ndarray:
     """Get the position for every frame and return frames and positions as array.
 
@@ -94,30 +89,26 @@ def get_frame_position(
         trial (TrialInfo):              A TrialInfo object representing the trial to be analysed.
         trial_frames (np.ndarray):      Numpy array representing the frames in the trial.
         wheel_circumference (float):    The circumference of the wheel on the rig used in centimetres.
-        ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to False.
 
     Returns:
         np.ndarray:                     A Numpy array of shape (frames, 2). Each row representing a frame with:
             frame_idx (int)
             position (float)
     """
-    if ITI:
-        frames_start_end = np.array(
-            [
-                [state.closest_frame_start, state.closest_frame_end]
-                for state in trial.states_info
-                if state.name
-                in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
-            ]
-        )
-    else:
-        frames_start_end = np.array(
-            [
-                [state.closest_frame_start, state.closest_frame_end]
-                for state in trial.states_info
-                if state.name in ["trigger_panda", "trigger_panda_post_reward"]
-            ]
-        )
+    # There is an old version of our IBL rig code which does not store any positions during the ITI
+    ITI_states = {state.name for state in trial.states_info if "ITI" in state.name}
+    assert len(ITI_states) != 0, "No ITI state found"
+    ITI_patch = True if "ITI" in ITI_states else False
+    print(ITI_patch)
+    frames_start_end = np.array(
+        [
+            [state.closest_frame_start, state.closest_frame_end]
+            for state in trial.states_info
+            if state.name in ["trigger_panda", "trigger_panda_post_reward"]
+            or (state.name == "trigger_panda_ITI" and not ITI_patch)
+        ]
+    )
+
     degrees = np.array(trial.rotary_encoder_position)
     positions = degrees_to_cm(degrees, wheel_circumference)
     assert len(frames_start_end) == len(positions)
@@ -127,6 +118,7 @@ def get_frame_position(
         frames_positions_combined.append([frames_start_end[i, 1], positions[i]])
     frames_positions_combined = np.array(frames_positions_combined)
     unique_frames_positions = np.unique(frames_positions_combined, axis=0)
+
     # Backfilling with the first recorded position as there is no position being recorded for the first frame, hence, the interpolation would error
     if trial_frames[0] < unique_frames_positions[0, 0]:
         first_position = np.array([[trial_frames[0], unique_frames_positions[0, 1]]])
@@ -143,6 +135,16 @@ def get_frame_position(
         fill_value="interpolate",
     )
     interpolated_positions = interp_func(trial_frames)
+
+    if ITI_patch:
+        # If patching is needed, fill up the ITI frames with positions zero
+        ITI_start_frame = get_ITI_start_frame(trial)
+        ITI_end_frame = trial.trial_end_closest_frame
+        ITI_frame_indices = np.where(
+            (trial_frames >= ITI_start_frame) & (trial_frames <= ITI_end_frame)
+        )[0]
+        interpolated_positions[ITI_frame_indices] = 0
+
     assert (interpolated_positions >= -15).all(), "one or more position(s) are negative"
     # Wanted to account for the mouse rolling backwardwards/forwards resulting in slightly negative values
     # 15 is obviously a bit arbitrary
@@ -383,14 +385,16 @@ def save_behavioural_data(
         / "cached_for_rastermap"
         / f"{session.mouse_name}_{session.date}_corridor_behavior.npz"
     )
+    # MinMax scale running speed and VR position
+    scaler = MinMaxScaler(feature_range=(0, 1))
     np.savez(
         behavior_path,
         corridor_starts=corridor_starts_combined,
         corridor_widths=corridor_widths_combined,
-        VRpos=positions_combined[:, 1],
+        VRpos=(scaler.fit_transform(positions_combined[:, 1].reshape(-1, 1))).flatten(),
         reward_inds=rewards_combined,
         lick_inds=licks_combined,
-        run=speed_combined[:, 1],
+        run=(scaler.fit_transform(speed_combined[:, 1].reshape(-1, 1))).flatten(),
         corridor_imgs=np.zeros((2, 1200, 100)),  # TODO: placeholder, remove eventually
         sound_inds=np.zeros(1),  # TODO: placeholder, remove eventually
     )

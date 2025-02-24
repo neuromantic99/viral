@@ -37,25 +37,15 @@ def mock_trials() -> list[Mock]:
     return [trial1, trial2]
 
 
-def test_align_trial_frames_no_ITI(mock_trials: List[Mock]) -> None:
+def test_align_trial_frames(mock_trials: List[Mock]) -> None:
     """Test align_trial_frames function without ITI."""
 
-    result = align_trial_frames(mock_trials, ITI=False)
-    expected = np.array([[10, 40, True], [60, 90, False]])
-
-    assert np.array_equal(
-        result, expected
-    ), "align_trial_frames output does not match expected values without ITI"
-
-
-def test_align_trial_frames_with_ITI(mock_trials: Mock) -> None:
-    """Test align_trial_frames function with ITI included."""
-    result = align_trial_frames(mock_trials, ITI=True)
+    result = align_trial_frames(mock_trials)
     expected = np.array([[10, 50, True], [60, 100, False]])
 
     assert np.array_equal(
         result, expected
-    ), "align_trial_frames output does not match expected values with ITI"
+    ), "align_trial_frames output does not match expected values without ITI"
 
 
 def test_align_trial_frames_overlapping() -> None:
@@ -78,13 +68,15 @@ def test_align_trial_frames_overlapping() -> None:
     trial2.states_info = [state2]
 
     with pytest.raises(AssertionError, match="Overlapping frames for trials"):
-        align_trial_frames([trial1, trial2], ITI=False)
+        align_trial_frames([trial1, trial2])
 
 
-def test_get_frame_position() -> None:
-    """Test that the position for each frame is given correctly."""
+def test_get_frame_position_old_ITI() -> None:
+    """Test that the position for each frame is given correctly (old ITI states)."""
     trial = Mock()
     trial.rotary_encoder_position = [0, 90, 180]
+    trial.trial_start_closest_frame = 0
+    trial.trial_end_closest_frame = 7
     state1 = Mock()
     state1.name = "trigger_panda"
     state1.closest_frame_start = 0
@@ -97,14 +89,22 @@ def test_get_frame_position() -> None:
     state3.name = "trigger_panda"
     state3.closest_frame_start = 4
     state3.closest_frame_end = 4
-    trial.states_info = [state1, state2, state3]
+    state4 = Mock()
+    state4.name = "trigger_ITI"
+    state4.closest_frame_start = 5
+    state4.closest_frame_end = 5
+    state5 = Mock()
+    state5.name = "ITI"
+    state5.closest_frame_start = 6
+    state5.closest_frame_end = 6
+    trial.states_info = [state1, state2, state3, state4, state5]
 
-    trial_frames = np.array([0, 1, 2, 3, 4])
+    trial_frames = np.array([0, 1, 2, 3, 4, 5, 6, 7])
 
     wheel_circumference = 100
     manual_position = np.array([0, 25, 50])  # 0, 0; 90, 25; 180, 50
 
-    expected_positions = np.array([0, 25, 25, 37.5, 50])
+    expected_positions = np.array([0, 25, 25, 37.5, 50, 50, 0, 0])
     expected = np.column_stack((trial_frames, expected_positions))
 
     with patch("viral.utils.degrees_to_cm", return_value=manual_position):
@@ -112,7 +112,49 @@ def test_get_frame_position() -> None:
 
     assert np.array_equal(result, expected)
 
-    # TODO: another test with ITI?
+
+def test_get_frame_position_new_ITI() -> None:
+    """Test that the position for each frame is given correctly (new ITI states)."""
+    trial = Mock()
+    trial.rotary_encoder_position = [0, 90, 180, 270]
+    state1 = Mock()
+    state1.name = "trigger_panda"
+    state1.closest_frame_start = 0
+    state1.closest_frame_end = 0
+    state2 = Mock()
+    state2.name = "trigger_panda"
+    state2.closest_frame_start = 1
+    state2.closest_frame_end = 2
+    state3 = Mock()
+    state3.name = "trigger_panda"
+    state3.closest_frame_start = 4
+    state3.closest_frame_end = 4
+    state4 = Mock()
+    state4.name = "trigger_ITI"
+    state4.closest_frame_start = 5
+    state4.closest_frame_end = 5
+    state5 = Mock()
+    state5.name = "ITI_transition"
+    state5.closest_frame_start = 5
+    state5.closest_frame_end = 5
+    state6 = Mock()
+    state6.name = "trigger_panda_ITI"
+    state6.closest_frame_start = 6
+    state6.closest_frame_end = 6
+    trial.states_info = [state1, state2, state3, state4, state5, state6]
+
+    trial_frames = np.array([0, 1, 2, 3, 4, 5, 6])
+
+    wheel_circumference = 100
+    manual_position = np.array([0, 25, 50, 75])  # 0, 0; 90, 25; 180, 50; 270, 75
+
+    expected_positions = np.array([0, 25, 25, 37.5, 50, 62.5, 75])
+    expected = np.column_stack((trial_frames, expected_positions))
+
+    with patch("viral.utils.degrees_to_cm", return_value=manual_position):
+        result = get_frame_position(trial, trial_frames, wheel_circumference)
+
+    assert np.array_equal(result, expected)
 
 
 def test_get_frame_position_no_start_no_end() -> None:
@@ -131,7 +173,11 @@ def test_get_frame_position_no_start_no_end() -> None:
     state3.name = "trigger_panda"
     state3.closest_frame_start = 5
     state3.closest_frame_end = 5
-    trial.states_info = [state1, state2, state3]
+    state4 = Mock()
+    state4.name = "trigger_ITI"
+    state4.closest_frame_start = 5
+    state4.closest_frame_end = 5
+    trial.states_info = [state1, state2, state3, state4]
 
     trial_frames = np.array([0, 1, 2, 3, 4, 5, 6])
 
