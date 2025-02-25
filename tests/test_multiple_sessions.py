@@ -1,3 +1,4 @@
+from typing import List
 from viral.multiple_sessions import create_metric_dict, prepare_plot_data
 from viral.models import MouseSummary, SessionSummary, TrialSummary
 import pytest
@@ -32,7 +33,9 @@ def create_mock_mouse() -> Mock:
     return mock_mouse
 
 
-def mock_metric_fcn(trials, rewarded=None, window=None):
+def mock_metric_fcn(
+    trials: List[TrialSummary], rewarded: bool | None = None, window: int | None = None
+) -> int:
     """Count trials/sessions"""
     if rewarded is not None:
         return len([trial for trial in trials if trial.rewarded == rewarded])
@@ -40,7 +43,7 @@ def mock_metric_fcn(trials, rewarded=None, window=None):
         return len(trials)
 
 
-def test_create_metric_dict_include_reward_status():
+def test_create_metric_dict_include_reward_status() -> None:
     """Test that the trials get sorted correctly by session type and reward condition"""
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
@@ -74,7 +77,7 @@ def test_create_metric_dict_include_reward_status():
     assert mouse_metric["recall_reversal_unrewarded"] == 3
 
 
-def test_create_metric_dict_no_reward_status():
+def test_create_metric_dict_no_reward_status() -> None:
     """Test that the trials get sorted correctly by session type."""
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
@@ -95,7 +98,7 @@ def test_create_metric_dict_no_reward_status():
     assert mouse_metric["recall_reversal"] == 5
 
 
-def test_create_metric_dict_sessions():
+def test_create_metric_dict_sessions() -> None:
     """Test that the sessions get sorted correctly by session type."""
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
