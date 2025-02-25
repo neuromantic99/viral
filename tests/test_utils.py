@@ -3,11 +3,9 @@ from typing import List
 import numpy as np
 from pydantic import BaseModel
 
-from viral.cache_2p_sessions import get_tiff_metadata
+from viral.imaging_utils import extract_TTL_chunks
 from viral.models import SpeedPosition
 from viral.utils import (
-    extract_TTL_chunks,
-    find_chunk,
     get_speed_positions,
     threshold_detect_edges,
     get_session_type,
