@@ -7,8 +7,8 @@ from viral.models import StateInfo, TrialInfo
 from viral.two_photon import (
     activity_trial_position,
     get_position_activity,
-    sort_matrix_peak,
 )
+from viral.utils import sort_matrix_peak
 
 WHEEL_CIRCUMFERENCE = 10
 

@@ -9,15 +9,14 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+from viral.imaging_utils import get_ITI_start_frame, trial_is_imaged
 from viral.utils import (
     TrialInfo,
-    trial_is_imaged,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
 )
 from viral.models import Cached2pSession
 from viral.constants import TIFF_UMBRELLA
-from viral.two_photon import compute_dff, subtract_neuropil, normalize, get_dff
 
 
 def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray]:
@@ -62,13 +61,6 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = False) -> np.ndarray
         ), "Overlapping frames for trials"
     rewarded = np.array([trial.texture_rewarded for trial in trials])
     return np.column_stack((trial_frames, rewarded))
-
-
-def get_ITI_start_frame(trial: TrialInfo) -> float:
-    for state in trial.states_info:
-        if state.name == "ITI":
-            return state.closest_frame_start
-    raise ValueError("ITI state not found")
 
 
 def get_signal_for_trials(

@@ -13,6 +13,8 @@ from ScanImageTiffReader import ScanImageTiffReader
 import numpy as np
 import pandas as pd
 
+from viral.imaging_utils import extract_TTL_chunks, get_sampling_rate, trial_is_imaged
+
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -30,12 +32,9 @@ from viral.models import Cached2pSession, TrialInfo
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
-    extract_TTL_chunks,
     find_chunk,
-    get_sampling_rate,
     get_tiff_paths_in_directory,
     time_list_to_datetime,
-    trial_is_imaged,
     degrees_to_cm,
 )
 
@@ -200,6 +199,8 @@ def add_imaging_info_to_trials(
     # The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
     # frame is relaibly correct
     # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
+
+    # TODO: This is sometimes 3 lol, deal with this
     assert np.all(
         chunk_lengths_daq - stack_lengths_tiffs == 2
     ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lengths_daq}. Stack lengths: {stack_lengths_tiffs}. This will occcur especially on crashed recordings, think about a fix"
@@ -393,7 +394,7 @@ def process_session(
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
-if __name__ == "__main__":
+def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
@@ -458,3 +459,7 @@ if __name__ == "__main__":
                 msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
                 logger.debug(msg)
                 print(msg)
+
+
+if __name__ == "__main__":
+    main()
