@@ -32,12 +32,17 @@ def create_mock_mouse() -> Mock:
     return mock_mouse
 
 
-def mock_metric_fcn(trials, rewarded=None, window=None):
-    """Count trials/sessions"""
-    if rewarded is not None:
+def mock_metric_fcn_trials(trials, rewarded=None, window=None):
+    """Count trials"""
+    if rewarded:
         return len([trial for trial in trials if trial.rewarded == rewarded])
     else:
         return len(trials)
+
+
+def mock_metric_fcn_sessions(sessions, window=None):
+    """Count trials/sessions"""
+    return len(sessions)
 
 
 def test_create_metric_dict_include_reward_status():
@@ -45,7 +50,7 @@ def test_create_metric_dict_include_reward_status():
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
         mice=[mock_mouse],
-        metric_fn=mock_metric_fcn,
+        metric_fn=mock_metric_fcn_trials,
         flat_sessions=True,
         include_reward_status=True,
     )
@@ -79,7 +84,7 @@ def test_create_metric_dict_no_reward_status():
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
         mice=[mock_mouse],
-        metric_fn=mock_metric_fcn,
+        metric_fn=mock_metric_fcn_trials,
         flat_sessions=True,
         include_reward_status=False,
     )
@@ -100,7 +105,7 @@ def test_create_metric_dict_sessions():
     mock_mouse = create_mock_mouse()
     metric_dict = create_metric_dict(
         mice=[mock_mouse],
-        metric_fn=mock_metric_fcn,
+        metric_fn=mock_metric_fcn_sessions,
         flat_sessions=False,
         include_reward_status=False,
     )
