@@ -179,19 +179,13 @@ def get_position_activity(
             axis=1,
         )
 
-        ITI_matrix = get_ITI_matrix([trials[idx] for idx in test_idx], dff)
+        test_matrices.append(test_matrix[sorted_order, :])
 
-        trial_and_ITI = np.hstack(
-            (test_matrix[sorted_order, :], ITI_matrix[sorted_order, :])
-        )
-        test_matrices.append(trial_and_ITI)
+    test_matrices_averaged = np.mean(np.array(test_matrices), 0)
 
-    test_matrix_shapes = set([matrix.shape[1] for matrix in test_matrices])
-
-    for idx in range(len(test_matrices)):
-        test_matrices[idx] = test_matrices[idx][:, : min(test_matrix_shapes)]
-
-    return np.mean(np.array(test_matrices), 0)
+    ITI = get_ITI_matrix(trials, dff)
+    ITI = ITI[np.argsort(np.argmax(test_matrices_averaged, axis=1)), :]
+    return np.hstack((test_matrices_averaged, ITI))
 
 
 def get_ITI_matrix(
@@ -220,7 +214,8 @@ def get_ITI_matrix(
         else:
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
-    return np.hstack([normalize(matrix, axis=1) for matrix in matrices])
+    return normalize(np.mean(np.array(matrices), 0), axis=1)
+    # return np.hstack([normalize(matrix, axis=1) for matrix in matrices])
 
 
 def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
