@@ -119,10 +119,11 @@ def get_position_activity(
     trials: List[TrialInfo],
     dff: np.ndarray,
     wheel_circumference: float,
-    bin_size: int = 1,
-    start: int = 10,
-    max_position: int = 170,
-    remove_landmarks: bool = False,
+    bin_size: int,
+    start: int,
+    max_position: int,
+    remove_landmarks: bool,
+    ITI_bin_size: int,
 ) -> np.ndarray:
 
     test_matrices = []
@@ -150,6 +151,7 @@ def get_position_activity(
 
         if remove_landmarks:
             train_matrix = remove_landmarks_from_train_matrix(train_matrix)
+
         peak_indices = np.argmax(train_matrix, axis=1)
         sorted_order = np.argsort(peak_indices)
 
@@ -183,14 +185,34 @@ def get_position_activity(
 
     test_matrices_averaged = np.mean(np.array(test_matrices), 0)
 
-    ITI = get_ITI_matrix(trials, dff)
+    ITI = get_ITI_matrix(trials, dff, bin_size=ITI_bin_size)
     ITI = ITI[np.argsort(np.argmax(test_matrices_averaged, axis=1)), :]
+
     return np.hstack((test_matrices_averaged, ITI))
+
+
+def running_during_ITI(trial: TrialInfo) -> bool:
+
+    trigger_states = np.array(
+        [
+            state.name
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+
+    ITI_positions = degrees_to_cm(
+        np.array(trial.rotary_encoder_position)[trigger_states == "trigger_panda_ITI"],
+        get_wheel_circumference_from_rig("2P"),
+    )
+    return max(ITI_positions) - min(ITI_positions) > 20
 
 
 def get_ITI_matrix(
     trials: List[TrialInfo],
     dff: np.ndarray,
+    bin_size: int,
 ) -> np.ndarray:
     """
     In theory will be 600 frames in an ITI (as is always 20 seconds)
@@ -204,18 +226,28 @@ def get_ITI_matrix(
 
     for trial in trials:
         assert trial.trial_end_closest_frame is not None
+
+        if running_during_ITI(trial):
+            continue
         chunk = dff[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
         n_frames = chunk.shape[1]
         if n_frames < 550:
             # Imaging stopped in the middle
             continue
         elif n_frames in {598, 599}:
-            matrices.append(array_bin_mean(chunk[:, :598], bin_size=10))
+            matrices.append(array_bin_mean(chunk[:, :598], bin_size=bin_size))
         else:
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
-    return normalize(np.mean(np.array(matrices), 0), axis=1)
+    print(f"Number of still ITI trials: {len(matrices)}")
+    # return normalize(np.mean(np.array(matrices), 0), axis=1)
+    print(f"ITI shape {matrices[0].shape}")
+
+    # for idx in range(len(matrices)):
+    #     matrices[idx] = np.hstack([matrices[idx], np.ones((matrices[idx].shape[0], 1))])
     # return np.hstack([normalize(matrix, axis=1) for matrix in matrices])
+
+    return np.mean(np.array([normalize(matrix, axis=1) for matrix in matrices]), axis=0)
 
 
 def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
@@ -253,6 +285,10 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
     start = 30
     max_position = 180
     bin_size = 5
+    ITI_bin_size = 10
+
+    vmin = 0
+    vmax = 1
 
     plt.figure()
     plt.title("Rewarded trials")
@@ -268,11 +304,13 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             start=start,
             bin_size=bin_size,
             max_position=max_position,
+            remove_landmarks=False,
+            ITI_bin_size=ITI_bin_size,
         ),
         aspect="auto",
         cmap="viridis",
-        vmax=0.5,
-        vmin=0,
+        vmax=vmax,
+        vmin=vmin,
     )
 
     clb = plt.colorbar()
@@ -289,7 +327,6 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
         / "place_cells"
         / f"place-cells-rewarded-{session.mouse_name}-{session.date}"
     )
-    plt.show()
 
     plt.figure()
     plt.title("Unrewarded trials")
@@ -305,11 +342,13 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             start=start,
             bin_size=bin_size,
             max_position=max_position,
+            remove_landmarks=False,
+            ITI_bin_size=ITI_bin_size,
         ),
         aspect="auto",
         cmap="viridis",
-        vmax=0.5,
-        vmin=0,
+        vmax=vmax,
+        vmin=vmin,
     )
 
     clb = plt.colorbar()
@@ -317,7 +356,6 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
     plt.ylabel("cell number")
     plt.xlabel("corrdior position")
     plt.xticks((ticks - start) / bin_size, ticks)
-    plt.axvline(180)
     plt.tight_layout()
     plt.savefig(
         HERE.parent
@@ -325,6 +363,7 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
         / "place_cells"
         / f"place-cells-unrewarded-{session.mouse_name}-{session.date}"
     )
+    plt.show()
 
 
 if __name__ == "__main__":
