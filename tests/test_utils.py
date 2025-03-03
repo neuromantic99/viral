@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from viral.imaging_utils import extract_TTL_chunks
 from viral.models import SpeedPosition
 from viral.utils import (
+    array_bin_mean,
     get_speed_positions,
     threshold_detect_edges,
     get_session_type,
@@ -221,7 +222,7 @@ def test_chunk_len_correct() -> None:
     assert len(frame_times) == np.sum(frame_clock == 5)
 
 
-def test_get_session_type():
+def test_get_session_type() -> None:
     session_name = "Learning day 1"
     expected = "learning"
     result = get_session_type(session_name)
@@ -241,3 +242,24 @@ def test_get_session_type():
     expected = "recall_reversal"
     result = get_session_type(session_name)
     assert result == expected
+
+
+def test_array_bin_mean() -> None:
+    input = np.array([[1, 2, 3, 4], [4, 5, 6, 7]])
+    result = array_bin_mean(input, bin_size=2)
+    expected = np.array([[1.5, 3.5], [4.5, 6.5]])
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_array_bin_mean_bin_size_array_not_divisible_along_bin_size() -> None:
+    input = np.array([[1, 2, 3, 4, 5], [4, 5, 6, 7, 8]])
+    result = array_bin_mean(input, bin_size=3)
+    expected = np.array([[2, 4.5], [5, 7.5]])
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_array_bin_mean_other_axis() -> None:
+    input = np.array([[1, 2, 3, 4], [4, 5, 6, 7]])
+    result = array_bin_mean(input, bin_size=2, axis=0)
+    expected = np.array([[2.5, 3.5, 4.5, 5.5]])
+    np.testing.assert_array_equal(result, expected)

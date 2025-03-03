@@ -6,6 +6,7 @@ import warnings
 from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
+from scipy.stats import zscore
 
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import SpeedPosition, TrialInfo
@@ -340,8 +341,27 @@ def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
     return matrix[sorted_order]
 
 
+# def normalize(array: np.ndarray, axis: int) -> np.ndarray:
+#     """Calculate the min and max along the specified axis"""
+#     min_val = np.min(array, axis=axis, keepdims=True)
+#     max_val = np.max(array, axis=axis, keepdims=True)
+#     return (array - min_val) / (max_val - min_val)
+
+
 def normalize(array: np.ndarray, axis: int) -> np.ndarray:
-    """Calculate the min and max along the specified axis"""
-    min_val = np.min(array, axis=axis, keepdims=True)
-    max_val = np.max(array, axis=axis, keepdims=True)
-    return (array - min_val) / (max_val - min_val)
+    return zscore(array, axis=axis)
+
+
+def array_bin_mean(arr: np.ndarray, bin_size: int = 2, axis: int = 1) -> np.ndarray:
+    """Bins elements along a given axis  with a specified bin size, computing the mean in the bin"""
+    shape = arr.shape[axis]
+    indices = np.arange(0, shape, bin_size)
+    binned_sum = np.add.reduceat(arr, indices, axis=axis)
+
+    # Count elements in each bin (handling the last bin if it's smaller)
+    counts = (
+        np.diff(indices, append=shape)[:, None]
+        if axis == 0
+        else np.diff(indices, append=shape)
+    )
+    return binned_sum / counts

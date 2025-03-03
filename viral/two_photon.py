@@ -5,6 +5,7 @@ import sys
 from typing import List
 from scipy.stats import zscore
 import seaborn as sns
+from rastermap import Rastermap
 
 
 # Allow you to run the file directly, remove if exporting as a proper module
@@ -18,6 +19,7 @@ sns.set_theme(context="talk", style="ticks")
 from viral.imaging_utils import trial_is_imaged
 from viral.rastermap_utils import get_ITI_start_frame
 from viral.utils import (
+    array_bin_mean,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     normalize,
@@ -50,11 +52,11 @@ def get_dff(mouse: str, date: str) -> np.ndarray:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    # spks = np.load(s2p_path / "spks.npy")[iscell, :]
-    f_raw = np.load(s2p_path / "F.npy")[iscell, :]
-    f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
-    # return spks
-    return compute_dff(subtract_neuropil(f_raw, f_neu))
+    spks = np.load(s2p_path / "spks.npy")[iscell, :]
+    # f_raw = np.load(s2p_path / "F.npy")[iscell, :]
+    # f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
+    return spks
+    # return compute_dff(subtract_neuropil(f_raw, f_neu))
 
 
 def activity_trial_position(
@@ -151,6 +153,11 @@ def get_position_activity(
         peak_indices = np.argmax(train_matrix, axis=1)
         sorted_order = np.argsort(peak_indices)
 
+        # model = Rastermap(n_PCs=200, n_clusters=5, locality=1, time_lag_window=0).fit(
+        #     train_matrix
+        # )
+        # sorted_order = model.isort
+
         # TODO: Review whether this is the best normalisation function
         test_matrix = normalize(
             np.nanmean(
@@ -172,14 +179,48 @@ def get_position_activity(
             axis=1,
         )
 
-        test_matrices.append(test_matrix[sorted_order, :])
+        ITI_matrix = get_ITI_matrix([trials[idx] for idx in test_idx], dff)
 
-    # ITI_chunk = [
-    #     dff[:, get_ITI_start_frame(trial) : trial.trial_end_closest_frame]
-    #     for trial in trials
-    # ]
+        trial_and_ITI = np.hstack(
+            (test_matrix[sorted_order, :], ITI_matrix[sorted_order, :])
+        )
+        test_matrices.append(trial_and_ITI)
+
+    test_matrix_shapes = set([matrix.shape[1] for matrix in test_matrices])
+
+    for idx in range(len(test_matrices)):
+        test_matrices[idx] = test_matrices[idx][:, : min(test_matrix_shapes)]
 
     return np.mean(np.array(test_matrices), 0)
+
+
+def get_ITI_matrix(
+    trials: List[TrialInfo],
+    dff: np.ndarray,
+) -> np.ndarray:
+    """
+    In theory will be 600 frames in an ITI (as is always 20 seconds)
+    In practise it's 599 or 598 (or could be something like 597 or 600, fix
+    the assertion if so).
+    Or could be less if you stop the trial in the ITI.
+    So we'll take the first 598 frames of any trial that has 599 or 598
+    """
+
+    matrices = []
+
+    for trial in trials:
+        assert trial.trial_end_closest_frame is not None
+        chunk = dff[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
+        n_frames = chunk.shape[1]
+        if n_frames < 550:
+            # Imaging stopped in the middle
+            continue
+        elif n_frames in {598, 599}:
+            matrices.append(array_bin_mean(chunk[:, :598], bin_size=10))
+        else:
+            raise ValueError(f"Chunk with {n_frames} frames not understood")
+
+    return np.hstack([normalize(matrix, axis=1) for matrix in matrices])
 
 
 def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
@@ -214,6 +255,10 @@ def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
 
 def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
 
+    start = 30
+    max_position = 180
+    bin_size = 5
+
     plt.figure()
     plt.title("Rewarded trials")
     plt.imshow(
@@ -225,11 +270,14 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             ],
             dff,
             get_wheel_circumference_from_rig("2P"),
-            start=0,
-            max_position=250,
+            start=start,
+            bin_size=bin_size,
+            max_position=max_position,
         ),
         aspect="auto",
         cmap="viridis",
+        vmax=0.5,
+        vmin=0,
     )
 
     clb = plt.colorbar()
@@ -238,8 +286,7 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
     plt.xlabel("corrdior position")
     ticks = np.array([50, 100, 150])
 
-    plt.axvline(180)
-    plt.xticks(ticks - 10, ticks)
+    plt.xticks((ticks - start) / bin_size, ticks)
     plt.tight_layout()
     plt.savefig(
         HERE.parent
@@ -247,6 +294,7 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
         / "place_cells"
         / f"place-cells-rewarded-{session.mouse_name}-{session.date}"
     )
+    plt.show()
 
     plt.figure()
     plt.title("Unrewarded trials")
@@ -259,20 +307,21 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             ],
             dff,
             get_wheel_circumference_from_rig("2P"),
-            start=0,
-            max_position=250,
+            start=start,
+            bin_size=bin_size,
+            max_position=max_position,
         ),
         aspect="auto",
         cmap="viridis",
+        vmax=0.5,
+        vmin=0,
     )
 
     clb = plt.colorbar()
     clb.ax.set_title("Normalised\nactivity", fontsize=12)
     plt.ylabel("cell number")
     plt.xlabel("corrdior position")
-    ticks = np.array([50, 100, 150])
-    plt.axvline(180)
-    plt.xticks(ticks - 10, ticks)
+    plt.xticks((ticks - start) / bin_size, ticks)
     plt.tight_layout()
     plt.savefig(
         HERE.parent
@@ -285,10 +334,11 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
 if __name__ == "__main__":
 
     mouse = "JB027"
-    date = "2025-02-24"
+    date = "2025-02-26"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
+
     print(f"Total number of trials: {len(session.trials)}")
     print(
         f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
