@@ -174,11 +174,6 @@ def get_position_activity(
 
         test_matrices.append(test_matrix[sorted_order, :])
 
-    # ITI_chunk = [
-    #     dff[:, get_ITI_start_frame(trial) : trial.trial_end_closest_frame]
-    #     for trial in trials
-    # ]
-
     return np.mean(np.array(test_matrices), 0)
 
 
