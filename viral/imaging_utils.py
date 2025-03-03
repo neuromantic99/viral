@@ -5,9 +5,8 @@ from viral.utils import threshold_detect
 
 
 def get_ITI_start_frame(trial: TrialInfo) -> int:
-
     for state in trial.states_info:
-        if state.name == "ITI":
+        if state.name in {"ITI", "trigger_ITI"}:
             assert (
                 state.closest_frame_start is not None
             ), "Imaging data not added to trial"
