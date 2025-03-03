@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from viral.imaging_utils import extract_TTL_chunks
 from viral.models import SpeedPosition
 from viral.utils import (
-    array_bin_mean,
     get_speed_positions,
     threshold_detect_edges,
     get_session_type,

@@ -317,6 +317,7 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
     plt.ylabel("cell number")
     plt.xlabel("corrdior position")
     plt.xticks((ticks - start) / bin_size, ticks)
+    plt.axvline(180)
     plt.tight_layout()
     plt.savefig(
         HERE.parent
