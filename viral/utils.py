@@ -233,7 +233,8 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
     trigger_panda_states = [
         state
         for state in trial.states_info
-        if state.name in {"trigger_panda", "trigger_panda_post_reward"}
+        if state.name
+        in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
     ]
     start_times_bpod = [state.start_time for state in trigger_panda_states]
     length_trial_bpod = start_times_bpod[-1] - start_times_bpod[0]

@@ -324,8 +324,11 @@ def create_frame_mapping(positions_combined: np.ndarray) -> dict:
     """Create a frame_mapping dictionary with original and continuous frame indices"""
     # Takes postions_combined array and takes the first column with the frame indices
     # (The positions array is the one that should have all frames in an imaged trial)
+    # TODO: deal with other shape
+    # continuous_frames = np.arange(positions_combined.shape[0])
+    # discontinuous_frames = positions_combined[:, 0]
     continuous_frames = np.arange(positions_combined.shape[0])
-    discontinuous_frames = positions_combined[:, 0]
+    discontinuous_frames = positions_combined
     return {orig: cont for orig, cont in zip(discontinuous_frames, continuous_frames)}
 
 
@@ -374,17 +377,12 @@ def get_corridor_width(
         include_ITI (bool):     Whether to include ITI frames in the width calculation. Defaults to False.
 
     Returns:
-        tuple[int, int]: A tuple containing:
-            - start_frame (int): The starting frame of the corridor
-            - width (int): The width of the corridor in frames
+        int:                    The width of the corridor in frames
     """
-    if include_ITI:
-        start_frame = trial.trial_start_closest_frame
-        end_frame = trial.trial_end_closest_frame
-    else:
-        start_frame = trial.trial_start_closest_frame
-        ITI_frame = get_ITI_start_frame(trial)
-        end_frame = ITI_frame - 1
+    start_frame = trial.trial_start_closest_frame
+    end_frame = (
+        trial.trial_end_closest_frame if include_ITI else get_ITI_start_frame(trial) - 1
+    )
 
     valid_trial_frames = valid_frame_indices[
         (valid_frame_indices >= start_frame) & (valid_frame_indices <= end_frame)
@@ -392,32 +390,56 @@ def get_corridor_width(
     return len(valid_trial_frames)
 
 
-def process_behavioural_data(
+def process_trials_data(
     trials: List[TrialInfo],
     aligned_trial_frames: np.ndarray,
+    spikes_trials: np.ndarray,
     wheel_circumference: float,
-    speed_bin_size: int = 5,
+    speed_bin_size: int = 10,
 ) -> tuple:
     """Process behavioural data and return licks, rewards, positions and speed as arrays."""
     licks_combined = np.array([], dtype=int)
     rewards_combined = np.array([], dtype=int)
     positions_combined = np.empty((0, 2))
     speed_combined = np.empty((0, 2))
+    spikes = list()
 
-    for trial, (start, end, rewarded) in zip(trials, aligned_trial_frames):
+    for trial, (start, end, rewarded), spikes_trial in zip(
+        trials, aligned_trial_frames, spikes_trials, strict=True
+    ):
         trial_frames = np.arange(start, end + 1, 1)
         licks = get_lick_index(trial)
         rewards = get_reward_index(trial)
         frames_positions = get_frame_position(trial, trial_frames, wheel_circumference)
         speed = get_speed_frame(frames_positions, speed_bin_size)
-
+        valid_mask = filter_speed_position(
+            speed=speed,
+            frames_positions=frames_positions,
+            speed_threshold=0.5,
+            position_threshold=180,
+            filter_speed=True,
+            filter_position=True,
+        )
+        if np.all(valid_mask == False):
+            print("No valid frames in the trial")
+        valid_indices = np.where(valid_mask)[0]
         if licks is not None:
             licks_combined = np.concatenate((licks_combined, licks))
         if rewards is not None:
             rewards_combined = np.concatenate((rewards_combined, rewards))
-        positions_combined = np.vstack((positions_combined, frames_positions))
-        speed_combined = np.vstack((speed_combined, speed))
-    return licks_combined, rewards_combined, positions_combined, speed_combined
+        positions_combined = np.vstack(
+            (positions_combined, frames_positions[valid_indices])
+        )
+        speed_combined = np.vstack((speed_combined, speed[valid_indices]))
+        spikes.append(spikes_trial[:, valid_indices])
+    # Frames with licks and rewards should always be valid
+    return (
+        licks_combined,
+        rewards_combined,
+        positions_combined,
+        speed_combined,
+        np.concatenate(spikes, axis=1),
+    )
 
 
 def filter_speed_position(
@@ -430,19 +452,17 @@ def filter_speed_position(
 ) -> np.ndarray:
     """Return a mask of valid frames"""
 
-    valid_mask = np.ones(len(speed), dtype=bool)
+    valid_mask = np.zeros(len(speed), dtype=bool)
 
-    # specified positions that should always be included
-    if filter_position:
-        position_mask = frames_positions[:, 1] >= position_threshold
-        valid_mask &= position_mask  # bitwise AND
     # filter out frames with sub-threshold speeds
     # converting cm/s to cm/frames
     if filter_speed:
-        speed_mask = (
-            speed[:, 1] >= (speed_threshold / 30)
-        ) | position_mask  # bitwise OR
-        valid_mask &= speed_mask
+        speed_mask = speed[:, 1] >= (speed_threshold / 30)
+        valid_mask |= speed_mask
+    # specified positions that should always be included
+    if filter_position:
+        position_mask = frames_positions[:, 1] >= position_threshold
+        valid_mask |= position_mask  # bitwise OR?
 
     return valid_mask
 
@@ -522,41 +542,29 @@ def process_session(
     session: Cached2pSession,
     wheel_circumference: float,
     ITI_split: bool = True,
-    speed_bin_size: int = 5,
+    speed_bin_size: int = 10,
 ) -> None:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
     spks, xpos, ypos, trials = load_data(session, s2p_path)
     aligned_trial_frames, spikes_trials = align_validate_data(spks, trials)
-    licks_combined, rewards_combined, positions_combined, speed_combined = (
-        process_behavioural_data(
-            trials, aligned_trial_frames, wheel_circumference, speed_bin_size
-        )
+    (
+        licks_combined,
+        rewards_combined,
+        positions_combined,
+        speed_combined,
+        spikes_trials,
+    ) = process_trials_data(
+        trials, aligned_trial_frames, spikes_trials, wheel_circumference, speed_bin_size
     )
 
-    spikes_combined = np.hstack(spikes_trials)
-
-    # filtering out frames
-    valid_mask = filter_speed_position(
-        speed=speed_combined,
-        frames_positions=positions_combined,
-        speed_threshold=0.1,
-        position_threshold=180,
-        filter_speed=True,
-        filter_position=True,
-    )
-    valid_frame_indices = np.where(valid_mask)[0]
-
-    positions_combined = positions_combined[valid_frame_indices]
-    speed_combined = speed_combined[valid_frame_indices]
-    spikes_combined = spikes_combined[:, valid_frame_indices]
     corridor_starts_combined = get_trial_valid_starts(
-        aligned_trial_frames, valid_frame_indices
+        aligned_trial_frames, positions_combined[:, 0]
     )
     corridor_widths_combined = np.array(
         [
             get_corridor_width(
-                trial, valid_frame_indices=valid_frame_indices, include_ITI=False
+                trial, valid_frame_indices=positions_combined[:, 0], include_ITI=False
             )
             for trial in trials
         ]
@@ -566,49 +574,36 @@ def process_session(
     ), "Number of corridor widths and aligned_trial_frames do not match"
 
     # remapping frame indices
-    frame_mapping = create_frame_mapping(positions_combined)
+    frame_mapping = create_frame_mapping(positions_combined[:, 0])
     licks_combined = remap_to_continuous_indices(licks_combined, frame_mapping)
     rewards_combined = remap_to_continuous_indices(rewards_combined, frame_mapping)
     corridor_starts_combined[:, 0] = remap_to_continuous_indices(
-        corridor_starts_combined[:, 0], frame_mapping
+        corridor_starts_combined[:, 0],
+        frame_mapping,
     )
 
     if ITI_split:
-        aligned_trial_frames_noITI = align_trial_frames(session.trials, ITI=False)
-        spikes_trials_noITI = get_signal_for_trials(spks, aligned_trial_frames_noITI)
-        spikes_combined_noITI = np.hstack(spikes_trials_noITI)
+        ITI_starts = np.array([get_ITI_start_frame(trial) for trial in trials])
+        ITI_ends = aligned_trial_frames[:, 1]
+        assert len(ITI_starts) == len(ITI_ends)
 
-        positions_combined_noITI = np.empty((0, 2))
-        speed_combined_noITI = np.empty((0, 2))
-        for trial, (start, end, rewarded) in zip(trials, aligned_trial_frames):
-            trial_frames = np.arange(start, end + 1, 1)
-            frames_positions = get_frame_position(
-                trial, trial_frames, wheel_circumference, ITI=False
+        valid_frame_mask = np.ones_like(positions_combined[:, 0], dtype=bool)
+
+        # Exclude ITI frames
+        for start, end in zip(ITI_starts, ITI_ends, strict=True):
+            ITI_mask = (positions_combined[:, 0] >= start) & (
+                positions_combined[:, 0] <= end
             )
-            speed = get_speed_frame(frames_positions, speed_bin_size)
-            positions_combined_noITI = np.vstack(
-                (positions_combined_noITI, frames_positions)
-            )
-            speed_combined_noITI = np.vstack((speed_combined_noITI, speed))
+            valid_frame_mask[ITI_mask] = False
 
-        # TODO: in theory, could not positions and speeds be slighly off here as the other frames are not considered in here?
-        valid_mask_noITI = filter_speed_position(
-            speed=speed_combined_noITI,
-            frames_positions=positions_combined_noITI,
-            speed_threshold=0.1,
-            position_threshold=180,
-            filter_speed=True,
-            filter_position=True,
-        )
-
-        valid_frame_indices_noITI = np.where(valid_mask_noITI)[0]
-
-        spikes_combined_noITI = spikes_combined_noITI[:, valid_frame_indices_noITI]
+        print(positions_combined.shape)
+        print(valid_frame_mask.shape)
+        print(spikes_trials.shape)
 
         save_neural_data(
             session=session,
-            spikes_combined=spikes_combined,
-            spikes_combined_noITI=spikes_combined_noITI,
+            spikes_combined=spikes_trials,
+            spikes_combined_noITI=spikes_trials[:, valid_frame_mask],
             xpos=xpos,
             ypos=ypos,
             ITI_split=True,
@@ -616,7 +611,7 @@ def process_session(
     else:
         save_neural_data(
             session=session,
-            spikes_combined=spikes_combined,
+            spikes_combined=spikes_trials,
             xpos=xpos,
             ypos=ypos,
             ITI_split=False,
@@ -642,4 +637,4 @@ if __name__ == "__main__":
             with open(file, "r") as f:
                 session = Cached2pSession.model_validate_json(f.read())
             f.close()
-            process_session(session, wheel_circumference)
+            process_session(session, wheel_circumference, True, 15)
