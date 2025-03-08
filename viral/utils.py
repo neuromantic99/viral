@@ -365,3 +365,14 @@ def array_bin_mean(arr: np.ndarray, bin_size: int = 2, axis: int = 1) -> np.ndar
         else np.diff(indices, append=shape)
     )
     return binned_sum / counts
+
+
+def remove_consecutive_ones(matrix: np.ndarray) -> np.ndarray:
+
+    def driver(row: np.ndarray) -> np.ndarray:
+        # Create a mask to identify the first occurrence of 1 in consecutive sequences
+        mask = np.diff(row, prepend=0) == 1
+        # Apply the mask to keep only the first 1 in consecutive sequences
+        return row * mask
+
+    return np.apply_along_axis(driver, 1, matrix)

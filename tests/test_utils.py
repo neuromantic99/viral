@@ -6,7 +6,9 @@ from pydantic import BaseModel
 from viral.imaging_utils import extract_TTL_chunks
 from viral.models import SpeedPosition
 from viral.utils import (
+    array_bin_mean,
     get_speed_positions,
+    remove_consecutive_ones,
     threshold_detect_edges,
     get_session_type,
 )
@@ -262,3 +264,9 @@ def test_array_bin_mean_other_axis() -> None:
     result = array_bin_mean(input, bin_size=2, axis=0)
     expected = np.array([[2.5, 3.5, 4.5, 5.5]])
     np.testing.assert_array_equal(result, expected)
+
+
+def test_remove_consecutive_ones() -> None:
+    matrix = np.array([[0, 1, 1, 1, 0], [1, 1, 0, 1, 1]])
+    result = remove_consecutive_ones(matrix)
+    assert np.array_equal(result, np.array([[0, 1, 0, 0, 0], [1, 0, 0, 1, 0]]))
