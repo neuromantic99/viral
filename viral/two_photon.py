@@ -1,10 +1,11 @@
-import logging
 from pathlib import Path
 import random
 import sys
 from typing import List, Tuple
-from scipy.stats import median_abs_deviation
+from scipy.stats import median_abs_deviation, zscore
 import seaborn as sns
+
+from scipy.ndimage import gaussian_filter1d
 
 from rastermap import Rastermap
 
@@ -23,8 +24,11 @@ from viral.utils import (
     array_bin_mean,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
+    has_five_consecutive_trues,
     normalize,
     remove_consecutive_ones,
+    shuffle_rows,
+    sort_matrix_peak,
 )
 
 from viral.models import Cached2pSession, TrialInfo
@@ -52,7 +56,6 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
 
 def get_dff(mouse: str, date: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
-
     print(f"Suite 2p path is {s2p_path}")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
 
@@ -74,7 +77,10 @@ def activity_trial_position(
     start: int = 10,
     max_position: int = 170,
     verbose: bool = False,
+    do_shuffle: bool = False,
 ) -> np.ndarray:
+
+    # TODO: remove non running epochs?
 
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference
@@ -106,6 +112,9 @@ def activity_trial_position(
             print(f"bin_end: {bin_start + bin_size}")
             print(f"n_frames in bin: {len(frame_idx_bin)}")
         dff_position.append(np.mean(dff_bin, axis=1))
+
+    if do_shuffle:
+        return shuffle_rows(np.array(dff_position).T)
 
     return np.array(dff_position).T
 
@@ -380,11 +389,132 @@ def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
     )
 
 
+def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarray:
+    """The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
+      2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
+    based on its sparsified spike estimate vector, Ssp. This firing rate by position vector was subsequently
+    smoothed with a 7.5-cm Gaussian kernel leading to the smoothed firing rate by position vector.
+    In addition, for each cell, 2,000 shuffled smoothed firing rate by position vectors were computed for each
+    cell following the per-lap randomized circular permutation of estimated activity vector, Ssp. For each cell,
+    putative PFs were defined as those in which the observed smoothed firing rate by position vectors exceeded the
+    99th percentile of their shuffled smoothed firing rate by position vectors as assessed on a per spatial-bin basis for
+    at least five consecutive spatial bins
+    """
+
+    bin_size = 2
+    start = 0
+    end = 180
+    activity_matrix = np.mean(
+        np.array(
+            [
+                activity_trial_position(
+                    trial,
+                    spks,
+                    get_wheel_circumference_from_rig("2P"),
+                    bin_size,
+                    start,
+                    end,
+                )
+                for trial in session.trials
+                if trial.texture_rewarded and trial_is_imaged(trial)
+            ]
+        ),
+        0,
+    )
+    sigma_cm = 7.5  # Desired smoothing in cm
+    sigma_bins = sigma_cm / bin_size  # Convert to bin units
+
+    # Apply Gaussian smoothing along each row (axis=1)
+    smoothed_matrix = gaussian_filter1d(activity_matrix, sigma=sigma_bins, axis=1)
+
+    shuffled_matrices = np.array(
+        [
+            gaussian_filter1d(
+                np.mean(
+                    np.array(
+                        [
+                            activity_trial_position(
+                                trial,
+                                spks,
+                                get_wheel_circumference_from_rig("2P"),
+                                bin_size,
+                                start,
+                                end,
+                                do_shuffle=True,
+                            )
+                            for trial in session.trials
+                            if trial.texture_rewarded and trial_is_imaged(trial)
+                        ]
+                    ),
+                    0,
+                ),
+                sigma=sigma_bins,
+                axis=1,
+            )
+            for _ in range(2000)
+        ]
+    )
+
+    place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
+
+    shuffled_place_cells = np.array(
+        [
+            has_five_consecutive_trues(shuffled_matrices[idx, :, :] > place_threshold)
+            for idx in range(shuffled_matrices.shape[0])
+        ]
+    )
+
+    pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
+
+    print(
+        f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / shuffled_place_cells.shape[1])}"
+    )
+
+    print(f"percent place cells not shuffled {np.sum(pcs) / len(pcs)}")
+
+    plt.figure()
+    plt.imshow(
+        zscore(sort_matrix_peak(smoothed_matrix[pcs, :]), axis=1),
+        aspect="auto",
+        cmap="viridis",
+        vmin=0,
+        vmax=1,
+    )
+
+    plt.title("real")
+
+    plt.colorbar()
+    plt.legend()
+
+    plt.figure()
+
+    plt.imshow(
+        zscore(
+            sort_matrix_peak(shuffled_matrices[0, shuffled_place_cells[0, :], :]),
+            axis=1,
+        ),
+        aspect="auto",
+        cmap="viridis",
+        vmin=0,
+        vmax=1,
+    )
+
+    plt.title("shuffled")
+    plt.colorbar()
+    plt.legend()
+    plt.show()
+
+    return np.ndarray([])
+
+
 def place_cells(
     session: Cached2pSession, dff: np.ndarray, spks: np.ndarray, denoised: np.ndarray
 ) -> None:
 
+    # TODO: Don't reuse this function obviously
     spks = binarise_spikes(spks)
+    grosmark_place_field(session, spks)
+    return
 
     # _, ax1 = plt.subplots()
     # # ax1.plot(spks[0, :], color="black")

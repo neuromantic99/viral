@@ -376,3 +376,32 @@ def remove_consecutive_ones(matrix: np.ndarray) -> np.ndarray:
         return row * mask
 
     return np.apply_along_axis(driver, 1, matrix)
+
+
+def shuffle_rows(matrix: np.ndarray) -> np.ndarray:
+    """
+    Shuffles the elements within each row of the given matrix independently.
+
+    Parameters:
+    matrix (numpy.ndarray): A 2D NumPy array where each row's elements are shuffled.
+
+    Returns:
+    numpy.ndarray: A new matrix with shuffled rows.
+    """
+    shuffled_matrix = (
+        matrix.copy()
+    )  # Make a copy to avoid modifying the original matrix
+    for row in shuffled_matrix:
+        np.random.shuffle(row)  # Shuffle elements within the row
+    return shuffled_matrix
+
+
+def has_five_consecutive_trues(matrix: np.ndarray) -> np.ndarray:
+    matrix = np.array(matrix, dtype=bool)  # Ensure it's a boolean NumPy array
+    kernel = np.ones(5, dtype=int)  # Kernel to check consecutive 5 Trues
+    # Perform a 1D convolution along each row
+    conv_results = np.apply_along_axis(
+        lambda row: np.convolve(row, kernel, mode="valid"), axis=1, arr=matrix
+    )
+    # Check if any value in the result equals 5 (meaning 5 consecutive Trues)
+    return np.any(conv_results == 5, axis=1)

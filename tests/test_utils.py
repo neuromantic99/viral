@@ -8,7 +8,9 @@ from viral.models import SpeedPosition
 from viral.utils import (
     array_bin_mean,
     get_speed_positions,
+    has_five_consecutive_trues,
     remove_consecutive_ones,
+    shuffle_rows,
     threshold_detect_edges,
     get_session_type,
 )
@@ -270,3 +272,57 @@ def test_remove_consecutive_ones() -> None:
     matrix = np.array([[0, 1, 1, 1, 0], [1, 1, 0, 1, 1]])
     result = remove_consecutive_ones(matrix)
     assert np.array_equal(result, np.array([[0, 1, 0, 0, 0], [1, 0, 0, 1, 0]]))
+
+
+def test_has_five_consecutive_trues_basic() -> None:
+    matrix = np.array(
+        [[True, True, True, True, True, False], [True, True, True, True, False, False]]
+    )
+    result = has_five_consecutive_trues(matrix)
+    assert np.array_equal(result, np.array([True, False]))
+
+
+def test_has_five_consecutive_trues_none_have() -> None:
+    matrix = np.array(
+        [[False, True, True, True, True, False], [True, True, True, True, False, False]]
+    )
+    result = has_five_consecutive_trues(matrix)
+    assert np.array_equal(result, np.array([False, False]))
+
+
+def test_has_five_consecutive_trues_loads_have() -> None:
+    matrix = np.array([[True, True, True, True, True, False]] * 100)
+    result = has_five_consecutive_trues(matrix)
+    assert np.array_equal(result, np.array([True] * 100))
+
+
+def test_has_five_consecutive_trues_another_random_one() -> None:
+    matrix = np.array(
+        [
+            [True, True, False, True, True, False, False, False, True, True],
+            [False, False, False, True, True, True, True, True, False, True],
+            [True, True, False, True, True, False, False, False, False, False],
+            [False, False, False, True, True, True, True, True, False, True],
+        ]
+    )
+    result = has_five_consecutive_trues(matrix)
+    assert np.array_equal(result, np.array([False, True, False, True]))
+
+
+def test_shuffle_rows() -> None:
+    matrix = np.array([[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]])
+    result = shuffle_rows(matrix)
+    # This actually could be true with low probabilty
+    assert not np.array_equal(result, matrix)
+
+    assert np.array_equal(np.sort(result[0, :]), np.array([1, 2, 3, 4, 5, 6]))
+    assert np.array_equal(np.sort(result[1, :]), np.array([7, 8, 9, 10, 11, 12]))
+
+
+def test_shuffle_rows_is_it_seeded() -> None:
+    matrix = np.array([np.arange(100), np.arange(100)])
+
+    result1 = shuffle_rows(matrix)
+    result2 = shuffle_rows(matrix)
+
+    assert not np.array_equal(result1, result2)
