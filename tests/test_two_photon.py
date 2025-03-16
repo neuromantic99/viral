@@ -3,9 +3,9 @@ import numpy as np
 from unittest.mock import patch
 
 
+from viral.imaging_utils import activity_trial_position
 from viral.models import StateInfo, TrialInfo
 from viral.two_photon import (
-    activity_trial_position,
     get_position_activity,
 )
 from viral.utils import sort_matrix_peak

@@ -405,3 +405,19 @@ def has_five_consecutive_trues(matrix: np.ndarray) -> np.ndarray:
     )
     # Check if any value in the result equals 5 (meaning 5 consecutive Trues)
     return np.any(conv_results == 5, axis=1)
+
+
+def find_five_consecutive_trues_center(matrix: np.ndarray) -> np.ndarray:
+    def find_center(row: np.ndarray) -> int:
+        conv_result = np.convolve(row, np.ones(5, dtype=int), mode="valid") == 5
+        if np.any(conv_result):
+            start = np.argmax(conv_result).astype(
+                int
+            )  # First occurrence of 5 consecutive Trues
+            return start + 2  # Center index
+        raise ValueError(
+            "You should only pass PCs run through has_five_consective_trues to this function"
+        )
+
+    matrix = np.asarray(matrix, dtype=bool)
+    return np.apply_along_axis(find_center, axis=1, arr=matrix)

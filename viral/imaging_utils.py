@@ -1,7 +1,7 @@
 from typing import Tuple
 import numpy as np
 from viral.models import TrialInfo
-from viral.utils import threshold_detect
+from viral.utils import degrees_to_cm, shuffle_rows, threshold_detect
 
 
 def get_ITI_start_frame(trial: TrialInfo) -> int:
@@ -58,3 +58,53 @@ def extract_TTL_chunks(
     # Add the final frame to allow the diff to work on the last chunk
     chunk_starts = np.append(chunk_starts, len(frame_times))
     return frame_times, np.diff(chunk_starts)
+
+
+def activity_trial_position(
+    trial: TrialInfo,
+    flu: np.ndarray,
+    wheel_circumference: float,
+    bin_size: int = 1,
+    start: int = 10,
+    max_position: int = 170,
+    verbose: bool = False,
+    do_shuffle: bool = False,
+) -> np.ndarray:
+
+    # TODO: remove non running epochs?
+
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
+    )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+
+    assert len(position) == len(frame_position)
+
+    dff_position = []
+
+    for bin_start in range(start, max_position, bin_size):
+        frame_idx_bin = np.unique(
+            frame_position[
+                np.logical_and(position >= bin_start, position < bin_start + bin_size)
+            ]
+        )
+        dff_bin = flu[:, frame_idx_bin]
+
+        if verbose:
+            print(f"bin_start: {bin_start}")
+            print(f"bin_end: {bin_start + bin_size}")
+            print(f"n_frames in bin: {len(frame_idx_bin)}")
+        dff_position.append(np.mean(dff_bin, axis=1))
+
+    if do_shuffle:
+        return shuffle_rows(np.array(dff_position).T)
+
+    return np.array(dff_position).T
