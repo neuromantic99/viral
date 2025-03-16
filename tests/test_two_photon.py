@@ -3,9 +3,9 @@ import numpy as np
 from unittest.mock import patch
 
 
+from viral.imaging_utils import activity_trial_position
 from viral.models import StateInfo, TrialInfo
 from viral.two_photon import (
-    activity_trial_position,
     get_position_activity,
 )
 from viral.utils import sort_matrix_peak
@@ -136,6 +136,7 @@ def test_get_position_activity_all_trials_same_dont_reorder() -> None:
             start=0,
             max_position=20,
             remove_landmarks=False,
+            ITI_bin_size=None,
         )
 
     assert np.array_equal(result, expected)
@@ -171,6 +172,7 @@ def test_get_position_activity_all_trials_same_reorder() -> None:
             start=0,
             max_position=20,
             remove_landmarks=False,
+            ITI_bin_size=None,
         )
 
     assert np.array_equal(result, expected)
@@ -217,6 +219,7 @@ def test_get_position_activity_trials_different() -> None:
                 start=0,
                 max_position=20,
                 remove_landmarks=False,
+                ITI_bin_size=None,
             )
     assert np.array_equal(result, expected_test)
 

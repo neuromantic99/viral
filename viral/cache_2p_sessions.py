@@ -361,6 +361,8 @@ def check_timestamps(
 
     first_frame_trial = trial_start_state.closest_frame_start
     last_frame_trial = trial_end_state.closest_frame_start
+    assert first_frame_trial is not None
+    assert last_frame_trial is not None
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
@@ -374,7 +376,11 @@ def check_timestamps(
         )
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
-        assert abs(offset) < 0.01, "Tiff timestamp does not match daq timestamp"
+        # Allow for some drift up to 15ms
+        if trial.trial_start_time / 60 < 30:
+            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
+        else:
+            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -413,9 +419,10 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB027"]:
+    for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
+
             try:
                 print(f"the type is {row['Type']}")
 
