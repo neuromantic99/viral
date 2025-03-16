@@ -89,8 +89,9 @@ def get_position_activity(
     start: int,
     max_position: int,
     remove_landmarks: bool,
-    ITI_bin_size: int,
+    ITI_bin_size: int | None,
 ) -> np.ndarray:
+    """If ITI bin_size is None then don't add the ITI on"""
 
     test_matrices = []
     for _ in range(10):
@@ -150,6 +151,9 @@ def get_position_activity(
         test_matrices.append(test_matrix[sorted_order, :])
 
     test_matrices_averaged = np.mean(np.array(test_matrices), 0)
+
+    if ITI_bin_size is None:
+        return test_matrices_averaged
 
     # Either return the ITI, or random chunks of rest, remove the comments
     # When decide what to do

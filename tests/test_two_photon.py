@@ -136,6 +136,7 @@ def test_get_position_activity_all_trials_same_dont_reorder() -> None:
             start=0,
             max_position=20,
             remove_landmarks=False,
+            ITI_bin_size=None,
         )
 
     assert np.array_equal(result, expected)
@@ -171,6 +172,7 @@ def test_get_position_activity_all_trials_same_reorder() -> None:
             start=0,
             max_position=20,
             remove_landmarks=False,
+            ITI_bin_size=None,
         )
 
     assert np.array_equal(result, expected)
@@ -217,6 +219,7 @@ def test_get_position_activity_trials_different() -> None:
                 start=0,
                 max_position=20,
                 remove_landmarks=False,
+                ITI_bin_size=None,
             )
     assert np.array_equal(result, expected_test)
 
