@@ -1,5 +1,6 @@
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, computed_field
+import numpy as np
 
 
 class StateInfo(BaseModel):
@@ -106,3 +107,21 @@ class Cached2pSession(BaseModel):
     mouse_name: str
     date: str
     session_type: str
+
+
+class ImagedTrialInfo(BaseModel):
+    trial_start_frame: int
+    trial_end_frame: int
+    rewarded: int
+    trial_frames: np.ndarray
+    iti_start_frame: int
+    iti_end_frame: int
+    frames_positions: np.ndarray
+    frames_speed: np.ndarray
+    corridor_width: int
+    lick_idx: Optional[np.ndarray] = None
+    reward_idx: Optional[np.ndarray] = None
+    signal: np.ndarray
+
+    class Config:
+        arbitrary_types_allowed = True

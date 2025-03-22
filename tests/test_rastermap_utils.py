@@ -11,6 +11,8 @@ from viral.rastermap_utils import (
     get_reward_index,
     create_frame_mapping,
     remap_to_continuous_indices,
+    filter_speed_position,
+    filter_out_ITI,
 )
 
 
@@ -102,9 +104,9 @@ def test_get_frame_position_old_ITI() -> None:
     trial_frames = np.array([0, 1, 2, 3, 4, 5, 6, 7])
 
     wheel_circumference = 100
-    manual_position = np.array([0, 25, 50])  # 0, 0; 90, 25; 180, 50
+    manual_position = np.array([0, 25, 50])
 
-    expected_positions = np.array([0, 25, 25, 37.5, 50, 50, 0, 0])
+    expected_positions = np.array([0, 25, 25, 37.5, 50, 0, 0, 0])
     expected = np.column_stack((trial_frames, expected_positions))
 
     with patch("viral.utils.degrees_to_cm", return_value=manual_position):
@@ -195,37 +197,36 @@ def test_get_frame_position_no_start_no_end() -> None:
 
 def test_get_speed_frame() -> None:
     """Test that the speed for a given array of frame indices and positions will return the right speeds."""
-    frame_position = np.array(
-        [[0, 10], [1, 20], [2, 30], [3, 40], [4, 50], [5, 80], [6, 100]]
-    )
-    expected = np.array([[0, 10], [1, 10], [2, 10], [3, 10], [4, 10], [5, 20], [6, 20]])
-    result = get_speed_frame(frame_position)
-    assert np.array_equal(result, expected)
-
-    # Test with no change of position in between two frames
-    frame_position = np.array(
-        [
-            [0, 10],
-            [1, 20],
-            [2, 30],
-            [3, 40],
-            [4, 50],
-            [5, 60],
-            [6, 60],
-        ]
-    )
+    frame_position = np.array([[0, 0], [1, 2], [2, 2], [3, 4], [4, 5], [5, 5], [6, 6]])
     expected = np.array(
         [
-            [0, 10],
-            [1, 10],
-            [2, 10],
-            [3, 10],
-            [4, 10],
-            [5, 0],
-            [6, 0],
+            [0, 2 * 30],
+            [1, 2 * 30],
+            [2, 2 * 30],
+            [3, 2 * 30],
+            [4, 0 * 30],
+            [5, 0 * 30],
+            [6, 0 * 30],
         ]
     )
-    result = get_speed_frame(frame_position)
+    result = get_speed_frame(frame_position, bin_size=2)
+    assert np.array_equal(result, expected)
+
+
+def test_get_speed_frame_negative_speed() -> None:
+    frame_position = np.array([[0, 0], [1, 2], [2, 2], [3, 4], [4, 5], [5, 4], [6, 6]])
+    expected = np.array(
+        [
+            [0, 2 * 30],
+            [1, 2 * 30],
+            [2, 2 * 30],
+            [3, 2 * 30],
+            [4, 0 * 30],
+            [5, 0 * 30],
+            [6, 0 * 30],
+        ]
+    )
+    result = get_speed_frame(frame_position, bin_size=2)
     assert np.array_equal(result, expected)
 
 
@@ -458,10 +459,10 @@ def test_create_frame_mapping() -> None:
     """Test that the frame mapping dictionary is created correctly."""
     positions_combined = np.array(
         [
-            [10],
-            [11],
-            [12],
-            [13],
+            10,
+            11,
+            12,
+            13,
         ]
     )
     expected = {10: 0, 11: 1, 12: 2, 13: 3}
@@ -472,9 +473,59 @@ def test_create_frame_mapping() -> None:
 
 
 def test_remap_to_continuous_indices() -> None:
-    positions_combined = np.arange(20, 70).reshape(-1, 1)
+    positions_combined = np.arange(20, 70, dtype=int)
     original_indices = np.array([24, 30, 60])
     frame_mapping = create_frame_mapping(positions_combined)
     continuous_indices = remap_to_continuous_indices(original_indices, frame_mapping)
     expected = np.array([4, 10, 40])
     assert np.array_equal(continuous_indices, expected)
+
+
+def test_filter_speed_position_both() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    speed_threshold = 10
+    position_threshold = 20
+    expected = np.array([0, 0, 1, 1, 1, 1])
+    result = filter_speed_position(
+        speed, frames_positions, speed_threshold, position_threshold, True, True
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_speed_position_just_speed() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    speed_threshold = 10
+    expected = np.array([0, 0, 1, 1, 0, 1])
+    result = filter_speed_position(
+        speed=speed,
+        frames_positions=frames_positions,
+        speed_threshold=speed_threshold,
+        filter_position=False,
+        filter_speed=True,
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_speed_position_just_position() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    position_threshold = 20
+    expected = np.array([0, 0, 0, 1, 1, 1])
+    result = filter_speed_position(
+        speed=speed,
+        frames_positions=frames_positions,
+        position_threshold=position_threshold,
+        filter_position=True,
+        filter_speed=False,
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_out_ITI() -> None:
+    positions = np.array([[0, 10], [1, 20], [2, 30], [3, 40], [4, 50], [5, 60]])
+    ITI_starts_ends = np.array([[1, 2], [4, 5]])
+    expected = [1, 0, 0, 1, 0, 0]
+    result = filter_out_ITI(ITI_starts_ends, positions)
+    assert np.array_equal(result, expected)

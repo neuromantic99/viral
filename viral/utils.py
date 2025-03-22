@@ -276,7 +276,16 @@ def get_genotype(mouse_name: str) -> str:
     }:
         return "NLGF"
 
-    elif mouse_name in {"JB025", "JB024", "JB026", "JB027"}:
+    elif mouse_name in {
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
+    }:
         return "WT"
     else:
         raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
@@ -304,6 +313,10 @@ def get_sex(mouse_name: str) -> str:
         "JB021",
         "JB022",
         "JB023",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
     }:
         return "female"
     else:
@@ -324,6 +337,10 @@ def get_setup(mouse_name: str) -> str:
         "JB023",
         "JB026",
         "JB027",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
     }:
         return "2P"
     if mouse_name in {
