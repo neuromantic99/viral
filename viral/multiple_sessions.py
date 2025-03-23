@@ -33,6 +33,7 @@ from viral.utils import (
     get_sex,
     get_setup,
     get_session_type,
+    get_rewarded_texture,
 )
 
 import seaborn as sns
@@ -75,6 +76,11 @@ def cache_mouse(mouse_name: str) -> None:
     # Remove empty rows
     metadata = metadata[metadata["Date"].astype(bool)]
     session_summaries = []
+
+    setup = dict()
+    rewarded_textures = dict()
+    encountered_session_types = set()
+
     for _, row in metadata.iterrows():
         type_check = row["Type"].lower()
         if "learning day" not in type_check or "unsupervised" in type_check:
@@ -85,6 +91,16 @@ def cache_mouse(mouse_name: str) -> None:
                 or "unsupervised" in type_check
             ), f"type {type_check} not understood"
             continue
+
+        session_type = get_session_type(session_name=type_check)
+        encountered_session_types.add(session_type)
+        if session_type not in rewarded_textures and not pd.isna(
+            row["Rewarded texture"]
+        ):
+            rewarded_textures[session_type] = get_rewarded_texture(
+                row["Rewarded texture"]
+            )
+            setup[session_type] = get_setup(row["Rig"])
 
         print(f"Processing session: {row['Type']}")
 
@@ -112,6 +128,7 @@ def cache_mouse(mouse_name: str) -> None:
                 f"Mouse {mouse_name}, date {row['Date']}, sessions {session_numbers} does not have both rewarded and unrewarded trials"
             )
             continue
+
         session_summaries.append(
             SessionSummary(
                 name=row["Type"],
@@ -131,6 +148,16 @@ def cache_mouse(mouse_name: str) -> None:
         )
         print(f"Session summary for {row["Type"]} / {row["Date"]}")
 
+    for session_type in encountered_session_types:
+        if session_type not in rewarded_textures:
+            raise ValueError(
+                f"Missing rewarded texture information for {mouse_name}, session type: {session_type}"
+            )
+        if session_type not in setup:
+            raise ValueError(
+                f"Missing setup information for {mouse_name}, session type: {session_type}"
+            )
+
     with open(
         HERE.parent / "data" / "behaviour_summaries" / f"{mouse_name}.json", "w"
     ) as f:
@@ -140,7 +167,8 @@ def cache_mouse(mouse_name: str) -> None:
                 name=mouse_name,
                 genotype=get_genotype(mouse_name),
                 sex=get_sex(mouse_name),
-                setup=get_setup(mouse_name),
+                setup=setup,
+                rewarded_texture=rewarded_textures,
             ).model_dump(),
             f,
         )
@@ -380,6 +408,10 @@ def create_metric_dict(
                 if flat_sessions
                 else sessions[s_type]
             )
+            if not processed_sessions:
+                print(
+                    f"Warning: No sessions found for session type {s_type} for mouse {mouse.name}"
+                )
             # Iterating through the reward statuses
             for reward_status in reward_statuses:
                 # Creating a key for each category in the mouse_metric dictionary
@@ -460,14 +492,20 @@ def plot_running_speed_summaries(
     sns.stripplot(to_plot, edgecolor="black", linewidth=1)
 
     ax = plt.gca()
-    new_labels = [label.get_text().replace("_", "\n") for label in ax.get_xticklabels()]
-    ax.set_xticklabels(new_labels)
+    new_labels = [
+        label.get_text()
+        .replace("Oligo-BACE1-KO", "Oligo-\nBACE1-KO")
+        .replace("_", "\n")
+        for label in ax.get_xticklabels()
+    ]
+    ax.set_xticklabels(new_labels, fontsize=10)
 
     plt.tight_layout()
     plt.savefig(
         HERE.parent
         / "plots"
-        / f"behaviour-summaries-{speed_function.__name__}-{session_type}"
+        / f"behaviour-summaries-{speed_function.__name__}-{session_type}.svg",
+        dpi=300,
     )
     plt.show()
 
@@ -493,8 +531,13 @@ def plot_trial_time_summaries(mice: List[MouseSummary], session_type: str = "lea
     sns.stripplot(to_plot, edgecolor="black", linewidth=1)
 
     ax = plt.gca()
-    new_labels = [label.get_text().replace("_", "\n") for label in ax.get_xticklabels()]
-    ax.set_xticklabels(new_labels)
+    new_labels = [
+        label.get_text()
+        .replace("Oligo-BACE1-KO", "Oligo-\nBACE1-KO")
+        .replace("_", "\n")
+        for label in ax.get_xticklabels()
+    ]
+    ax.set_xticklabels(new_labels, fontsize=10)
 
     plt.tight_layout()
     plt.savefig(
@@ -538,7 +581,18 @@ def plot_performance_summaries(
 
     for mouse in mice:
         data = rolling_performance_dict[mouse.name]
-        group_label = "\n".join(getattr(mouse, attr) for attr in group_by)
+        group_label_parts = list()
+        for attr in group_by:
+            if attr in ["setup", "rewarded_textures"]:
+                # For dictionaries, get the value for the specific session_type
+                dict_value = getattr(mouse, attr).get(session_type)
+                group_label_parts.append(dict_value)
+            else:
+                # For regular attributes, get the value directly
+                group_label_parts.append(getattr(mouse, attr))
+
+        group_label = "\n".join(group_label_parts)
+
         if group_label not in to_plot:
             to_plot[group_label] = list()
         if session_type in data:
@@ -547,18 +601,28 @@ def plot_performance_summaries(
                 first_threshold_idx = np.where(session_data > 1)[0][0] + window
                 to_plot[group_label].append(first_threshold_idx)
             except IndexError:
-                print(f"There us no valid data for {mouse.name} in {session_type}")
+                print(f"There is no valid data for {mouse.name} in {session_type}")
                 continue
-
+    plt.figure()
     plt.ylabel(f"Trials to criterion")
     plt.title(session_type.replace("_", " ").capitalize())
-
     sns.boxplot(to_plot, showfliers=False)
+    ax = plt.gca()
+    new_labels = [
+        label.get_text()
+        .replace("Oligo-BACE1-KO", "Oligo-\nBACE1-KO")
+        .replace("_", "\n")
+        for label in ax.get_xticklabels()
+    ]
+    ax.set_xticklabels(new_labels, fontsize=12)
     sns.stripplot(to_plot, edgecolor="black", linewidth=1)
     plt.tight_layout()
     group_suffix = "-".join(group_by)
     plt.savefig(
-        HERE.parent / "plots" / f"behaviour-summaries-{group_suffix}-{session_type}"
+        HERE.parent
+        / "plots"
+        / f"behaviour-summaries-{group_suffix}-{session_type}.svg",
+        dpi=300,
     )
     plt.show()
 
@@ -574,9 +638,8 @@ def get_num_to_x(
 
 
 def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
-    # TODO: Have a think: Should we compute chance level for each mouse?
     chance = get_chance_level([mouse], window=window)
-    plt.figure()
+    plt.figure(figsize=(12, 8))
     plot_rolling_performance(
         mouse.sessions,
         window,
@@ -611,7 +674,11 @@ def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
             sessions=mouse.sessions,
             excluded_session_types=phase["excluded_session_types"],
         )
-        plt.axvline(num_to_x - window, color=phase["colour"], linestyle="--")
+        plt.axvline(
+            num_to_x - window,
+            color=phase["colour"],
+            linestyle="--" if phase["name"] != "recall" else "solid",
+        )
         plt.text(
             num_to_x - window + 10,
             2,
@@ -619,9 +686,10 @@ def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
             color=phase["colour"],
             fontsize=15,
         )
+    plt.axhline(1, color="red", linestyle="dotted", alpha=0.7, linewidth=1.5)
     plt.title(mouse.name)
     plt.tight_layout()
-    plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.png")
+    plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.svg", dpi=300)
     plt.show()
 
 
@@ -629,28 +697,38 @@ if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
-    redo = True
+    window = 50
+    redo = False
+    # cache_mouse("JB013")
+    # cache_mouse("JB025")
+    # cache_mouse("JB032")
+    # cache_mouse("JB033")
 
-    # TODO: Probably should check that every mouse is unique
-    for mouse_name in [
-        "JB011",
-        "JB012",
-        # "JB013",
-        "JB014",
-        # "JB015",
-        # "JB016",
-        # "JB017",
-        "JB018",
-        # "JB019",
-        # "JB020",
-        # "JB021",
-        # "JB022",
-        # "JB023",
-        # "JB024",
-        "JB025",
-        # "JB026",
-        # "JB027",
-    ]:
+    for i, mouse_name in enumerate(
+        [
+            "JB011",
+            "JB012",
+            "JB013",
+            "JB014",
+            "JB015",
+            "JB016",
+            "JB017",
+            "JB018",
+            "JB019",
+            "JB020",
+            "JB021",
+            "JB022",
+            "JB023",
+            "JB024",
+            "JB025",
+            # "JB026",
+            # "JB027",
+            # "JB030",
+            # "JB031",
+            # "JB032",
+            # "JB033",
+        ]
+    ):
 
         print(f"\nProcessing {mouse_name}...")
         if redo:
@@ -667,8 +745,52 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    plot_performance_summaries(mice, "recall_reversal", ["genotype", "sex"], window=40)
-    plot_mouse_performance(mice[3])
-    plot_running_speed_summaries(mice, "recall", running_speed_AZ)
-    plot_trial_time_summaries(mice, "learning")
-    plot_num_trials_summaries(mice, "learning")
+        # plot_mouse_performance(mice[i], window=window)
+    plot_performance_summaries(
+        mice,
+        "learning",
+        ["genotype", "rewarded_texture"],
+        window=40,
+    )
+    # plot_performance_summaries(mice, "reversal", ["genotype", "sex"], window=window)
+    # plot_performance_summaries(mice, "learning", ["genotype"], window=window)
+    # plot_performance_summaries(mice, "reversal", ["genotype"], window=window)
+    # plot_performance_summaries(mice, "recall", ["genotype", "sex"], window=window)
+    # plot_performance_summaries(
+    #     mice, "recall_reversal", ["genotype", "sex"], window=window
+    # )
+    # plot_performance_summaries(mice, "recall", ["genotype"], window=window)
+    # plot_performance_summaries(mice, "recall_reversal", ["genotype"], window=window)
+    # plot_running_speed_summaries(mice, "learning", running_speed_overall)
+    # plot_running_speed_summaries(mice, "reversal", running_speed_overall)
+    # plot_running_speed_summaries(mice, "recall", running_speed_overall)
+    # plot_running_speed_summaries(mice, "recall_reversal", running_speed_overall)
+    # plot_running_speed_summaries(mice, "learning", running_speed_AZ)
+    # plot_running_speed_summaries(mice, "reversal", running_speed_AZ)
+    # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
+    # plot_running_speed_summaries(mice, "recall_reversal", running_speed_AZ)
+    # plot_running_speed_summaries(mice, "learning", running_speed_nonAZ)
+    # plot_running_speed_summaries(mice, "reversal", running_speed_nonAZ)
+    # plot_running_speed_summaries(mice, "recall", running_speed_nonAZ)
+    # plot_running_speed_summaries(mice, "recall_reversal", running_speed_nonAZ)
+    ## Probably not interesting as related to speed
+    # plot_trial_time_summaries(mice, "learning")
+    # plot_trial_time_summaries(mice, "reversal")
+    # plot_trial_time_summaries(mice, "recall")
+    # plot_trial_time_summaries(mice, "recall_reversal")
+    # plot_num_trials_summaries(mice, "learning")
+    # plot_num_trials_summaries(mice, "reversal")
+    # plot_num_trials_summaries(mice, "recall")
+    # plot_num_trials_summaries(mice, "recall_reversal")
+    # plot_performance_summaries(
+    #     mice, "learning", ["genotype", "sex", "setup"], window=window
+    # )
+    # plot_performance_summaries(
+    #     mice, "reversal", ["genotype", "sex", "setup"], window=window
+    # )
+    # plot_performance_summaries(
+    #     mice, "recall", ["genotype", "sex", "setup"], window=window
+    # )
+    # plot_performance_summaries(
+    #     mice, "recall_reversal", ["genotype", "sex", "setup"], window=window
+    # )

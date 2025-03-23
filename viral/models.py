@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, computed_field
 import numpy as np
 
@@ -62,7 +62,8 @@ class MouseSummary(BaseModel):
     name: str
     genotype: str
     sex: str
-    setup: str  # TODO As of now, we had one mouse which had to switch for the recall, think about a fix
+    setup: Dict[str, str]
+    rewarded_texture: Dict[str, str]
     sessions: List[SessionSummary]
 
 

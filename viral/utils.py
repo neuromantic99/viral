@@ -5,10 +5,11 @@ from typing import List, Tuple, TypeVar, Any
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
+import pandas as pd
 from enum import Enum
 
 from viral.constants import ENCODER_TICKS_PER_TURN
-from viral.models import SpeedPosition, TrialInfo
+from viral.models import SpeedPosition, TrialInfo, MouseSummary
 
 
 def shaded_line_plot(
@@ -323,36 +324,42 @@ def get_sex(mouse_name: str) -> str:
         raise ValueError(f"Unknown sex for mouse: {mouse_name}")
 
 
-def get_setup(mouse_name: str) -> str:
-    if mouse_name in {
-        "JB011",
-        "JB014",
-        "JB015",
-        "JB016",
-        "JB018",
-        "JB019",
-        "JB020",
-        "JB021",
-        "JB022",
-        "JB023",
-        "JB026",
-        "JB027",
-        "JB030",
-        "JB031",
-        "JB032",
-        "JB033",
-    }:
-        return "2P"
-    if mouse_name in {
-        "JB012",
-        "JB013",
-        "JB017",
-        "JB024",
-        "JB025",
-    }:
-        return "box"
+class SetupType(Enum):
+    TWO_PHOTON = "2P"
+    BOX = "box"
+
+
+def get_setup(setup_name: str) -> str:
+    if "2P" in setup_name.upper().strip():
+        return SetupType.TWO_PHOTON.value
+    elif "box" in setup_name.lower().strip():
+        return SetupType.BOX.value
     else:
-        raise ValueError(f"Unknown setup for mouse: {mouse_name}")
+        raise ValueError(f"Unknown setup '{setup_name}' for mouse!")
+
+
+def get_setup_for_session_type(mouse: MouseSummary, session_type: str) -> str:
+    return mouse.setup[session_type]
+
+
+class RewardedTexture(Enum):
+    PEBBLE = "pebble.jpg"
+    BLACK_AND_WHITE_CIRCLES = "blackAndWhiteCircles.png"
+
+
+def get_rewarded_texture(texture_name: str) -> str:
+    if "pebble" in texture_name.lower().strip():
+        return RewardedTexture.PEBBLE.value
+    elif "blackandwhitecircles" in texture_name.lower().strip():
+        return RewardedTexture.BLACK_AND_WHITE_CIRCLES.value
+    else:
+        raise ValueError(f"Unknown rewarded texture '{texture_name}'.")
+
+
+def get_rewarded_texture_for_session_type(
+    mouse: MouseSummary, session_type: str
+) -> str:
+    return mouse.rewarded_texture[session_type]
 
 
 class SessionType(Enum):
