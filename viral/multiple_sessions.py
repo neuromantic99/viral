@@ -583,13 +583,12 @@ def plot_performance_summaries(
         data = rolling_performance_dict[mouse.name]
         group_label_parts = list()
         for attr in group_by:
-            if attr in ["setup", "rewarded_textures"]:
-                # For dictionaries, get the value for the specific session_type
-                dict_value = getattr(mouse, attr).get(session_type)
-                group_label_parts.append(dict_value)
+            value = getattr(mouse, attr)
+            if isinstance(value, dict):
+                dict_value = value.get(session_type, "")
+                group_label_parts.append(str(dict_value))
             else:
-                # For regular attributes, get the value directly
-                group_label_parts.append(getattr(mouse, attr))
+                group_label_parts.append(str(value))
 
         group_label = "\n".join(group_label_parts)
 
@@ -721,8 +720,8 @@ if __name__ == "__main__":
             "JB023",
             "JB024",
             "JB025",
-            # "JB026",
-            # "JB027",
+            "JB026",
+            "JB027",
             # "JB030",
             # "JB031",
             # "JB032",
