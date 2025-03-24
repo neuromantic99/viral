@@ -523,6 +523,18 @@ def test_filter_speed_position_just_position() -> None:
     assert np.array_equal(result, expected)
 
 
+def test_filter_speed_position_none() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    speed_threshold = 10
+    position_threshold = 20
+    expected = np.array([1, 1, 1, 1, 1, 1])
+    result = filter_speed_position(
+        speed, frames_positions, speed_threshold, position_threshold, False, False
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
 def test_filter_out_ITI() -> None:
     positions = np.array([[0, 10], [1, 20], [2, 30], [3, 40], [4, 50], [5, 60]])
     ITI_starts_ends = np.array([[1, 2], [4, 5]])
