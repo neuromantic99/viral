@@ -6,6 +6,7 @@ import warnings
 from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
+import pandas as pd
 from scipy.stats import zscore
 
 from viral.constants import ENCODER_TICKS_PER_TURN
@@ -242,7 +243,7 @@ def get_genotype(mouse_name: str) -> str:
     }:
         return "NLGF"
 
-    elif mouse_name in {"JB025", "JB024", "JB026", "JB027"}:
+    elif mouse_name in {"JB025", "JB024", "JB026", "JB027", "JB031"}:
         return "WT"
     else:
         raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
@@ -270,6 +271,7 @@ def get_sex(mouse_name: str) -> str:
         "JB021",
         "JB022",
         "JB023",
+        "JB031",
     }:
         return "female"
     else:
@@ -289,6 +291,7 @@ def get_setup(mouse_name: str) -> str:
         "JB022",
         "JB023",
         "JB026",
+        "JB031",
         "JB027",
     }:
         return "2P"
@@ -421,3 +424,15 @@ def find_five_consecutive_trues_center(matrix: np.ndarray) -> np.ndarray:
 
     matrix = np.asarray(matrix, dtype=bool)
     return np.apply_along_axis(find_center, axis=1, arr=matrix)
+
+
+def remove_diagonal(A: np.ndarray) -> np.ndarray:
+    return A[~np.eye(A.shape[0], dtype=bool)].reshape(A.shape[0], -1)
+
+
+def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
+
+    df = pd.DataFrame(matrix)
+    corr = df.corr(method="spearman")
+
+    return corr.to_numpy()

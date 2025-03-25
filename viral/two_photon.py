@@ -9,7 +9,6 @@ from scipy.ndimage import gaussian_filter1d
 
 from rastermap import Rastermap
 
-
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -18,10 +17,10 @@ sys.path.append(str(HERE.parent.parent))
 
 sns.set_theme(context="talk", style="ticks")
 
+
 # from viral.grosmark_analysis import grosmark_place_field
-from viral.classifiers import do_classify
 from viral.grosmark_analysis import grosmark_place_field
-from viral.imaging_utils import activity_trial_position, trial_is_imaged
+from viral.imaging_utils import activity_trial_position, get_ITI_matrix, trial_is_imaged
 from viral.rastermap_utils import get_ITI_start_frame
 from viral.utils import (
     array_bin_mean,
@@ -109,6 +108,7 @@ def get_position_activity(
                         bin_size=bin_size,
                         start=start,
                         max_position=max_position,
+                        smoothing_sigma=None,
                     )
                     for idx in train_idx
                 ]
@@ -139,6 +139,7 @@ def get_position_activity(
                             bin_size=bin_size,
                             start=start,
                             max_position=max_position,
+                            smoothing_sigma=None,
                         )
                         for idx in test_idx
                     ]
@@ -169,83 +170,6 @@ def get_position_activity(
     # return np.hstack((test_matrices_averaged, ITI))
 
 
-def get_resting_chunks(
-    trials: List[TrialInfo],
-    dff: np.ndarray,
-    chunk_size_frames: int,
-    speed_threshold: float,
-) -> np.ndarray:
-
-    all_chunks = []
-    for trial in trials:
-
-        lick_frames = []
-
-        for onset, offset in zip(
-            [
-                event.closest_frame
-                for event in trial.events_info
-                if event.name == "Port1In"
-            ],
-            [
-                event.closest_frame
-                for event in trial.events_info
-                if event.name == "Port1Out"
-            ],
-            strict=True,
-        ):
-            assert onset is not None
-            assert offset is not None
-            lick_frames.extend(range(onset, offset + 1))
-
-        position_frames = np.array(
-            [
-                state.closest_frame_start
-                for state in trial.states_info
-                if state.name
-                in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
-            ]
-        )
-
-        positions = degrees_to_cm(
-            np.array(trial.rotary_encoder_position),
-            get_wheel_circumference_from_rig("2P"),
-        )
-
-        n_chunks = (position_frames[-1] - position_frames[0]) // chunk_size_frames
-
-        for chunk in range(n_chunks):
-            start = chunk * chunk_size_frames
-            end = start + chunk_size_frames
-
-            frame_start = position_frames[0] + start
-            frame_end = frame_start + chunk_size_frames
-
-            distance_travelled = max(positions[start:end]) - min(positions[start:end])
-            speed = distance_travelled / (chunk_size_frames / 30)
-
-            if (
-                speed < speed_threshold
-                and len(
-                    set(lick_frames).intersection(set(range(frame_start, frame_end)))
-                )
-                == 0
-            ):
-                all_chunks.append(
-                    np.hstack(
-                        (
-                            array_bin_mean(
-                                dff[:, frame_start:frame_end],
-                                bin_size=1,
-                            ),
-                            np.ones((dff.shape[0], 1)) * 100,
-                        )
-                    )
-                )
-
-    return np.hstack(all_chunks)
-
-
 def running_during_ITI(trial: TrialInfo) -> bool:
 
     trigger_states = np.array(
@@ -262,55 +186,6 @@ def running_during_ITI(trial: TrialInfo) -> bool:
         get_wheel_circumference_from_rig("2P"),
     )
     return max(ITI_positions) - min(ITI_positions) > 20
-
-
-def get_ITI_matrix(
-    trials: List[TrialInfo],
-    dff: np.ndarray,
-    bin_size: int,
-    average: bool,
-) -> np.ndarray:
-    """
-    In theory will be 600 frames in an ITI (as is always 20 seconds)
-    In practise it's 599 or 598 (or could be something like 597 or 600, fix
-    the assertion if so).
-    Or could be less if you stop the trial in the ITI.
-    So we'll take the first 598 frames of any trial that has 599 or 598
-    """
-
-    matrices = []
-
-    for trial in trials:
-        assert trial.trial_end_closest_frame is not None
-
-        # This would be good, but in practise it rarely occurs
-        # if running_during_ITI(trial):
-        #     continue
-
-        chunk = dff[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
-
-        n_frames = chunk.shape[1]
-        if n_frames < 550:
-            # Imaging stopped in the middle
-            continue
-        elif n_frames in {598, 599}:
-            matrices.append(array_bin_mean(chunk[:, :598], bin_size=bin_size))
-        else:
-            raise ValueError(f"Chunk with {n_frames} frames not understood")
-
-    print(f"Number of still ITI trials: {len(matrices)}")
-    # return normalize(np.mean(np.array(matrices), 0), axis=1)
-    print(f"ITI shape {matrices[0].shape}")
-
-    if average:
-        return np.mean(
-            np.array([normalize(matrix, axis=1) for matrix in matrices]), axis=0
-        )
-
-    # Hack, stack a column of 1s so you can distinguish trials. Remove if doing proper analysis
-    for idx in range(len(matrices)):
-        matrices[idx] = np.hstack([matrices[idx], np.ones((matrices[idx].shape[0], 1))])
-    return np.hstack([matrix for matrix in matrices])
 
 
 def place_cells_unsupervised(session: Cached2pSession, dff: np.ndarray) -> None:
@@ -348,7 +223,6 @@ def place_cells(
 ) -> None:
 
     # TODO: Don't reuse this function obviously
-
     spks = binarise_spikes(spks)
     grosmark_place_field(session, spks)
     return
@@ -447,10 +321,38 @@ def place_cells(
 
 
 def binarise_spikes(spks: np.ndarray) -> np.ndarray:
+    """Implements the calcium imaging preprocessing stepts here:
+    https://www.nature.com/articles/s41593-021-00920-7#Sec12
+
+    Though the first steps done in our oasis fork.
+
+    Currently we are not doing wavelet denoising as I've found this makes the fit much worse.
+    We have added zhang baseline step. As without this, if our baseline drifts, higher baseline
+    periods are considered to have more spikes.
+
+    We are also not normalising by the residual between denoised and actual. It's not clear
+    how they do this. What factor are they reducing the residual by? The residual is some
+    massive number.
+
+    They threshold based on the MAD. But is it just the MAD or is the MAD deviation from the median?
+    I also had to take the MAD of only non-zero periods. As the raw MAD of all cells is 0. This may
+    not be true in the hippocampus which is why they may not do this. We're also not currently
+    altering the threshold depending or running or not. TOOD: DO THIS
+
+
+    """
+
     non_zero_spikes = np.copy(spks)
     non_zero_spikes[non_zero_spikes == 0] = np.nan
+
     mad = median_abs_deviation(non_zero_spikes, axis=1, nan_policy="omit")
-    mask = spks - mad[:, np.newaxis] * 1.5 > 0
+
+    # Maybe
+    # threshold = mad * 1.5
+
+    # Or maybe
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
+    mask = spks - threshold[:, np.newaxis] > 0
     spks[~mask] = 0
     spks[mask] = 1
     return remove_consecutive_ones(spks)
@@ -460,6 +362,7 @@ if __name__ == "__main__":
 
     mouse = "JB027"
     date = "2025-02-26"
+    # date = "2024-12-10"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -470,6 +373,7 @@ if __name__ == "__main__":
     )
 
     dff, spks, denoised = get_dff(mouse, date)
+
     print("Got dff")
 
     assert (
@@ -481,8 +385,9 @@ if __name__ == "__main__":
         < dff.shape[1]
     ), "Tiff is too short"
 
-    do_classify(session, spks)
+    # do_classify(session, spks)
 
+    place_cells(session, dff, spks, denoised)
     # if "unsupervised" in session.session_type.lower():
     #     place_cells_unsupervised(session, dff)
     # else:

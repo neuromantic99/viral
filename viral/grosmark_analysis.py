@@ -1,17 +1,29 @@
+import itertools
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
+from scipy.spatial.distance import cdist
 import numpy as np
 from scipy.stats import zscore
 
-from viral.imaging_utils import trial_is_imaged
+from viral.constants import HERE
+from viral.imaging_utils import get_ITI_matrix, trial_is_imaged, get_resting_chunks
+
 from viral.models import Cached2pSession
+
 from viral.utils import (
+    cross_correlation_pandas,
     find_five_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_five_consecutive_trues,
     sort_matrix_peak,
 )
+
 from viral.imaging_utils import activity_trial_position
+
+bin_size = 2
+
+start = 20
+end = 160
 
 
 def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarray:
@@ -30,12 +42,14 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
 
     """
 
-    bin_size = 2
-    start = 30
-    end = 170
+    n_cells_total = spks.shape[0]
 
-    sigma_cm = 3  # Desired smoothing in cm
+    sigma_cm = 7.5  # Desired smoothing in cm
     sigma_bins = sigma_cm / bin_size  # Convert to bin units
+
+    n_shuffles = 2000
+
+    # spks = shuffle_rows(spks)
 
     all_trials = np.array(
         [
@@ -48,48 +62,41 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
                 max_position=end,
                 verbose=False,
                 do_shuffle=False,
+                smoothing_sigma=sigma_bins,
             )
             for trial in session.trials
             if not trial.texture_rewarded and trial_is_imaged(trial)
         ]
     )
 
-    activity_matrix = np.mean(all_trials, 0)
-
-    # Apply Gaussian smoothing along each row (axis=1)
-    # TODO: Should we smooth each trial independently?
-    smoothed_matrix = gaussian_filter1d(activity_matrix, sigma=sigma_bins, axis=1)
+    smoothed_matrix = np.mean(all_trials, 0)
+    # shuffled_matrices = np.load(HERE / "shuffled_matrices.npy")
     shuffled_matrices = np.array(
         [
-            gaussian_filter1d(
-                np.mean(
-                    np.array(
-                        [
-                            activity_trial_position(
-                                trial=trial,
-                                flu=spks,
-                                wheel_circumference=get_wheel_circumference_from_rig(
-                                    "2P"
-                                ),
-                                bin_size=bin_size,
-                                start=start,
-                                max_position=end,
-                                verbose=False,
-                                do_shuffle=True,
-                            )
-                            for trial in session.trials
-                            if not trial.texture_rewarded and trial_is_imaged(trial)
-                        ]
-                    ),
-                    0,
+            np.mean(
+                np.array(
+                    [
+                        activity_trial_position(
+                            trial=trial,
+                            flu=spks,
+                            wheel_circumference=get_wheel_circumference_from_rig("2P"),
+                            bin_size=bin_size,
+                            start=start,
+                            max_position=end,
+                            verbose=False,
+                            do_shuffle=True,
+                            smoothing_sigma=sigma_bins,
+                        )
+                        for trial in session.trials
+                        if not trial.texture_rewarded and trial_is_imaged(trial)
+                    ]
                 ),
-                sigma=sigma_bins,
-                axis=1,
+                0,
             )
-            for _ in range(2000)
+            for _ in range(n_shuffles)
         ]
     )
-
+    np.save(HERE / "shuffled_matrices.npy", shuffled_matrices)
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
     shuffled_place_cells = np.array(
@@ -100,7 +107,11 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
     )
 
     pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
+
+    spks = spks[pcs, :]
     smoothed_matrix = smoothed_matrix[pcs, :]
+
+    print(f"percent place cells before extra check {np.sum(pcs) / n_cells_total}")
 
     pcs = filter_additional_check(
         all_trials=all_trials[:, pcs, :],
@@ -108,20 +119,184 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
         smoothed_matrix=smoothed_matrix,
     )
 
+    # Don't love this double indexing
+    spks = spks[pcs, :]
+    smoothed_matrix = smoothed_matrix[pcs, :]
+
+    print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
+
     print(
-        f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / shuffled_place_cells.shape[1])}"
+        f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
     # TODO: no additional check for shuffled, probably not necessary
-    print(f"percent place cells not shuffled {np.sum(pcs) / len(pcs)}")
+
+    print(f"percent place cells not shuffled {np.sum(pcs) / n_cells_total}")
+
+    peak_indices = np.argmax(smoothed_matrix, axis=1)
+    sorted_order = np.argsort(peak_indices)
+
+    # plot_circular_distance_matrix(smoothed_matrix, sorted_order)
+
+    offline_correlations(
+        session,
+        spks[sorted_order, :],
+    )
+
+    return np.ndarray([])
+
+
+def offline_correlations(
+    session: Cached2pSession,
+    spks: np.ndarray,
+) -> None:
+    """Correlated offline activity with running. Currently a load of different options for
+    how you define offline activity"""
+
+    offline = get_ITI_matrix(
+        trials=[
+            trial
+            for trial in session.trials
+            if trial_is_imaged(trial) and not trial.texture_rewarded
+        ],
+        dff=spks,
+        bin_size=1,
+        average=False,
+    )
+
+    n_trials, n_cells, n_frames = offline.shape
+
+    # HORIZONAL STACK ITI
+    # offline = (
+    #     offline.reshape(-1, n_cells, n_frames).transpose(1, 0, 2).reshape(n_cells, -1)
+    # )
+    # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
+
+    # plt.figure()
+    # plt.title("real")
+    # corrs = cross_correlation_pandas(offline.T)
+    # corrs = remove_diagonal(corrs)
+    # corrs = gaussian_filter1d(corrs, sigma=2.5)
+    # plt.imshow(corrs, vmin=0, vmax=0.2)
+
+    # plt.figure()
+
+    # np.random.shuffle(offline)
+    # plt.title("Shuffled")
+    # corrs = cross_correlation_pandas(offline.T)
+    # corrs = remove_diagonal(corrs)
+    # corrs = gaussian_filter1d(corrs, sigma=2.5)
+    # plt.imshow(corrs, vmin=0, vmax=0.2)
+
+    # total_spikes_cells = np.sum(offline, (0, 2))
+    # offline = offline[:, total_spikes_cells > 100, :]
+
+    #####################################
+
+    # DONT STACK ITI
+    plt.figure()
+    all_corrs = []
+    for trial in range(n_trials):
+        # 150-ms kernel convolution
+        shuffled_trial = np.copy(offline[trial, :, :])
+        np.random.shuffle(shuffled_trial)
+        ITI_trial = gaussian_filter1d(shuffled_trial, sigma=4.5, axis=1)
+        all_corrs.append(cross_correlation_pandas(ITI_trial.T))
+
+    corrs = np.nanmean(np.array(all_corrs), 0)
+    # corrs = remove_diagonal(corrs)
+    # corrs = gaussian_filter1d(corrs, sigma=2.5)
+    plt.title("shuffled")
+    plt.imshow(corrs, vmin=0, vmax=0.1, cmap="bwr")
 
     plt.figure()
+    all_corrs = []
+    for trial in range(n_trials):
+        # 150-ms kernel convolution
+        ITI_trial = gaussian_filter1d(offline[trial, :, :], sigma=4.5, axis=1)
+        all_corrs.append(cross_correlation_pandas(ITI_trial.T))
+
+    corrs = np.nanmean(np.array(all_corrs), 0)
+    # corrs = remove_diagonal(corrs)
+    # corrs = gaussian_filter1d(corrs, sigma=2.5)
+    plt.title("REAL")
+    plt.imshow(corrs, vmin=0, vmax=0.1, cmap="bwr")
+
+    # This assumes cells equally span the field. Not true but ok for now
+    all_cell_peak_positions = np.linspace(start, end, n_cells)
+    peak_distances = []
+    cell_corrs = []
+
+    for i, j in itertools.combinations(range(n_cells), r=2):
+
+        cell1_peak = all_cell_peak_positions[i]
+        cell2_peak = all_cell_peak_positions[j]
+        peak_distances.append(abs(cell1_peak - cell2_peak))
+        cell_corrs.append(corrs[i, j])
+
+    peak_distances = np.array(peak_distances)
+    cell_corrs = np.array(cell_corrs)
+
+    x = []
+    y = []
+
+    for bin_start in np.arange(0, 80):
+        in_bin = np.logical_and(
+            peak_distances > bin_start, peak_distances < bin_start + 20
+        )
+        x.append(bin_start)
+        y.append(np.mean(cell_corrs[in_bin]))
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.show()
+
+    ############ RESTING CHUNKS #########################
+    # offline = get_resting_chunks(
+    #     trials=[
+    #         session.trials[idx]
+    #         for idx in range(len(session.trials))
+    #         if trial_is_imaged(session.trials[idx])
+    #         and session.trials[idx - 1].texture_rewarded
+    #     ],
+    #     dff=spks,
+    #     chunk_size_frames=5 * 30,
+    #     speed_threshold=1,
+    # )
+
+    # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
+
+    # all_coors = []
+    # for offline_trial in offline:
+    #     # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
+    #     corr_trial = cross_correlation_pandas(offline_trial.T)
+    #     corr_trial = remove_diagonal(corr_trial)
+    #     all_coors.append(corr_trial)
+
+
+def plot_circular_distance_matrix(
+    smoothed_matrix: np.ndarray, sorted_order: np.ndarray
+) -> None:
+
     plt.imshow(
-        zscore(sort_matrix_peak(smoothed_matrix[pcs, :]), axis=1),
+        circular_distance_matrix(smoothed_matrix[sorted_order, :]), cmap="RdYlBu"
+    )
+    plt.colorbar()
+    plt.show()
+
+
+def plot_place_cells(
+    smoothed_matrix: np.ndarray,
+    shuffled_matrices: np.ndarray,
+    shuffled_place_cells: np.ndarray,
+) -> None:
+    plt.figure()
+    plt.imshow(
+        zscore(sort_matrix_peak(smoothed_matrix), axis=1),
         aspect="auto",
-        cmap="viridis",
-        vmin=0,
-        vmax=1,
+        cmap="bwr",
+        vmin=-1,
+        vmax=2,
     )
 
     plt.title("real")
@@ -136,22 +311,25 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
             axis=1,
         ),
         aspect="auto",
-        cmap="viridis",
-        vmin=0,
-        vmax=1,
+        cmap="bwr",
+        vmin=-1,
+        vmax=2,
     )
 
     plt.title("shuffled")
     plt.colorbar()
     plt.show()
 
-    return np.ndarray([])
-
 
 def filter_additional_check(
     all_trials: np.ndarray, place_threshold: np.ndarray, smoothed_matrix: np.ndarray
 ) -> np.ndarray:
-    # TODO: Do we need to smooth this?
+    """Runs the following check from the Grosmark paper:
+    As an additional control, only those putative PFs in which the cell had a greater within-PF than outside-of-PF firing rates
+    in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
+
+    Currently have made the threshold more conservative (40%) as 15% does not filter any cells out, but review.
+    """
 
     centers = find_five_consecutive_trues_center(smoothed_matrix > place_threshold)
 
@@ -176,9 +354,40 @@ def filter_additional_check(
             ):
                 count += 1
 
-        if count / n_trials > 0.15:
+        if count / n_trials > 0.4:
             valid_pcs[cell] = True
 
-        # in_field.append(all_trials[:,
-
     return np.array(valid_pcs)
+
+
+def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
+    """
+    Computes the pairwise circular distance matrix of place field (PF) peaks.
+
+    Parameters:
+    - activity_matrix: np.array of shape (n_cells, n_positions)
+      Each row corresponds to the neural activity of a single cell across positions.
+
+    Returns:
+    - circular_dist_matrix: np.array of shape (n_cells, n_cells)
+      The pairwise circular peak distance matrix.
+
+    I haven't unit tested this but the results look good.
+    """
+
+    n_positions = activity_matrix.shape[1]  # Number of spatial bins
+
+    # Step 1: Find peak firing positions for each cell
+    peak_positions = np.argmax(activity_matrix, axis=1)
+
+    # Step 2: Compute pairwise circular distances
+    pairwise_distances = cdist(
+        peak_positions[:, None], peak_positions[:, None], metric="cityblock"
+    )
+
+    # Step 3: Apply circular distance correction
+    circular_dist_matrix = np.minimum(
+        pairwise_distances, n_positions - pairwise_distances
+    )
+
+    return circular_dist_matrix
