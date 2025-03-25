@@ -213,6 +213,19 @@ def test_get_speed_frame() -> None:
     assert np.array_equal(result, expected)
 
 
+def test_get_speed_frame_different_bin_sizes() -> None:
+    """Test that the speed for a given array of frame indices and positions will return the right speeds."""
+    frame_position = np.array(
+        [[0, 0.1], [1, 0.2], [2, 0.3], [3, 0.4], [4, 0.5], [3, 0.6]]
+    )
+
+    assert (
+        get_speed_frame(frame_position, bin_size=2)[0, 0]
+        == get_speed_frame(frame_position, bin_size=3)[0, 0]
+        == get_speed_frame(frame_position, bin_size=4)[0, 0]
+    )
+
+
 def test_get_speed_frame_negative_speed() -> None:
     frame_position = np.array([[0, 0], [1, 2], [2, 2], [3, 4], [4, 5], [5, 4], [6, 6]])
     expected = np.array(
