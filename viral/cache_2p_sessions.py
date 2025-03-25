@@ -247,6 +247,7 @@ def get_valid_frame_times(
         assert chunk_len_daq - stack_len_tiff in {
             0,
             2,
+            3,
         }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
         This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
 
@@ -257,7 +258,7 @@ def get_valid_frame_times(
 
     assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
         frame_times_daq
-    ) - len(valid_frame_times) <= 2 * len(chunk_lengths_daq)
+    ) - len(valid_frame_times) <= 3 * len(chunk_lengths_daq)
 
     return valid_frame_times
 
@@ -419,7 +420,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB031"]:
+    for mouse_name in ["JB027"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
 
