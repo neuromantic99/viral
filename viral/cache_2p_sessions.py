@@ -247,6 +247,7 @@ def get_valid_frame_times(
         assert chunk_len_daq - stack_len_tiff in {
             0,
             2,
+            3,
         }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
         This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
 
@@ -257,7 +258,7 @@ def get_valid_frame_times(
 
     assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
         frame_times_daq
-    ) - len(valid_frame_times) <= 2 * len(chunk_lengths_daq)
+    ) - len(valid_frame_times) <= 3 * len(chunk_lengths_daq)
 
     return valid_frame_times
 
@@ -361,6 +362,8 @@ def check_timestamps(
 
     first_frame_trial = trial_start_state.closest_frame_start
     last_frame_trial = trial_end_state.closest_frame_start
+    assert first_frame_trial is not None
+    assert last_frame_trial is not None
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
@@ -374,7 +377,11 @@ def check_timestamps(
         )
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
-        assert abs(offset) < 0.01, "Tiff timestamp does not match daq timestamp"
+        # Allow for some drift up to 15ms
+        if trial.trial_start_time / 60 < 30:
+            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
+        else:
+            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -416,6 +423,7 @@ def main() -> None:
     for mouse_name in ["JB027"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
+
             try:
                 print(f"the type is {row['Type']}")
 

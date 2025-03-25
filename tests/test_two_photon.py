@@ -3,9 +3,9 @@ import numpy as np
 from unittest.mock import patch
 
 
+from viral.imaging_utils import activity_trial_position
 from viral.models import StateInfo, TrialInfo
 from viral.two_photon import (
-    activity_trial_position,
     get_position_activity,
 )
 from viral.utils import sort_matrix_peak
@@ -53,7 +53,9 @@ def test_activity_trial_position_simple() -> None:
 
     # cells x frames
     dff = np.ones((10, len(trial.rotary_encoder_position)))
-    result = activity_trial_position(trial, dff, WHEEL_CIRCUMFERENCE)
+    result = activity_trial_position(
+        trial, dff, WHEEL_CIRCUMFERENCE, smoothing_sigma=None
+    )
     assert np.array_equal(np.ones((dff.shape[0], 160)), result)
 
 
@@ -72,7 +74,13 @@ def test_activity_trial_position_multiple_frames_per_bin() -> None:
 
     # cells x frames
     result = activity_trial_position(
-        trial, dff, WHEEL_CIRCUMFERENCE, bin_size=10, start=0, max_position=20
+        trial,
+        dff,
+        WHEEL_CIRCUMFERENCE,
+        bin_size=10,
+        start=0,
+        max_position=20,
+        smoothing_sigma=None,
     )
     expected = np.array([[10, 20], [2, 4]])
     assert np.array_equal(result, expected)
@@ -99,6 +107,7 @@ def test_activity_trial_position_uneven_frame_spacing() -> None:
         bin_size=10,
         start=0,
         max_position=20,
+        smoothing_sigma=None,
     )
     # Expect the first bin to be the mean of the first two frames
     # Expect the second bin to be only the final frame
@@ -136,6 +145,7 @@ def test_get_position_activity_all_trials_same_dont_reorder() -> None:
             start=0,
             max_position=20,
             remove_landmarks=False,
+            ITI_bin_size=None,
         )
 
     assert np.array_equal(result, expected)
@@ -171,6 +181,7 @@ def test_get_position_activity_all_trials_same_reorder() -> None:
             start=0,
             max_position=20,
             remove_landmarks=False,
+            ITI_bin_size=None,
         )
 
     assert np.array_equal(result, expected)
@@ -217,6 +228,7 @@ def test_get_position_activity_trials_different() -> None:
                 start=0,
                 max_position=20,
                 remove_landmarks=False,
+                ITI_bin_size=None,
             )
     assert np.array_equal(result, expected_test)
 
