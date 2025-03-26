@@ -472,7 +472,9 @@ def plot_running_speed_summaries(
     plt.show()
 
 
-def plot_trial_time_summaries(mice: List[MouseSummary], session_type: str = "learning"):
+def plot_trial_time_summaries(
+    mice: List[MouseSummary], session_type: str = "learning"
+) -> None:
     trial_time_dict = create_metric_dict(
         mice, trial_time, flat_sessions=True, include_reward_status=True
     )
@@ -503,7 +505,9 @@ def plot_trial_time_summaries(mice: List[MouseSummary], session_type: str = "lea
     plt.show()
 
 
-def plot_num_trials_summaries(mice: List[MouseSummary], session_type: str = "learning"):
+def plot_num_trials_summaries(
+    mice: List[MouseSummary], session_type: str = "learning"
+) -> None:
     num_trials_dict = create_metric_dict(
         mice, trials_run, flat_sessions=False, include_reward_status=False
     )
@@ -530,7 +534,7 @@ def plot_num_trials_summaries(mice: List[MouseSummary], session_type: str = "lea
 
 def plot_performance_summaries(
     mice: List[MouseSummary], session_type: str, group_by: list[str], window: int = 50
-):
+) -> None:
     rolling_performance_dict = create_metric_dict(
         mice, rolling_performance, True, False, window
     )
@@ -577,6 +581,7 @@ def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
     # TODO: Have a think: Should we compute chance level for each mouse?
     chance = get_chance_level([mouse], window=window)
     plt.figure()
+    plt.axhline(1, linestyle="--")
     plot_rolling_performance(
         mouse.sessions,
         window,
@@ -625,32 +630,31 @@ def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
     plt.show()
 
 
-if __name__ == "__main__":
+def main() -> None:
 
     mice: List[MouseSummary] = []
 
     redo = True
 
-    # TODO: Probably should check that every mouse is unique
-    for mouse_name in [
-        "JB011",
-        "JB012",
+    for mouse_name in {
+        # "JB011",
+        # "JB012",
         # "JB013",
-        "JB014",
+        # "JB014",
         # "JB015",
         # "JB016",
         # "JB017",
-        "JB018",
+        # "JB018",
         # "JB019",
         # "JB020",
         # "JB021",
         # "JB022",
-        # "JB023",
+        "JB023",
         # "JB024",
-        "JB025",
+        # "JB025",
         # "JB026",
         # "JB027",
-    ]:
+    }:
 
         print(f"\nProcessing {mouse_name}...")
         if redo:
@@ -667,8 +671,12 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    plot_performance_summaries(mice, "recall_reversal", ["genotype", "sex"], window=40)
-    plot_mouse_performance(mice[3])
-    plot_running_speed_summaries(mice, "recall", running_speed_AZ)
-    plot_trial_time_summaries(mice, "learning")
-    plot_num_trials_summaries(mice, "learning")
+    # plot_performance_summaries(mice, "recall_reversal", ["genotype", "sex"], window=40)
+    plot_mouse_performance(mice[0])
+    # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
+    # plot_trial_time_summaries(mice, "learning")
+    # plot_num_trials_summaries(mice, "learning")
+
+
+if __name__ == "__main__":
+    main()

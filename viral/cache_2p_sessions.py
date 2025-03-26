@@ -18,6 +18,8 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+from viral.imaging_utils import extract_TTL_chunks, get_sampling_rate, trial_is_imaged
+
 
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -30,12 +32,9 @@ from viral.models import Cached2pSession, TrialInfo
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
-    extract_TTL_chunks,
     find_chunk,
-    get_sampling_rate,
     get_tiff_paths_in_directory,
     time_list_to_datetime,
-    trial_is_imaged,
     degrees_to_cm,
 )
 
@@ -193,32 +192,8 @@ def add_imaging_info_to_trials(
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
-    # Consistently, the number of triggers recorded is two more than the number of frames recorded.
-    # This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
-    # from a completed grab).
-    # The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
-    # The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
-    # frame is relaibly correct
-    # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
-    assert np.all(
-        chunk_lengths_daq - stack_lengths_tiffs == 2
-    ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lengths_daq}. Stack lengths: {stack_lengths_tiffs}. This will occcur especially on crashed recordings, think about a fix"
-
-    # Remove the final two frames from valid frames
-    valid_frame_times = np.array([])
-    offset = 0
-    for stack_len_tiff, chunk_len_daq in zip(
-        stack_lengths_tiffs, chunk_lengths_daq, strict=True
-    ):
-        valid_frame_times = np.append(
-            valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
-        )
-        offset += chunk_len_daq
-
-    assert (
-        len(valid_frame_times)
-        == sum(stack_lengths_tiffs)
-        == len(frame_times_daq) - 2 * len(stack_lengths_tiffs)
+    valid_frame_times = get_valid_frame_times(
+        stack_lengths_tiffs, frame_times_daq, chunk_lengths_daq
     )
 
     for idx, trial in enumerate(trials):
@@ -244,6 +219,47 @@ def add_imaging_info_to_trials(
         )
 
     return trials
+
+
+def get_valid_frame_times(
+    stack_lengths_tiffs: np.ndarray,
+    frame_times_daq: np.ndarray,
+    chunk_lengths_daq: np.ndarray,
+) -> np.ndarray:
+    """Consistently, the number of triggers recorded is two more than the number of frames recorded.
+    This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
+    from a completed grab).
+    The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
+    The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
+    frame is relaibly correct
+    Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
+
+    We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
+
+    """
+
+    valid_frame_times = np.array([])
+    offset = 0
+    for stack_len_tiff, chunk_len_daq in zip(
+        stack_lengths_tiffs, chunk_lengths_daq, strict=True
+    ):
+
+        assert chunk_len_daq - stack_len_tiff in {
+            0,
+            2,
+        }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
+        This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
+
+        valid_frame_times = np.append(
+            valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
+        )
+        offset += chunk_len_daq
+
+    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
+        frame_times_daq
+    ) - len(valid_frame_times) <= 2 * len(chunk_lengths_daq)
+
+    return valid_frame_times
 
 
 def get_tiff_metadata(
@@ -391,7 +407,7 @@ def process_session(
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
-if __name__ == "__main__":
+def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
@@ -456,3 +472,7 @@ if __name__ == "__main__":
                 msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
                 logger.debug(msg)
                 print(msg)
+
+
+if __name__ == "__main__":
+    main()
