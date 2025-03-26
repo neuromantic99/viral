@@ -501,7 +501,7 @@ def test_filter_speed_position_both() -> None:
     position_threshold = 20
     expected = np.array([0, 0, 1, 1, 1, 1])
     result = filter_speed_position(
-        speed, frames_positions, speed_threshold, position_threshold, True, True
+        speed, frames_positions, speed_threshold, position_threshold
     ).astype(int)
     assert np.array_equal(result, expected)
 
@@ -515,8 +515,6 @@ def test_filter_speed_position_just_speed() -> None:
         speed=speed,
         frames_positions=frames_positions,
         speed_threshold=speed_threshold,
-        filter_position=False,
-        filter_speed=True,
     ).astype(int)
     assert np.array_equal(result, expected)
 
@@ -530,8 +528,6 @@ def test_filter_speed_position_just_position() -> None:
         speed=speed,
         frames_positions=frames_positions,
         position_threshold=position_threshold,
-        filter_position=True,
-        filter_speed=False,
     ).astype(int)
     assert np.array_equal(result, expected)
 
@@ -539,12 +535,8 @@ def test_filter_speed_position_just_position() -> None:
 def test_filter_speed_position_none() -> None:
     speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
     frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
-    speed_threshold = 10
-    position_threshold = 20
     expected = np.array([1, 1, 1, 1, 1, 1])
-    result = filter_speed_position(
-        speed, frames_positions, speed_threshold, position_threshold, False, False
-    ).astype(int)
+    result = filter_speed_position(speed, frames_positions).astype(int)
     assert np.array_equal(result, expected)
 
 

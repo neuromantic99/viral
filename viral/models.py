@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel, computed_field
 import numpy as np
 
@@ -119,9 +119,9 @@ class ImagedTrialInfo(BaseModel):
     frames_positions: np.ndarray
     frames_speed: np.ndarray
     corridor_width: int
-    lick_idx: Optional[np.ndarray] = None
-    reward_idx: Optional[np.ndarray] = None
-    signal: np.ndarray
+    lick_idx: np.ndarray
+    reward_idx: np.ndarray
+    neural_data: np.ndarray
 
     class Config:
         arbitrary_types_allowed = True

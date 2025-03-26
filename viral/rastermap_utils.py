@@ -1,9 +1,7 @@
 import numpy as np
 import sys
-import random
 from pathlib import Path
 from scipy.interpolate import interp1d
-from sklearn.preprocessing import MinMaxScaler
 from typing import List, Optional
 from enum import Enum
 
@@ -22,17 +20,19 @@ from viral.constants import TIFF_UMBRELLA
 from viral.two_photon import get_dff
 
 
-def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray]:
+def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    spks = np.load(s2p_path / "spks.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
+    spks = np.load(s2p_path / "spks.npy")[iscell, :]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])
     xpos = pos[:, 1]
     ypos = -1 * pos[:, 0]  # y-axis is inverted
     return spks, xpos, ypos
 
 
-def get_dff_pos(session: Cached2pSession, s2p_path: Path) -> tuple[np.ndarray]:
+def get_dff_pos(
+    session: Cached2pSession, s2p_path: Path
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     dff = get_dff(mouse=session.mouse_name, date=session.date)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
@@ -42,12 +42,12 @@ def get_dff_pos(session: Cached2pSession, s2p_path: Path) -> tuple[np.ndarray]:
     return dff, xpos, ypos
 
 
-def align_trial_frames(trials: List[TrialInfo], ITI: bool = True) -> np.ndarray:
+def align_trial_frames(trials: List[TrialInfo], include_ITI: bool = True) -> np.ndarray:
     """Align trial frames and return array with trial frames and reward condition.
 
     Args:
         trials (List[TrialInfo]):       A list of TrialInfo objects.
-        ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to False.
+        include_ITI (bool, optional):   Include the frames in the inter-trial interval (ITI). Defaults to False.
                                         If ITI, is False, then trial end is defined as the start of the ITI.
 
     Returns:
@@ -62,7 +62,7 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = True) -> np.ndarray:
             for trial in trials
         ]
     )
-    if not ITI:
+    if not include_ITI:
         ITI_start_frames = np.array([get_ITI_start_frame(trial) for trial in trials])
         trial_frames[:, 1] = ITI_start_frames - 1
     assert (
@@ -107,7 +107,6 @@ def get_frame_position(
         trial (TrialInfo):              A TrialInfo object representing the trial to be analysed.
         trial_frames (np.ndarray):      Numpy array representing the frames in the trial.
         wheel_circumference (float):    The circumference of the wheel on the rig used in centimetres.
-        ITI (bool, optional):           Whether to include the frames in the inter-trial interval (ITI). Defaults to True.
 
     Returns:
         np.ndarray:                     A Numpy array of shape (frames, 2). Each row representing a frame with:
@@ -115,6 +114,7 @@ def get_frame_position(
             position (float)
     """
     # There is an old version of our IBL rig code which does not store any positions during the ITI
+    # In this version, the start of the ITI is called "ITI" rather than "trigger_ITI". In this case, ITI_patch is set to True.
     ITI_states = {state.name for state in trial.states_info if "ITI" in state.name}
     assert len(ITI_states) != 0, "No ITI state found"
     ITI_patch = True if "ITI" in ITI_states else False
@@ -177,7 +177,7 @@ def get_speed_frame(frame_position: np.ndarray, bin_size: int = 5) -> np.ndarray
     """Get the speed for every frame and return frames and speed as array.
 
     Args:
-        frame_position (np.ndarray):    A Numpy array of shape (frames, 2). Each row representing a frame with frame index and corresponding speed.
+        frame_position (np.ndarray):    A Numpy array of shape (frames, 2). Each row representing a frame with frame index and corresponding position.
         bin_size (int):                 How many frames to bin over. Defaults to 5.
 
     Returns:
@@ -189,15 +189,12 @@ def get_speed_frame(frame_position: np.ndarray, bin_size: int = 5) -> np.ndarray
         raise ValueError("You cannot select a bin size <= 1 for speed!")
     n_frames = frame_position.shape[0]
     # Including upper bound
-    bins = np.arange(0, n_frames, bin_size)
+    bins = np.arange(0, min(n_frames, n_frames + bin_size), bin_size)
     speeds = np.zeros(frame_position.shape[0])
-    for i in range(len(bins)):
+    for i in range(len(bins) - 1):
         start_idx = bins[i]
-        if i == len(bins) - 1:
-            # Handle smaller last bin
-            end_idx = n_frames - 1
-        else:
-            end_idx = bins[i + 1] - 1
+        end_idx = min(bins[i + 1] - 1, n_frames - 1)
+
         frame_start_idx, position_frame_start = frame_position[start_idx, :]
         frame_end_idx, position_frame_end = frame_position[end_idx, :]
         frame_diff = frame_end_idx - frame_start_idx
@@ -314,7 +311,7 @@ def create_frame_mapping(positions_combined: np.ndarray) -> dict:
     # (The positions array is the one that should have all frames in an imaged trial)
     continuous_frames = np.arange(positions_combined.shape[0], dtype=int)
     discontinuous_frames = positions_combined.astype(int)
-    return {orig: cont for orig, cont in zip(discontinuous_frames, continuous_frames)}
+    return dict(zip(discontinuous_frames, continuous_frames))
 
 
 def remap_to_continuous_indices(
@@ -328,30 +325,28 @@ def remap_to_continuous_indices(
 
 def load_data(session: Cached2pSession, s2p_path: Path, signal_type: str) -> tuple:
     """Return spks/dff, xpos, ypos and trials loaded from cache."""
-
-    class SignalType(Enum):
-        SPKS = "spks"
-        DFF = "dff"
-
-    if signal_type == SignalType.SPKS.value:
-        spks, xpos, ypos = get_spks_pos(s2p_path)
-    elif signal_type == SignalType.DFF.value:
-        spks, xpos, ypos = get_dff_pos(session, s2p_path)
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
     if not trials:
         print("No trials imaged")
         exit()
-    return spks, xpos, ypos, trials
+    if signal_type == "spks":
+        spks, xpos, ypos = get_spks_pos(s2p_path)
+        return spks, xpos, ypos, trials
+    elif signal_type == "dff":
+        dff, xpos, ypos = get_dff_pos(session, s2p_path)
+        return dff, xpos, ypos, trials
+    else:
+        raise ValueError(f"Unknow signal type: {signal_type}")
 
 
-def align_validate_data(spks: np.ndarray, trials: List[TrialInfo]) -> tuple:
+def align_validate_data(signal: np.ndarray, trials: List[TrialInfo]) -> tuple:
     """Alignes frames and spikes to trial data."""
     aligned_trial_frames = align_trial_frames(trials)
     assert len(trials) == len(
         aligned_trial_frames
     ), "Number of trials and aligned_trial_frames do not match"
     spikes_trials = get_signal_for_trials(
-        signal=spks, trial_frames=aligned_trial_frames
+        signal=signal, trial_frames=aligned_trial_frames
     )
     assert len(trials) == len(
         spikes_trials
@@ -384,33 +379,33 @@ def process_trials_data(
         valid_mask = filter_speed_position(
             speed=speed,
             frames_positions=frames_positions,
-            speed_threshold=0.5,
-            position_threshold=180,
-            filter_speed=False,
-            filter_position=False,
+            # speed_threshold=0.5,
+            # position_threshold=180,
         )
         if np.all(valid_mask == False):
             print("No valid frames in the trial")
         valid_trial_frames = trial_frames[valid_mask]
         valid_trial_start = valid_trial_frames[0]
-        trial_data = {
-            "trial_start_frame": valid_trial_start,
-            "trial_end_frame": end,
-            "rewarded": rewarded,
-            "trial_frames": trial_frames,
-            "iti_start_frame": ITI_start_frame,
-            "iti_end_frame": end,
-            "frames_positions": frames_positions[valid_mask, :],
-            "frames_speed": speed[valid_mask, :],
-            "corridor_width": (ITI_start_frame - start),
-            "signal": spikes_trial[:, valid_mask],
-        }
-        if licks is not None:
-            trial_data["lick_idx"] = licks
-        if rewards is not None:
-            trial_data["reward_idx"] = rewards
-        imaged_trials_infos.append(ImagedTrialInfo(**trial_data))
-
+        if not licks:
+            licks = np.array([])
+        if not rewards:
+            rewards = np.array([])
+        imaged_trials_infos.append(
+            ImagedTrialInfo(
+                trial_start_frame=valid_trial_start,
+                trial_end_frame=end,
+                rewarded=rewarded,
+                trial_frames=trial_frames,
+                iti_start_frame=ITI_start_frame,
+                iti_end_frame=end,
+                frames_positions=frames_positions[valid_mask, :],
+                frames_speed=speed[valid_mask, :],
+                corridor_width=(ITI_start_frame - start),
+                lick_idx=licks,
+                reward_idx=rewards,
+                neural_data=spikes_trial[:, valid_mask],
+            )
+        )
     return imaged_trials_infos
 
 
@@ -419,25 +414,19 @@ def filter_speed_position(
     frames_positions: np.ndarray,
     speed_threshold: Optional[float] = None,
     position_threshold: Optional[float] = None,
-    filter_speed: bool = False,
-    filter_position: bool = False,
 ) -> np.ndarray:
     """Return a mask of valid frames"""
-    if filter_speed is False and filter_position is False:
+    if speed_threshold is None and position_threshold is None:
         return np.ones(len(speed), dtype=bool)
-    else:
-        valid_mask = np.zeros(len(speed), dtype=bool)
-
-        # filter out frames with sub-threshold speeds
-        # converting cm/s to cm/frames
-        if filter_speed and speed_threshold is not None:
-            speed_mask = speed[:, 1] >= (speed_threshold)
-            valid_mask |= speed_mask
-        # specified positions that should always be included
-        if filter_position and position_threshold is not None:
-            position_mask = frames_positions[:, 1] >= position_threshold
-            valid_mask |= position_mask  # bitwise OR?
-
+    valid_mask = np.zeros(len(speed), dtype=bool)
+    # filter out frames with sub-threshold speeds
+    if speed_threshold is not None:
+        speed_mask = speed[:, 1] >= (speed_threshold)
+        valid_mask |= speed_mask
+    # specified positions that should always be included
+    if position_threshold is not None:
+        position_mask = frames_positions[:, 1] >= position_threshold
+        valid_mask |= position_mask  # bitwise OR
     return valid_mask
 
 
@@ -556,11 +545,14 @@ def process_session(
 ) -> None:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
-    # TODO: it is actually dff and not spks but I will still call it that
-    spks, xpos, ypos, trials = load_data(session, s2p_path, "spks")
-    aligned_trial_frames, spikes_trials = align_validate_data(spks, trials)
+    signal, xpos, ypos, trials = load_data(session, s2p_path, "spks")
+    aligned_trial_frames, neural_data_trials = align_validate_data(signal, trials)
     imaged_trials_infos = process_trials_data(
-        trials, aligned_trial_frames, spikes_trials, wheel_circumference, speed_bin_size
+        trials,
+        aligned_trial_frames,
+        neural_data_trials,
+        wheel_circumference,
+        speed_bin_size,
     )
 
     corridor_starts = np.array(
@@ -582,19 +574,21 @@ def process_session(
             if trial.reward_idx is not None
         ]
     )
-    signals = np.concatenate([trial.signal for trial in imaged_trials_infos], axis=1)
+    neural_data = np.concatenate(
+        [trial.neural_data for trial in imaged_trials_infos], axis=1
+    )
     assert len(corridor_widths) == len(
         aligned_trial_frames
     ), "Number of corridor widths and aligned_trial_frames do not match"
 
-    assert positions.shape[0] == speed.shape[0] == signals.shape[1]
+    assert positions.shape[0] == speed.shape[0] == neural_data.shape[1]
 
     if ITI_split:
         valid_frame_mask = filter_out_ITI(ITI_starts_ends, positions)
 
         save_neural_data(
             session=session,
-            spikes_combined=signals,
+            spikes_combined=neural_data,
             xpos=xpos,
             ypos=ypos,
             valid_frame_mask=valid_frame_mask,
@@ -614,7 +608,7 @@ def process_session(
     else:
         save_neural_data(
             session=session,
-            spikes_combined=signals,
+            spikes_combined=neural_data,
             xpos=xpos,
             ypos=ypos,
             ITI_split=False,
@@ -634,7 +628,7 @@ def process_session(
 
 if __name__ == "__main__":
     wheel_circumference = get_wheel_circumference_from_rig("2P")
-    for mouse_name in ["JB027"]:
+    for mouse_name in ["JB031"]:
         print(f"Off we go for {mouse_name}...")
         for file in (HERE.parent / "data" / "cached_2p").glob(f"{mouse_name}_*.json"):
             print(file)
