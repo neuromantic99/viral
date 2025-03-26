@@ -9,16 +9,13 @@ import pywt
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
+sys.path.append(str(HERE.parent / "OASIS"))
 
-# import oasis
-
-from OASIS.oasis.functions import (
-    deconvolve,
-)
-
+from OASIS.oasis.functions import deconvolve
 from OASIS.oasis.plotting import simpleaxis
 
-# from oasis.oasis_methods import oasisAR1, oasisAR2
+# from OASIS.oasis.oasis_methods import oasisAR1, oasisAR2
+
 from BaselineRemoval import BaselineRemoval
 
 from viral.constants import TIFF_UMBRELLA
@@ -78,9 +75,14 @@ def grosmark_preprocess(
     f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
     f = subtract_neuropil(f_raw, f_neu)
 
+    print("Loaded fluorescence data and substracted neuropil")
+
+    print(f.shape)
+
     all_spikes = []
     all_denoised = []
     for idx, cell in enumerate(f):
+        print(f"Cell {cell}")
         wavelet_denoised = modwt_denoise(cell, wavelet="sym4", level=5)
         wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
         denoised, spikes, b, g, lam = deconvolve(
@@ -89,7 +91,7 @@ def grosmark_preprocess(
         if plot and idx < 30:
             _, ax1 = plt.subplots()
             baseobj = BaselineRemoval(cell)
-            cell_baselined = baseobj.zhangfit()
+            cell_baselined = baseobj.ZhangFit()
 
             residual = np.sum(np.abs(cell - cell_baselined))
 
@@ -119,48 +121,54 @@ def get_dff(s2p_path: Path) -> np.ndarray:
     return dff
 
 
-def main(mouse: str, date: str) -> None:
+def main(mouse: str, date: str, grosmark: bool = False) -> None:
     print(f"Running OASIS deconvolution on session data: {mouse} - {date}")
 
-    plot = False
+    plot = True
 
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
-    # all_spikes, all_denoised = grosmark_preprocess(s2p_path)
 
-    dff = get_dff(s2p_path)
+    if grosmark:
+        print("Using grosmark preprocessing")
+        all_spikes, all_denoised = grosmark_preprocess(s2p_path, plot)
 
-    all_denoised = []
-    all_spikes = []
+    else:
+        dff = get_dff(s2p_path)
 
-    for idx, cell in enumerate(dff):
-        baseobj = BaselineRemoval(cell)
-        cell_baselined = baseobj.ZhangFit()
-        denoised, spikes, b, g, lam = deconvolve(
-            cell_baselined, penalty=1, b_nonneg=False
-        )
+        all_denoised = []
+        all_spikes = []
 
-        if plot and idx < 30:
+        for idx, cell in enumerate(dff):
+            baseobj = BaselineRemoval(cell)
+            cell_baselined = baseobj.ZhangFit()
+            denoised, spikes, b, g, lam = deconvolve(
+                cell_baselined, penalty=1, b_nonneg=False
+            )
 
-            _, ax1 = plt.subplots()
+            if plot and idx < 30:
 
-            ax1.plot(cell_baselined, color="pink")
-            ax1.plot(cell, "--", color="blue")
-            ax2 = ax1.twinx()
-            # ax2.plot(spikes, color="black")
-            # ax2.plot(wavelet_denoised, color="pink")
+                _, ax1 = plt.subplots(figsize=(20, 10))
 
-            # ax2.plot(spikes, color="pink")
+                ax1.plot(cell_baselined, color="pink", alpha=.5)
+                ax1.plot(cell, "--", color="blue")
+                ax2 = ax1.twinx()
+                ax2.plot(spikes, color="black", alpha=.7)
+                # ax2.plot(wavelet_denoised, color="pink")
 
-        all_denoised.append(denoised)
-        all_spikes.append(spikes)
+                # ax2.plot(spikes, color="pink")
 
-    all_denoised = np.array(all_denoised)
-    all_spikes = np.array(all_spikes)
+            all_denoised.append(denoised)
+            all_spikes.append(spikes)
+
+        all_denoised = np.array(all_denoised)
+        all_spikes = np.array(all_spikes)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
     np.save(s2p_path / "oasis_denoised.npy", all_denoised)
     plt.show()
+    # plt.savefig(f"plots/oasis/{mouse}_{date}_{grosmark}.svg")
 
 
 if __name__ == "__main__":
-    main(mouse="JB027", date="2025-02-26")
+    # main(mouse="JB027", date="2025-02-26", grosmark=False)
+    main(mouse="JB027", date="2025-02-26", grosmark=True)
