@@ -397,7 +397,7 @@ if __name__ == "__main__":
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB020"]:
+    for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
@@ -405,52 +405,64 @@ if __name__ == "__main__":
 
                 date = row["Date"]
                 session_type = row["Type"].lower()
-
-                if (
-                    not redo
-                    and (
-                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
-                    ).exists()
-                ):
-                    print(f"Skipping {mouse_name} {date} as already exists")
-                    continue
-
-                if (
-                    "learning day" not in session_type
-                    and "reversal learning" not in session_type
-                ):
-                    print(f"Skipping {mouse_name} {date} {session_type}")
-                    continue
-
-                if not row["Sync file"]:
-                    print(
-                        f"Skipping {mouse_name} {date} {session_type} as no sync file"
-                    )
-                    continue
-
-                session_numbers = parse_session_number(row["Session Number"])
-
-                trials = []
-
-                for session_number in session_numbers:
-                    session_path = (
-                        BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
-                    )
-                    trials.extend(load_data(session_path))
-
-                logger.info(f"\n")
-                logger.info(f"Processing {mouse_name} {date} {session_type}")
-                process_session(
-                    trials=trials,
-                    tiff_directory=TIFF_UMBRELLA / date / mouse_name,
-                    tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
-                    mouse_name=mouse_name,
-                    session_type=session_type,
-                    date=date,
+                wheel_blocked = (
+                    True if row["Wheel blocked?"].lower() == "yes" else False
                 )
-                logger.info(
-                    f"Completed processing for {mouse_name} {date} {session_type}"
-                )
+
+                print(f"wheel_blocked = '{wheel_blocked}'")
+
+                if date == "2025-03-26":
+                    if (
+                        not redo
+                        and (
+                            HERE.parent
+                            / "data"
+                            / "cached_2p"
+                            / f"{mouse_name}_{date}.json"
+                        ).exists()
+                    ):
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
+
+                    if (
+                        "learning day" not in session_type
+                        and "reversal learning" not in session_type
+                    ):
+                        print(f"Skipping {mouse_name} {date} {session_type}")
+                        continue
+
+                    if not row["Sync file"]:
+                        print(
+                            f"Skipping {mouse_name} {date} {session_type} as no sync file"
+                        )
+                        continue
+
+                    session_numbers = parse_session_number(row["Session Number"])
+
+                    trials = []
+
+                    for session_number in session_numbers:
+                        session_path = (
+                            BEHAVIOUR_DATA_PATH
+                            / mouse_name
+                            / row["Date"]
+                            / session_number
+                        )
+                        trials.extend(load_data(session_path))
+
+                    logger.info(f"\n")
+                    logger.info(f"Processing {mouse_name} {date} {session_type}")
+                    process_session(
+                        trials=trials,
+                        tiff_directory=TIFF_UMBRELLA / date / mouse_name,
+                        tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                        mouse_name=mouse_name,
+                        session_type=session_type,
+                        date=date,
+                    )
+                    logger.info(
+                        f"Completed processing for {mouse_name} {date} {session_type}"
+                    )
 
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
