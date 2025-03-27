@@ -149,10 +149,10 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
                 _, ax1 = plt.subplots(figsize=(20, 10))
 
-                ax1.plot(cell_baselined, color="pink", alpha=.5)
+                ax1.plot(cell_baselined, color="pink", alpha=0.5)
                 ax1.plot(cell, "--", color="blue")
                 ax2 = ax1.twinx()
-                ax2.plot(spikes, color="black", alpha=.7)
+                ax2.plot(spikes * 1000, color="black", alpha=0.7)
                 # ax2.plot(wavelet_denoised, color="pink")
 
                 # ax2.plot(spikes, color="pink")
