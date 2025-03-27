@@ -11,6 +11,8 @@ from viral.rastermap_utils import (
     get_reward_index,
     create_frame_mapping,
     remap_to_continuous_indices,
+    filter_speed_position,
+    filter_out_ITI,
 )
 
 
@@ -37,25 +39,15 @@ def mock_trials() -> list[Mock]:
     return [trial1, trial2]
 
 
-def test_align_trial_frames_no_ITI(mock_trials: List[Mock]) -> None:
+def test_align_trial_frames(mock_trials: List[Mock]) -> None:
     """Test align_trial_frames function without ITI."""
 
-    result = align_trial_frames(mock_trials, ITI=False)
-    expected = np.array([[10, 40, True], [60, 90, False]])
-
-    assert np.array_equal(
-        result, expected
-    ), "align_trial_frames output does not match expected values without ITI"
-
-
-def test_align_trial_frames_with_ITI(mock_trials: Mock) -> None:
-    """Test align_trial_frames function with ITI included."""
-    result = align_trial_frames(mock_trials, ITI=True)
+    result = align_trial_frames(mock_trials)
     expected = np.array([[10, 50, True], [60, 100, False]])
 
     assert np.array_equal(
         result, expected
-    ), "align_trial_frames output does not match expected values with ITI"
+    ), "align_trial_frames output does not match expected values without ITI"
 
 
 def test_align_trial_frames_overlapping() -> None:
@@ -78,13 +70,15 @@ def test_align_trial_frames_overlapping() -> None:
     trial2.states_info = [state2]
 
     with pytest.raises(AssertionError, match="Overlapping frames for trials"):
-        align_trial_frames([trial1, trial2], ITI=False)
+        align_trial_frames([trial1, trial2])
 
 
-def test_get_frame_position() -> None:
-    """Test that the position for each frame is given correctly."""
+def test_get_frame_position_old_ITI() -> None:
+    """Test that the position for each frame is given correctly (old ITI states)."""
     trial = Mock()
     trial.rotary_encoder_position = [0, 90, 180]
+    trial.trial_start_closest_frame = 0
+    trial.trial_end_closest_frame = 7
     state1 = Mock()
     state1.name = "trigger_panda"
     state1.closest_frame_start = 0
@@ -97,14 +91,22 @@ def test_get_frame_position() -> None:
     state3.name = "trigger_panda"
     state3.closest_frame_start = 4
     state3.closest_frame_end = 4
-    trial.states_info = [state1, state2, state3]
+    state4 = Mock()
+    state4.name = "trigger_ITI"
+    state4.closest_frame_start = 5
+    state4.closest_frame_end = 5
+    state5 = Mock()
+    state5.name = "ITI"
+    state5.closest_frame_start = 6
+    state5.closest_frame_end = 6
+    trial.states_info = [state1, state2, state3, state4, state5]
 
-    trial_frames = np.array([0, 1, 2, 3, 4])
+    trial_frames = np.array([0, 1, 2, 3, 4, 5, 6, 7])
 
     wheel_circumference = 100
-    manual_position = np.array([0, 25, 50])  # 0, 0; 90, 25; 180, 50
+    manual_position = np.array([0, 25, 50])
 
-    expected_positions = np.array([0, 25, 25, 37.5, 50])
+    expected_positions = np.array([0, 25, 25, 37.5, 50, 0, 0, 0])
     expected = np.column_stack((trial_frames, expected_positions))
 
     with patch("viral.utils.degrees_to_cm", return_value=manual_position):
@@ -112,7 +114,49 @@ def test_get_frame_position() -> None:
 
     assert np.array_equal(result, expected)
 
-    # TODO: another test with ITI?
+
+def test_get_frame_position_new_ITI() -> None:
+    """Test that the position for each frame is given correctly (new ITI states)."""
+    trial = Mock()
+    trial.rotary_encoder_position = [0, 90, 180, 270]
+    state1 = Mock()
+    state1.name = "trigger_panda"
+    state1.closest_frame_start = 0
+    state1.closest_frame_end = 0
+    state2 = Mock()
+    state2.name = "trigger_panda"
+    state2.closest_frame_start = 1
+    state2.closest_frame_end = 2
+    state3 = Mock()
+    state3.name = "trigger_panda"
+    state3.closest_frame_start = 4
+    state3.closest_frame_end = 4
+    state4 = Mock()
+    state4.name = "trigger_ITI"
+    state4.closest_frame_start = 5
+    state4.closest_frame_end = 5
+    state5 = Mock()
+    state5.name = "ITI_transition"
+    state5.closest_frame_start = 5
+    state5.closest_frame_end = 5
+    state6 = Mock()
+    state6.name = "trigger_panda_ITI"
+    state6.closest_frame_start = 6
+    state6.closest_frame_end = 6
+    trial.states_info = [state1, state2, state3, state4, state5, state6]
+
+    trial_frames = np.array([0, 1, 2, 3, 4, 5, 6])
+
+    wheel_circumference = 100
+    manual_position = np.array([0, 25, 50, 75])  # 0, 0; 90, 25; 180, 50; 270, 75
+
+    expected_positions = np.array([0, 25, 25, 37.5, 50, 62.5, 75])
+    expected = np.column_stack((trial_frames, expected_positions))
+
+    with patch("viral.utils.degrees_to_cm", return_value=manual_position):
+        result = get_frame_position(trial, trial_frames, wheel_circumference)
+
+    assert np.array_equal(result, expected)
 
 
 def test_get_frame_position_no_start_no_end() -> None:
@@ -131,7 +175,11 @@ def test_get_frame_position_no_start_no_end() -> None:
     state3.name = "trigger_panda"
     state3.closest_frame_start = 5
     state3.closest_frame_end = 5
-    trial.states_info = [state1, state2, state3]
+    state4 = Mock()
+    state4.name = "trigger_ITI"
+    state4.closest_frame_start = 5
+    state4.closest_frame_end = 5
+    trial.states_info = [state1, state2, state3, state4]
 
     trial_frames = np.array([0, 1, 2, 3, 4, 5, 6])
 
@@ -149,37 +197,49 @@ def test_get_frame_position_no_start_no_end() -> None:
 
 def test_get_speed_frame() -> None:
     """Test that the speed for a given array of frame indices and positions will return the right speeds."""
-    frame_position = np.array(
-        [[0, 10], [1, 20], [2, 30], [3, 40], [4, 50], [5, 80], [6, 100]]
-    )
-    expected = np.array([[0, 10], [1, 10], [2, 10], [3, 10], [4, 10], [5, 20], [6, 20]])
-    result = get_speed_frame(frame_position)
-    assert np.array_equal(result, expected)
-
-    # Test with no change of position in between two frames
-    frame_position = np.array(
-        [
-            [0, 10],
-            [1, 20],
-            [2, 30],
-            [3, 40],
-            [4, 50],
-            [5, 60],
-            [6, 60],
-        ]
-    )
+    frame_position = np.array([[0, 0], [1, 2], [2, 2], [3, 4], [4, 5], [5, 5], [6, 6]])
     expected = np.array(
         [
-            [0, 10],
-            [1, 10],
-            [2, 10],
-            [3, 10],
-            [4, 10],
-            [5, 0],
-            [6, 0],
+            [0, 2 * 30],
+            [1, 2 * 30],
+            [2, 2 * 30],
+            [3, 2 * 30],
+            [4, 0 * 30],
+            [5, 0 * 30],
+            [6, 0 * 30],
         ]
     )
-    result = get_speed_frame(frame_position)
+    result = get_speed_frame(frame_position, bin_size=2)
+    assert np.array_equal(result, expected)
+
+
+def test_get_speed_frame_different_bin_sizes() -> None:
+    """Test that the speed for a given array of frame indices and positions will return the right speeds."""
+    frame_position = np.array(
+        [[0, 0.1], [1, 0.2], [2, 0.3], [3, 0.4], [4, 0.5], [3, 0.6]]
+    )
+
+    assert (
+        get_speed_frame(frame_position, bin_size=2)[0, 0]
+        == get_speed_frame(frame_position, bin_size=3)[0, 0]
+        == get_speed_frame(frame_position, bin_size=4)[0, 0]
+    )
+
+
+def test_get_speed_frame_negative_speed() -> None:
+    frame_position = np.array([[0, 0], [1, 2], [2, 2], [3, 4], [4, 5], [5, 4], [6, 6]])
+    expected = np.array(
+        [
+            [0, 2 * 30],
+            [1, 2 * 30],
+            [2, 2 * 30],
+            [3, 2 * 30],
+            [4, 0 * 30],
+            [5, 0 * 30],
+            [6, 0 * 30],
+        ]
+    )
+    result = get_speed_frame(frame_position, bin_size=2)
     assert np.array_equal(result, expected)
 
 
@@ -412,10 +472,10 @@ def test_create_frame_mapping() -> None:
     """Test that the frame mapping dictionary is created correctly."""
     positions_combined = np.array(
         [
-            [10],
-            [11],
-            [12],
-            [13],
+            10,
+            11,
+            12,
+            13,
         ]
     )
     expected = {10: 0, 11: 1, 12: 2, 13: 3}
@@ -426,9 +486,63 @@ def test_create_frame_mapping() -> None:
 
 
 def test_remap_to_continuous_indices() -> None:
-    positions_combined = np.arange(20, 70).reshape(-1, 1)
+    positions_combined = np.arange(20, 70, dtype=int)
     original_indices = np.array([24, 30, 60])
     frame_mapping = create_frame_mapping(positions_combined)
     continuous_indices = remap_to_continuous_indices(original_indices, frame_mapping)
     expected = np.array([4, 10, 40])
     assert np.array_equal(continuous_indices, expected)
+
+
+def test_filter_speed_position_both() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    speed_threshold = 10
+    position_threshold = 20
+    expected = np.array([0, 0, 1, 1, 1, 1])
+    result = filter_speed_position(
+        speed, frames_positions, speed_threshold, position_threshold
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_speed_position_just_speed() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    speed_threshold = 10
+    expected = np.array([0, 0, 1, 1, 0, 1])
+    result = filter_speed_position(
+        speed=speed,
+        frames_positions=frames_positions,
+        speed_threshold=speed_threshold,
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_speed_position_just_position() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    position_threshold = 20
+    expected = np.array([0, 0, 0, 1, 1, 1])
+    result = filter_speed_position(
+        speed=speed,
+        frames_positions=frames_positions,
+        position_threshold=position_threshold,
+    ).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_speed_position_none() -> None:
+    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
+    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
+    expected = np.array([1, 1, 1, 1, 1, 1])
+    result = filter_speed_position(speed, frames_positions).astype(int)
+    assert np.array_equal(result, expected)
+
+
+def test_filter_out_ITI() -> None:
+    positions = np.array([[0, 10], [1, 20], [2, 30], [3, 40], [4, 50], [5, 60]])
+    ITI_starts_ends = np.array([[1, 2], [4, 5]])
+    expected = [1, 0, 0, 1, 0, 0]
+    result = filter_out_ITI(ITI_starts_ends, positions)
+    assert np.array_equal(result, expected)

@@ -353,14 +353,8 @@ def check_timestamps(
 
     assert len(all_tiff_timestamps) == len(valid_frame_times)
 
-    trial_start_state = [
-        state for state in trial.states_info if "spacer_high" in state.name
-    ][0]
-
-    trial_end_state = trial.states_info[-1]
-
-    first_frame_trial = trial_start_state.closest_frame_start
-    last_frame_trial = trial_end_state.closest_frame_start
+    first_frame_trial = trial.trial_start_closest_frame
+    last_frame_trial = trial.trial_end_closest_frame
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
@@ -374,7 +368,11 @@ def check_timestamps(
         )
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
-        assert abs(offset) < 0.01, "Tiff timestamp does not match daq timestamp"
+        # Allow for some drift up to 15ms
+        if trial.trial_start_time / 60 < 30:
+            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
+        else:
+            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -413,7 +411,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB027"]:
+    for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
