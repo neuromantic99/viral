@@ -15,11 +15,12 @@ sys.path.append(str(HERE.parent.parent))
 
 sns.set_theme(context="talk", style="ticks")
 
+from viral.imaging_utils import trial_is_imaged
+from viral.rastermap_utils import get_ITI_start_frame
 from viral.utils import (
     degrees_to_cm,
     get_wheel_circumference_from_rig,
-    shuffle,
-    trial_is_imaged,
+    normalize,
 )
 
 from viral.models import Cached2pSession, TrialInfo
@@ -47,8 +48,9 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
 
 def get_dff(mouse: str, date: str) -> np.ndarray:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    print(f"Suite 2p path is {s2p_path}")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    spks = np.load(s2p_path / "spks.npy")[iscell, :]
+    # spks = np.load(s2p_path / "spks.npy")[iscell, :]
     f_raw = np.load(s2p_path / "F.npy")[iscell, :]
     f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
     # return spks
@@ -73,7 +75,8 @@ def activity_trial_position(
         [
             state.closest_frame_start
             for state in trial.states_info
-            if state.name in ["trigger_panda", "trigger_panda_post_reward"]
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
         ]
     )
 
@@ -98,19 +101,6 @@ def activity_trial_position(
     return np.array(dff_position).T
 
 
-def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
-    peak_indices = np.argmax(matrix, axis=1)
-    sorted_order = np.argsort(peak_indices)
-    return matrix[sorted_order]
-
-
-def normalize(array: np.ndarray, axis: int) -> np.ndarray:
-    """Calculate the min and max along the specified axis"""
-    min_val = np.min(array, axis=axis, keepdims=True)
-    max_val = np.max(array, axis=axis, keepdims=True)
-    return (array - min_val) / (max_val - min_val)
-
-
 def remove_landmarks_from_train_matrix(train_matrix: np.ndarray) -> np.ndarray:
     """We seem to get a lot of neurons with a peak at the landmark. This removes the landmark from the
     train matrix so cells do not get sorted by their landmark peak
@@ -130,7 +120,7 @@ def get_position_activity(
     bin_size: int = 1,
     start: int = 10,
     max_position: int = 170,
-    remove_landmarks: bool = True,
+    remove_landmarks: bool = False,
 ) -> np.ndarray:
 
     test_matrices = []
@@ -230,6 +220,8 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             ],
             dff,
             get_wheel_circumference_from_rig("2P"),
+            start=0,
+            max_position=250,
         ),
         aspect="auto",
         cmap="viridis",
@@ -240,6 +232,8 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
     plt.ylabel("cell number")
     plt.xlabel("corrdior position")
     ticks = np.array([50, 100, 150])
+
+    plt.axvline(180)
     plt.xticks(ticks - 10, ticks)
     plt.tight_layout()
     plt.savefig(
@@ -260,6 +254,8 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
             ],
             dff,
             get_wheel_circumference_from_rig("2P"),
+            start=0,
+            max_position=250,
         ),
         aspect="auto",
         cmap="viridis",
@@ -270,6 +266,7 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
     plt.ylabel("cell number")
     plt.xlabel("corrdior position")
     ticks = np.array([50, 100, 150])
+    plt.axvline(180)
     plt.xticks(ticks - 10, ticks)
     plt.tight_layout()
     plt.savefig(
@@ -282,8 +279,8 @@ def place_cells(session: Cached2pSession, dff: np.ndarray) -> None:
 
 if __name__ == "__main__":
 
-    mouse = "JB018"
-    date = "2024-12-06"
+    mouse = "JB027"
+    date = "2025-02-24"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -293,6 +290,7 @@ if __name__ == "__main__":
     )
 
     dff = get_dff(mouse, date)
+    print("Got dff")
 
     assert (
         max(

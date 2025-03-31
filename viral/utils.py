@@ -171,20 +171,7 @@ def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
     return list(directory.glob("*.tif"))
 
 
-def extract_TTL_chunks(
-    frame_clock: np.ndarray, sampling_rate: int
-) -> Tuple[np.ndarray, np.ndarray]:
-    frame_times = threshold_detect(frame_clock, 4)
-    diffed = np.diff(frame_times)
-    chunk_starts = np.where(diffed > sampling_rate)[0] + 1
-    # The first chunk starts on the first frame detected
-    chunk_starts = np.insert(chunk_starts, 0, 0)
-    # Add the final frame to allow the diff to work on the last chunk
-    chunk_starts = np.append(chunk_starts, len(frame_times))
-    return frame_times, np.diff(chunk_starts)
-
-
-def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
+def pad_to_max_length(sequences: Any, fill_value: float = np.nan) -> np.ndarray:
     """Return numpy array with the length of the longest sequence, padded with NaN values"""
     max_len = max(len(seq) for seq in sequences)
     return np.array(
@@ -234,6 +221,8 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
     trigger_panda_states = [
         state
         for state in trial.states_info
+        if state.name
+        in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
         if state.name
         in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
     ]
@@ -403,3 +392,16 @@ def get_sampling_rate(frame_clock: np.ndarray, wheel_blocked: bool = False) -> i
     elif 30 < len(frame_clock) / 10000 / 60 < max_duration:
         return 10000
     raise ValueError("Could not determine sampling rate")
+
+
+def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
+    peak_indices = np.argmax(matrix, axis=1)
+    sorted_order = np.argsort(peak_indices)
+    return matrix[sorted_order]
+
+
+def normalize(array: np.ndarray, axis: int) -> np.ndarray:
+    """Calculate the min and max along the specified axis"""
+    min_val = np.min(array, axis=axis, keepdims=True)
+    max_val = np.max(array, axis=axis, keepdims=True)
+    return (array - min_val) / (max_val - min_val)

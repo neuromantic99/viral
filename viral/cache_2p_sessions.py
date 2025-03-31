@@ -18,6 +18,8 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+from viral.imaging_utils import extract_TTL_chunks, get_sampling_rate, trial_is_imaged
+
 
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -30,12 +32,9 @@ from viral.models import Cached2pSession, TrialInfo, WheelFreeze
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
-    extract_TTL_chunks,
     find_chunk,
-    get_sampling_rate,
     get_tiff_paths_in_directory,
     time_list_to_datetime,
-    trial_is_imaged,
     degrees_to_cm,
 )
 
@@ -479,10 +478,11 @@ def process_session(
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
-if __name__ == "__main__":
+def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
+    for mouse_name in ["JB031"]:
     for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
@@ -555,3 +555,7 @@ if __name__ == "__main__":
                 msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
                 logger.debug(msg)
                 print(msg)
+
+
+if __name__ == "__main__":
+    main()

@@ -20,7 +20,7 @@
 * Click Create. The OAuth client created screen appears, showing your new Client ID and Client secret.
 * Click OK. The newly created credential appears under OAuth 2.0 Client IDs.
 * Save the downloaded JSON file as credentials.json in the same directory as this README.
-* Go to oauth consent screen and put your app into production from testing
+* Go to oauth consent screen / audience tab and put your app into production from testing / publish the app
 
 
 ## Constants

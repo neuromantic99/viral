@@ -9,9 +9,9 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+from viral.imaging_utils import get_ITI_start_frame, trial_is_imaged
 from viral.utils import (
     TrialInfo,
-    trial_is_imaged,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
 )
