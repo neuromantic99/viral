@@ -26,7 +26,7 @@ from viral.constants import (
     TIFF_UMBRELLA,
 )
 from viral.gsheets_importer import gsheet2df
-from viral.models import Cached2pSession, TrialInfo
+from viral.models import Cached2pSession, TrialInfo, WheelFreeze
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
@@ -148,9 +148,37 @@ def add_daq_times_to_trial(
         )
 
 
+def extract_frozen_wheel_chunks(
+    chunk_lengths_daq: np.ndarray,
+    stack_lengths_tiffs: np.ndarray,
+    expected_chunk_len: int = 27000,
+) -> tuple[int, int]:
+    """Extract start and end frame index for pre-training and post-training imaging chunks"""
+    # first chunk (before behavioural chunks)
+    first_chunk_len = stack_lengths_tiffs[0]
+    first_chunk = (0, first_chunk_len - 1)
+
+    assert (
+        first_chunk_len == expected_chunk_len
+    ), "First chunk length does not match expected length"
+    prev_frames_total = sum(chunk_lengths_daq[:-1])
+
+    last_chunk_len = chunk_lengths_daq[-1]
+    last_chunk = (prev_frames_total, prev_frames_total + last_chunk_len - 1)
+
+    assert (
+        last_chunk_len == expected_chunk_len
+    ), "Last chunk length does not match expected length"
+    return first_chunk, last_chunk
+
+
 def add_imaging_info_to_trials(
-    tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
-) -> List[TrialInfo]:
+    tdms_path: Path,
+    tiff_directory: Path,
+    trials: List[TrialInfo],
+    wheel_blocked: bool = False,
+) -> tuple[List[TrialInfo], WheelFreeze | None]:
+    """Adds imaging info to trials and creates a WheelFreeze object if the wheel was blocked"""
 
     logger.info("Adding imaging info to trials")
     t1 = time.time()
@@ -193,7 +221,20 @@ def add_imaging_info_to_trials(
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
-    # Consistently, the number of triggers recorded is two more than the number of frames recorded.
+    # TODO: If you stop the acquisition manually, than this won't work. Think about a fix.
+    if wheel_blocked:
+        frozen_wheel_chunks = extract_frozen_wheel_chunks(
+            chunk_lengths_daq=chunk_lengths_daq, stack_lengths_tiffs=stack_lengths_tiffs
+        )
+
+    behavioral_chunk_lens_tiffs = (
+        stack_lengths_tiffs[1:-1] if wheel_blocked else stack_lengths_tiffs
+    )
+    behaviour_chunk_lens_daq = (
+        chunk_lengths_daq[1:-1] if wheel_blocked else chunk_lengths_daq
+    )
+
+    # Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
     # This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
     # from a completed grab).
     # The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
@@ -201,25 +242,35 @@ def add_imaging_info_to_trials(
     # frame is relaibly correct
     # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
     assert np.all(
-        chunk_lengths_daq - stack_lengths_tiffs == 2
+        behaviour_chunk_lens_daq - behavioral_chunk_lens_tiffs == 2
     ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lengths_daq}. Stack lengths: {stack_lengths_tiffs}. This will occcur especially on crashed recordings, think about a fix"
 
     # Remove the final two frames from valid frames
     valid_frame_times = np.array([])
     offset = 0
     for stack_len_tiff, chunk_len_daq in zip(
-        stack_lengths_tiffs, chunk_lengths_daq, strict=True
+        behavioral_chunk_lens_tiffs, behaviour_chunk_lens_daq, strict=True
     ):
         valid_frame_times = np.append(
             valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
         )
         offset += chunk_len_daq
 
-    assert (
-        len(valid_frame_times)
-        == sum(stack_lengths_tiffs)
-        == len(frame_times_daq) - 2 * len(stack_lengths_tiffs)
-    )
+    if wheel_blocked:
+        excluded_frames = stack_lengths_tiffs[0] + stack_lengths_tiffs[-1]
+        assert (
+            len(valid_frame_times)
+            == sum(behavioral_chunk_lens_tiffs)
+            == len(frame_times_daq)
+            - 2 * len(behavioral_chunk_lens_tiffs)
+            - excluded_frames
+        )
+    else:
+        assert (
+            len(valid_frame_times)
+            == sum(behavioral_chunk_lens_tiffs)
+            == len(frame_times_daq) - 2 * len(behavioral_chunk_lens_tiffs)
+        )
 
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -241,9 +292,19 @@ def add_imaging_info_to_trials(
             valid_frame_times=valid_frame_times,
             sampling_rate=sampling_rate,
             daq_start_time=daq_start_time,
+            wheel_blocked=wheel_blocked,
         )
-
-    return trials
+    wheel_freeze = (
+        WheelFreeze(
+            pre_training_start_frame=frozen_wheel_chunks[0][0],
+            pre_training_end_frame=frozen_wheel_chunks[0][1],
+            post_training_start_frame=frozen_wheel_chunks[1][0],
+            post_training_end_frame=frozen_wheel_chunks[1][1],
+        )
+        if wheel_blocked
+        else None
+    )
+    return trials, wheel_freeze if wheel_blocked else None
 
 
 def get_tiff_metadata(
@@ -324,6 +385,7 @@ def check_timestamps(
     valid_frame_times: np.ndarray,
     sampling_rate: int,
     daq_start_time: datetime,
+    wheel_blocked: bool = False,
 ) -> None:
     """Compares the timestamps in the tiff to the timestamps in the Daq (the time of the trigger, offset to the timestamp that the daq started)
     Currently works trial by trial which isn't really necessary.
@@ -335,10 +397,12 @@ def check_timestamps(
     if not trial_is_imaged(trial):
         return
 
-    assert len(all_tiff_timestamps) == len(valid_frame_times)
-
     first_frame_trial = trial.trial_start_closest_frame
     last_frame_trial = trial.trial_end_closest_frame
+
+    assert first_frame_trial <= len(valid_frame_times) and last_frame_trial <= len(
+        valid_frame_times
+    )
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
@@ -352,11 +416,32 @@ def check_timestamps(
         )
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
+
+        # TODO: for debugging, remove eventually
+        # print(f"Offset: {offset}")
+
         # Allow for some drift up to 15ms
-        if trial.trial_start_time / 60 < 30:
-            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
+        if not wheel_blocked:
+            if trial.trial_start_time / 60 < 30:
+                assert (
+                    abs(offset) <= 0.01
+                ), "Tiff timestamp does not match daq timestamp"
+            else:
+                assert (
+                    abs(offset) <= 0.015
+                ), "Tiff timestamp does not match daq timestamp"
         else:
-            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
+            # Take into account that the recording is 1.5x longer,
+            # i.e. one minute into the behaviour is at least 15 mins into the entire session
+            # TODO: why is the offset so big in some trials?
+            if trial.trial_start_time / 60 < 50:
+                assert (
+                    abs(offset) <= 0.01
+                ), "Tiff timestamp does not match daq timestamp"
+            else:
+                assert (
+                    abs(offset) <= 0.015
+                ), "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -366,14 +451,16 @@ def process_session(
     mouse_name: str,
     date: str,
     session_type: str,
+    wheel_blocked: bool = False,
 ) -> None:
 
     print(f"Off we go for {mouse_name} {date} {session_type}")
-    trials = add_imaging_info_to_trials(
-        tdms_path,
-        tiff_directory,
-        trials,
+    (trials, wheel_freeze) = add_imaging_info_to_trials(
+        tdms_path, tiff_directory, trials, wheel_blocked
     )
+
+    if wheel_blocked:
+        print("Wheel blocked")
 
     with open(
         HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"
@@ -384,6 +471,7 @@ def process_session(
                 date=date,
                 trials=trials,
                 session_type=session_type,
+                wheel_freeze=wheel_freeze,
             ).model_dump(),
             f,
         )
@@ -407,9 +495,7 @@ if __name__ == "__main__":
                     True if row["Wheel blocked?"].lower() == "yes" else False
                 )
 
-                print(f"wheel_blocked = '{wheel_blocked}'")
-
-                if date == "2025-03-26":
+                if date == "2025-03-20":
                     if (
                         not redo
                         and (
@@ -457,6 +543,7 @@ if __name__ == "__main__":
                         mouse_name=mouse_name,
                         session_type=session_type,
                         date=date,
+                        wheel_blocked=wheel_blocked,
                     )
                     logger.info(
                         f"Completed processing for {mouse_name} {date} {session_type}"

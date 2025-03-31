@@ -393,12 +393,13 @@ def shuffle(x: np.ndarray) -> np.ndarray:
     return x.reshape(shape)
 
 
-def get_sampling_rate(frame_clock: np.ndarray) -> int:
+def get_sampling_rate(frame_clock: np.ndarray, wheel_blocked: bool = False) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
     """
-    if 30 < len(frame_clock) / 1000 / 60 < 100:
+    max_duration = 120 if wheel_blocked else 100
+    if 30 < len(frame_clock) / 1000 / 60 < max_duration:
         return 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+    elif 30 < len(frame_clock) / 10000 / 60 < max_duration:
         return 10000
     raise ValueError("Could not determine sampling rate")

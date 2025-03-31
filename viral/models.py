@@ -70,8 +70,8 @@ class MouseSummary(BaseModel):
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
-    trial_start_closest_frame: float | None = None
-    trial_end_closest_frame: float | None = None
+    trial_start_closest_frame: int | None = None
+    trial_end_closest_frame: int | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]
@@ -103,11 +103,19 @@ class TrialInfo(BaseModel):
         ]
 
 
+class WheelFreeze(BaseModel):
+    pre_training_start_frame: int
+    pre_training_end_frame: int
+    post_training_start_frame: int
+    post_training_end_frame: int
+
+
 class Cached2pSession(BaseModel):
     trials: List[TrialInfo]
     mouse_name: str
     date: str
     session_type: str
+    wheel_freeze: WheelFreeze | None = None
 
 
 class ImagedTrialInfo(BaseModel):
