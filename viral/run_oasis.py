@@ -130,13 +130,13 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
     if grosmark:
         print("Using grosmark preprocessing")
-        all_spikes, all_denoised = grosmark_preprocess(s2p_path, plot)
+        spikes, denoised = grosmark_preprocess(s2p_path, plot)
 
     else:
         dff = get_dff(s2p_path)
 
-        all_denoised = []
-        all_spikes = []
+        all_denoised = list()
+        all_spikes = list()
 
         for idx, cell in enumerate(dff):
             baseobj = BaselineRemoval(cell)
@@ -152,19 +152,17 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
                 ax1.plot(cell_baselined, color="pink", alpha=0.5)
                 ax1.plot(cell, "--", color="blue")
                 ax2 = ax1.twinx()
-                ax2.plot(spikes * 1000, color="black", alpha=0.7)
+                ax2.plot(spikes, color="black", alpha=0.7)
                 # ax2.plot(wavelet_denoised, color="pink")
-
-                # ax2.plot(spikes, color="pink")
 
             all_denoised.append(denoised)
             all_spikes.append(spikes)
 
-        all_denoised = np.array(all_denoised)
-        all_spikes = np.array(all_spikes)
+        denoised = np.array(all_denoised)
+        spikes = np.array(all_spikes)
 
-    np.save(s2p_path / "oasis_spikes.npy", all_spikes)
-    np.save(s2p_path / "oasis_denoised.npy", all_denoised)
+    np.save(s2p_path / "oasis_spikes.npy", spikes)
+    np.save(s2p_path / "oasis_denoised.npy", denoised)
     plt.show()
     # plt.savefig(f"plots/oasis/{mouse}_{date}_{grosmark}.svg")
 
