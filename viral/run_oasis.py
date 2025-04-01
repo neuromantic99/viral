@@ -19,6 +19,7 @@ from OASIS.oasis.plotting import simpleaxis
 from BaselineRemoval import BaselineRemoval
 
 from viral.constants import TIFF_UMBRELLA
+from viral.two_photon import get_dff, subtract_neuropil
 
 
 def modwt_denoise(
@@ -53,15 +54,6 @@ def modwt_denoise(
     denoised_signal = pywt.waverec(coeffs_thresh, wavelet, mode="periodization")
 
     return denoised_signal[: len(signal)]  # Ensure same length as input
-
-
-def compute_dff(f: np.ndarray) -> np.ndarray:
-    flu_mean = np.expand_dims(np.mean(f, 1), 1)
-    return (f - flu_mean) / flu_mean
-
-
-def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
-    return f_raw - f_neu * 0.7
 
 
 def grosmark_preprocess(
@@ -111,13 +103,6 @@ def grosmark_preprocess(
     return np.array(all_spikes), np.array(all_denoised)
 
 
-def get_dff(s2p_path: Path) -> np.ndarray:
-    f_raw = np.load(s2p_path / "F.npy")
-    f_neu = np.load(s2p_path / "Fneu.npy")
-    dff = compute_dff(subtract_neuropil(f_raw, f_neu))
-    return dff
-
-
 def main(mouse: str, date: str, grosmark: bool = False) -> None:
     print(f"Running OASIS deconvolution on session data: {mouse} - {date}")
 
@@ -130,7 +115,7 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
         spikes, denoised = grosmark_preprocess(s2p_path, plot)
 
     else:
-        dff = get_dff(s2p_path)
+        dff = get_dff(mouse, date)
 
         all_denoised = list()
         all_spikes = list()
