@@ -12,9 +12,6 @@ sys.path.append(str(HERE.parent.parent))
 sys.path.append(str(HERE.parent / "OASIS"))
 
 from OASIS.oasis.functions import deconvolve
-from OASIS.oasis.plotting import simpleaxis
-
-# from OASIS.oasis.oasis_methods import oasisAR1, oasisAR2
 
 from BaselineRemoval import BaselineRemoval
 
@@ -89,13 +86,11 @@ def grosmark_preprocess(
             # ax1.plot(cell, color="pink")
             ax1.plot(cell_baselined, color="blue")
             ax1.plot(spikes, color="black")
-            ax2 = ax1.twinx()
+            # ax2 = ax1.twinx()
             # ax2.plot(wavelet_denoised, color="pink")
 
-            # ax2.plot(spikes, color="pink")
-
-        all_spikes.append(denoised)
-        all_denoised.append(spikes)
+        all_spikes.append(spikes)
+        all_denoised.append(denoised)
 
     if plot:
         plt.show()
@@ -146,7 +141,8 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
     np.save(s2p_path / "oasis_spikes.npy", spikes)
     np.save(s2p_path / "oasis_denoised.npy", denoised)
     print("Saved oasis spikes and denoised data")
-    plt.show()
+    if plot:
+        plt.show()
 
 
 if __name__ == "__main__":
