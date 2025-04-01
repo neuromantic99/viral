@@ -77,12 +77,9 @@ def grosmark_preprocess(
 
     print("Loaded fluorescence data and substracted neuropil")
 
-    print(f.shape)
-
     all_spikes = []
     all_denoised = []
     for idx, cell in enumerate(f):
-        print(f"Cell {cell}")
         wavelet_denoised = modwt_denoise(cell, wavelet="sym4", level=5)
         wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
         denoised, spikes, b, g, lam = deconvolve(
@@ -124,7 +121,7 @@ def get_dff(s2p_path: Path) -> np.ndarray:
 def main(mouse: str, date: str, grosmark: bool = False) -> None:
     print(f"Running OASIS deconvolution on session data: {mouse} - {date}")
 
-    plot = True
+    plot = False
 
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
 
@@ -163,8 +160,8 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
     np.save(s2p_path / "oasis_spikes.npy", spikes)
     np.save(s2p_path / "oasis_denoised.npy", denoised)
+    print("Saved oasis spikes and denoised data")
     plt.show()
-    # plt.savefig(f"plots/oasis/{mouse}_{date}_{grosmark}.svg")
 
 
 if __name__ == "__main__":
