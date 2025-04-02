@@ -9,7 +9,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.imaging_utils import get_ITI_start_frame, trial_is_imaged
+from viral.imaging_utils import get_ITI_start_frame, get_dff, trial_is_imaged
 from viral.utils import (
     TrialInfo,
     degrees_to_cm,
@@ -17,7 +17,6 @@ from viral.utils import (
 )
 from viral.models import Cached2pSession, ImagedTrialInfo
 from viral.constants import TIFF_UMBRELLA
-from viral.two_photon import get_dff
 
 
 def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
