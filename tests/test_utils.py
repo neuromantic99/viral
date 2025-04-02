@@ -319,7 +319,7 @@ def test_shuffle_rows() -> None:
     assert np.array_equal(np.sort(result[1, :]), np.array([7, 8, 9, 10, 11, 12]))
 
 
-def test_shuffle_rows_is_it_seeded() -> None:
+def test_shuffle_rows_make_sure_not_seeded() -> None:
     matrix = np.array([np.arange(100), np.arange(100)])
 
     result1 = shuffle_rows(matrix)

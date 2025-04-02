@@ -159,9 +159,6 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
         f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
-    # TODO: no additional check for shuffled, probably not necessary
-    print(f"percent place cells not shuffled {np.sum(pcs) / n_cells_total}")
-
     peak_indices = np.argmax(smoothed_matrix, axis=1)
     sorted_order = np.argsort(peak_indices)
 

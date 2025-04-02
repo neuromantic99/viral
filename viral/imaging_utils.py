@@ -1,3 +1,6 @@
+"""Contains functions that act on fluorescence data, either spks or dff, either alone or with behavioural data"""
+
+from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
@@ -9,6 +12,37 @@ from viral.utils import (
     shuffle_rows,
     threshold_detect,
 )
+
+from viral.constants import TIFF_UMBRELLA
+
+
+def compute_dff(f: np.ndarray) -> np.ndarray:
+    flu_mean = np.expand_dims(np.mean(f, 1), 1)
+    return (f - flu_mean) / flu_mean
+
+
+def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
+    return f_raw - f_neu * 0.7
+
+
+def get_dff(mouse: str, date: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    print(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHh"
+    )
+    s2p_path = Path("/Users/jamesrowland/Desktop/plane0")
+
+    print(f"Suite 2p path is {s2p_path}")
+    iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+
+    spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
+    denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
+
+    f_raw = np.load(s2p_path / "F.npy")[iscell, :]
+    f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
+
+    dff = compute_dff(subtract_neuropil(f_raw, f_neu))
+    return dff, spks, denoised
 
 
 def get_ITI_start_frame(trial: TrialInfo) -> int:
@@ -78,6 +112,17 @@ def activity_trial_position(
     verbose: bool = False,
     do_shuffle: bool = False,
 ) -> np.ndarray:
+    """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
+    trial: TrialInfo
+    flu: dff or spks fluorescence data
+    wheel_circumference: in cm
+    smoothing_sigma: if None, no smoothing is applied otherwise smooth with a gaussian filter of width smoothing_sigma (cm)
+    bin_size: in cm
+    start: in cm
+    max_position: in cm
+    verbose: if True, print the binning information
+    do_shuffle: if True, shuffle the rows of the dff matrix
+    """
 
     # TODO: remove non running epochs?
 
@@ -189,26 +234,32 @@ def get_resting_chunks(
                 all_chunks.append(
                     dff[:, frame_start:frame_end],
                 )
-                # np.hstack(
-                #     # (
-                #     #     array_bin_mean(
-                #     #         dff[:, frame_start:frame_end],
-                #     #         bin_size=1,
-                #     #     ),
-                #     #     # Hack, add a column of 100 to distinguish trials. Remove if doing proper analysis
-                #     #     np.ones((dff.shape[0], 1)) * 100,
-                #     # )
-                # )
-                # )
 
     return np.array(all_chunks)
+
+
+def running_during_ITI(trial: TrialInfo) -> bool:
+
+    trigger_states = np.array(
+        [
+            state.name
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+
+    ITI_positions = degrees_to_cm(
+        np.array(trial.rotary_encoder_position)[trigger_states == "trigger_panda_ITI"],
+        get_wheel_circumference_from_rig("2P"),
+    )
+    return max(ITI_positions) - min(ITI_positions) > 20
 
 
 def get_ITI_matrix(
     trials: List[TrialInfo],
     dff: np.ndarray,
     bin_size: int,
-    average: bool,
 ) -> np.ndarray:
     """
     In theory will be 600 frames in an ITI (as is always 20 seconds)
@@ -230,6 +281,7 @@ def get_ITI_matrix(
         chunk = dff[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
 
         n_frames = chunk.shape[1]
+
         if n_frames < 550:
             # Imaging stopped in the middle
             continue
@@ -239,14 +291,3 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
-
-    # Previous iterations, probably do outside this function
-    # if average:
-    #     return np.mean(
-    #         np.array([normalize(matrix, axis=1) for matrix in matrices]), axis=0
-    #     )
-
-    # # Hack, stack a column of 1s so you can distinguish trials. Remove if doing proper analysis
-    # for idx in range(len(matrices)):
-    #     matrices[idx] = np.hstack([matrices[idx], np.ones((matrices[idx].shape[0], 1))])
-    # return np.hstack([matrix for matrix in matrices])
