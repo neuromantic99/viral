@@ -29,10 +29,10 @@
       "justMyCode": true
     },
     {
-      "name": "two-photon",
+      "name": "Grosmark",
       "type": "debugpy",
       "request": "launch",
-      "program": "viral/two_photon.py",
+      "program": "viral/grosmark_analysis.py",
       "console": "integratedTerminal",
       "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
       "justMyCode": true

@@ -1,12 +1,26 @@
 import itertools
+from pathlib import Path
+import sys
 from matplotlib import pyplot as plt
+from scipy.stats import median_abs_deviation, zscore
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
-from scipy.stats import zscore
+
+# Allow you to run the file directly, remove if exporting as a proper module
+HERE = Path(__file__).parent
+sys.path.append(str(HERE.parent))
+sys.path.append(str(HERE.parent.parent))
+
 
 from viral.constants import HERE
-from viral.imaging_utils import get_ITI_matrix, trial_is_imaged, get_resting_chunks
+from viral.imaging_utils import (
+    get_ITI_matrix,
+    get_dff,
+    trial_is_imaged,
+    activity_trial_position,
+    get_resting_chunks,
+)
 
 from viral.models import Cached2pSession
 
@@ -15,18 +29,17 @@ from viral.utils import (
     find_five_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_five_consecutive_trues,
+    remove_consecutive_ones,
     sort_matrix_peak,
 )
 
-from viral.imaging_utils import activity_trial_position
-
+# TODO: Naughty global
 bin_size = 2
-
 start = 20
 end = 160
 
 
-def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarray:
+def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
     """The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
       2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
     based on its sparsified spike estimate vector, Ssp. This firing rate by position vector was subsequently
@@ -70,33 +83,44 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
     )
 
     smoothed_matrix = np.mean(all_trials, 0)
-    # shuffled_matrices = np.load(HERE / "shuffled_matrices.npy")
-    shuffled_matrices = np.array(
-        [
-            np.mean(
-                np.array(
-                    [
-                        activity_trial_position(
-                            trial=trial,
-                            flu=spks,
-                            wheel_circumference=get_wheel_circumference_from_rig("2P"),
-                            bin_size=bin_size,
-                            start=start,
-                            max_position=end,
-                            verbose=False,
-                            do_shuffle=True,
-                            smoothing_sigma=sigma_bins,
-                        )
-                        for trial in session.trials
-                        if not trial.texture_rewarded and trial_is_imaged(trial)
-                    ]
-                ),
-                0,
-            )
-            for _ in range(n_shuffles)
-        ]
-    )
-    np.save(HERE / "shuffled_matrices.npy", shuffled_matrices)
+
+    # Probably delete cache logic once we're all sorted
+    use_cache = True
+    if use_cache and (HERE / "shuffled_matrices.npy").exists():
+        shuffled_matrices = np.load(HERE / "shuffled_matrices.npy")
+    else:
+        # Create array of shape (n_shuffles, n_cells, n_bins)
+        # where each (n_cells x bins) matrix is trial averaged but shuffled on a per-trial basis (as in Grosmark)
+        # You can then apply percentiles along the first dimension to find "real" place cells
+        shuffled_matrices = np.array(
+            [
+                np.mean(
+                    np.array(
+                        [
+                            activity_trial_position(
+                                trial=trial,
+                                flu=spks,
+                                wheel_circumference=get_wheel_circumference_from_rig(
+                                    "2P"
+                                ),
+                                bin_size=bin_size,
+                                start=start,
+                                max_position=end,
+                                verbose=False,
+                                do_shuffle=True,
+                                smoothing_sigma=sigma_bins,
+                            )
+                            for trial in session.trials
+                            if not trial.texture_rewarded and trial_is_imaged(trial)
+                        ]
+                    ),
+                    0,
+                )
+                for _ in range(n_shuffles)
+            ]
+        )
+        np.save(HERE / "shuffled_matrices.npy", shuffled_matrices)
+
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
     shuffled_place_cells = np.array(
@@ -123,6 +147,12 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
     spks = spks[pcs, :]
     smoothed_matrix = smoothed_matrix[pcs, :]
 
+    plot_place_cells(
+        smoothed_matrix=smoothed_matrix,
+        shuffled_matrices=shuffled_matrices,
+        shuffled_place_cells=shuffled_place_cells,
+    )
+
     print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
 
     print(
@@ -130,20 +160,19 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> np.ndarr
     )
 
     # TODO: no additional check for shuffled, probably not necessary
-
     print(f"percent place cells not shuffled {np.sum(pcs) / n_cells_total}")
 
     peak_indices = np.argmax(smoothed_matrix, axis=1)
     sorted_order = np.argsort(peak_indices)
 
-    # plot_circular_distance_matrix(smoothed_matrix, sorted_order)
+    plot_circular_distance_matrix(smoothed_matrix, sorted_order)
 
     offline_correlations(
         session,
         spks[sorted_order, :],
     )
 
-    return np.ndarray([])
+    plt.show()
 
 
 def offline_correlations(
@@ -161,39 +190,13 @@ def offline_correlations(
         ],
         dff=spks,
         bin_size=1,
-        average=False,
     )
 
     n_trials, n_cells, n_frames = offline.shape
 
-    # HORIZONAL STACK ITI
-    # offline = (
-    #     offline.reshape(-1, n_cells, n_frames).transpose(1, 0, 2).reshape(n_cells, -1)
-    # )
-    # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
+    # TODO: Remove unused offline activity data
 
-    # plt.figure()
-    # plt.title("real")
-    # corrs = cross_correlation_pandas(offline.T)
-    # corrs = remove_diagonal(corrs)
-    # corrs = gaussian_filter1d(corrs, sigma=2.5)
-    # plt.imshow(corrs, vmin=0, vmax=0.2)
-
-    # plt.figure()
-
-    # np.random.shuffle(offline)
-    # plt.title("Shuffled")
-    # corrs = cross_correlation_pandas(offline.T)
-    # corrs = remove_diagonal(corrs)
-    # corrs = gaussian_filter1d(corrs, sigma=2.5)
-    # plt.imshow(corrs, vmin=0, vmax=0.2)
-
-    # total_spikes_cells = np.sum(offline, (0, 2))
-    # offline = offline[:, total_spikes_cells > 100, :]
-
-    #####################################
-
-    # DONT STACK ITI
+    ############# DONT STACK ITI ###############
     plt.figure()
     all_corrs = []
     for trial in range(n_trials):
@@ -249,7 +252,36 @@ def offline_correlations(
 
     plt.figure()
     plt.plot(x, y)
-    plt.show()
+
+    plt.xlabel("Distance between peaks")
+    plt.ylabel("Spearmann correlation")
+
+    ################ HORIZONAL STACK ITI ############################
+    # offline = (
+    #     offline.reshape(-1, n_cells, n_frames).transpose(1, 0, 2).reshape(n_cells, -1)
+    # )
+    # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
+
+    # plt.figure()
+    # plt.title("real")
+    # corrs = cross_correlation_pandas(offline.T)
+    # corrs = remove_diagonal(corrs)
+    # corrs = gaussian_filter1d(corrs, sigma=2.5)
+    # plt.imshow(corrs, vmin=0, vmax=0.2)
+
+    # plt.figure()
+
+    # np.random.shuffle(offline)
+    # plt.title("Shuffled")
+    # corrs = cross_correlation_pandas(offline.T)
+    # corrs = remove_diagonal(corrs)
+    # corrs = gaussian_filter1d(corrs, sigma=2.5)
+    # plt.imshow(corrs, vmin=0, vmax=0.2)
+
+    # total_spikes_cells = np.sum(offline, (0, 2))
+    # offline = offline[:, total_spikes_cells > 100, :]
+
+    #####################################
 
     ############ RESTING CHUNKS #########################
     # offline = get_resting_chunks(
@@ -278,11 +310,13 @@ def plot_circular_distance_matrix(
     smoothed_matrix: np.ndarray, sorted_order: np.ndarray
 ) -> None:
 
+    plt.figure()
     plt.imshow(
         circular_distance_matrix(smoothed_matrix[sorted_order, :]), cmap="RdYlBu"
     )
     plt.colorbar()
-    plt.show()
+    plt.ylabel("Cell number")
+    plt.xlabel("Cell number")
 
 
 def plot_place_cells(
@@ -299,7 +333,9 @@ def plot_place_cells(
         vmax=2,
     )
 
-    plt.title("real")
+    plt.title("Real")
+    plt.xlabel("Corridor position (cm)")
+    plt.ylabel("Cell number")
 
     plt.colorbar()
 
@@ -318,7 +354,6 @@ def plot_place_cells(
 
     plt.title("shuffled")
     plt.colorbar()
-    plt.show()
 
 
 def filter_additional_check(
@@ -391,3 +426,72 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     )
 
     return circular_dist_matrix
+
+
+def binarise_spikes(spks: np.ndarray) -> np.ndarray:
+    """Implements the calcium imaging preprocessing stepts here:
+    https://www.nature.com/articles/s41593-021-00920-7#Sec12
+
+    Though the first steps done in our oasis fork.
+
+    Currently we are not doing wavelet denoising as I've found this makes the fit much worse.
+    We have added zhang baseline step. As without this, if our baseline drifts, higher baseline
+    periods are considered to have more spikes.
+
+    We are also not normalising by the residual between denoised and actual. It's not clear
+    how they do this. What factor are they reducing the residual by? The residual is some
+    massive number.
+
+    They threshold based on the MAD. But is it just the MAD or is the MAD deviation from the median?
+    I also had to take the MAD of only non-zero periods. As the raw MAD of all cells is 0. This may
+    not be true in the hippocampus which is why they may not do this. We're also not currently
+    altering the threshold depending or running or not. TOOD: DO THIS
+
+
+    """
+
+    non_zero_spikes = np.copy(spks)
+    non_zero_spikes[non_zero_spikes == 0] = np.nan
+
+    mad = median_abs_deviation(non_zero_spikes, axis=1, nan_policy="omit")
+
+    # Maybe
+    # threshold = mad * 1.5
+
+    # Or maybe
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
+    mask = spks - threshold[:, np.newaxis] > 0
+    spks[~mask] = 0
+    spks[mask] = 1
+    return remove_consecutive_ones(spks)
+
+
+if __name__ == "__main__":
+
+    mouse = "JB027"
+    date = "2025-02-26"
+    # date = "2024-12-10"
+
+    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
+        session = Cached2pSession.model_validate_json(f.read())
+
+    print(f"Total number of trials: {len(session.trials)}")
+    print(
+        f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
+    )
+
+    dff, spks, denoised = get_dff(mouse, date)
+
+    print("Got dff")
+
+    assert (
+        max(
+            trial.states_info[-1].closest_frame_start
+            for trial in session.trials
+            if trial.states_info[-1].closest_frame_start is not None
+        )
+        < dff.shape[1]
+    ), "Tiff is too short"
+
+    spks = binarise_spikes(spks)
+    grosmark_place_field(session, spks)
