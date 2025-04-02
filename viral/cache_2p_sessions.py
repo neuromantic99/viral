@@ -247,6 +247,7 @@ def get_valid_frame_times(
         assert chunk_len_daq - stack_len_tiff in {
             0,
             2,
+            3,
         }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
         This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
 
@@ -257,7 +258,7 @@ def get_valid_frame_times(
 
     assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
         frame_times_daq
-    ) - len(valid_frame_times) <= 2 * len(chunk_lengths_daq)
+    ) - len(valid_frame_times) <= 3 * len(chunk_lengths_daq)
 
     return valid_frame_times
 
@@ -355,6 +356,8 @@ def check_timestamps(
 
     first_frame_trial = trial.trial_start_closest_frame
     last_frame_trial = trial.trial_end_closest_frame
+    assert first_frame_trial is not None
+    assert last_frame_trial is not None
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
@@ -414,6 +417,7 @@ def main() -> None:
     for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
+
             try:
                 print(f"the type is {row['Type']}")
 

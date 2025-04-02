@@ -25,7 +25,6 @@ from viral.single_session import (
 from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
 from viral.models import MouseSummary, SessionSummary, TrialSummary
 from viral.utils import (
-    average_different_lengths,
     d_prime,
     get_genotype,
     get_wheel_circumference_from_rig,
@@ -36,7 +35,6 @@ from viral.utils import (
 )
 
 import seaborn as sns
-import pandas as pd
 
 sns.set_theme(context="talk", style="ticks")
 
@@ -634,26 +632,30 @@ def main() -> None:
 
     mice: List[MouseSummary] = []
 
-    redo = True
+    redo = False
 
     for mouse_name in {
-        # "JB011",
-        # "JB012",
-        # "JB013",
-        # "JB014",
-        # "JB015",
-        # "JB016",
-        # "JB017",
-        # "JB018",
-        # "JB019",
-        # "JB020",
-        # "JB021",
-        # "JB022",
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
         "JB023",
-        # "JB024",
-        # "JB025",
-        # "JB026",
-        # "JB027",
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
     }:
 
         print(f"\nProcessing {mouse_name}...")
@@ -671,8 +673,8 @@ def main() -> None:
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    # plot_performance_summaries(mice, "recall_reversal", ["genotype", "sex"], window=40)
-    plot_mouse_performance(mice[0])
+    plot_performance_summaries(mice, "learning", ["genotype"], window=50)
+    # plot_mouse_performance(mice[0])
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # plot_trial_time_summaries(mice, "learning")
     # plot_num_trials_summaries(mice, "learning")
