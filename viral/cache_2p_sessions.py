@@ -354,14 +354,8 @@ def check_timestamps(
 
     assert len(all_tiff_timestamps) == len(valid_frame_times)
 
-    trial_start_state = [
-        state for state in trial.states_info if "spacer_high" in state.name
-    ][0]
-
-    trial_end_state = trial.states_info[-1]
-
-    first_frame_trial = trial_start_state.closest_frame_start
-    last_frame_trial = trial_end_state.closest_frame_start
+    first_frame_trial = trial.trial_start_closest_frame
+    last_frame_trial = trial.trial_end_closest_frame
     assert first_frame_trial is not None
     assert last_frame_trial is not None
 
@@ -420,7 +414,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB027"]:
+    for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
 
