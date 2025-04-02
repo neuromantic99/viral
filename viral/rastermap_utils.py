@@ -75,15 +75,6 @@ def align_trial_frames(trials: List[TrialInfo], include_ITI: bool = True) -> np.
     return np.column_stack((trial_frames, rewarded)).astype(int)
 
 
-def get_ITI_start_frame(trial: TrialInfo) -> int:
-    for state in trial.states_info:
-        if state.name == "ITI":
-            return state.closest_frame_start
-        elif state.name == "trigger_ITI":
-            return state.closest_frame_start
-    raise ValueError("ITI state not found")
-
-
 def get_signal_for_trials(
     signal: np.ndarray, trial_frames: np.ndarray
 ) -> list[np.ndarray]:
