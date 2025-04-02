@@ -43,6 +43,11 @@ def mock_metric_fcn_trials(
         return len(trials)
 
 
+def mock_metric_fcn_sessions(sessions, window=None):
+    """Count trials/sessions"""
+    return len(sessions)
+
+
 def mock_metric_fcn_sessions(sessions, window: int | None = None):
     """Count trials/sessions"""
     return len(sessions)

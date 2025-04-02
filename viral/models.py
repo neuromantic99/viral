@@ -1,5 +1,6 @@
-from typing import List
+from typing import List, Optional, Dict
 from pydantic import BaseModel, computed_field
+import numpy as np
 import numpy as np
 
 
@@ -62,15 +63,16 @@ class MouseSummary(BaseModel):
     name: str
     genotype: str
     sex: str
-    setup: str  # TODO As of now, we had one mouse which had to switch for the recall, think about a fix
+    setup: Dict[str, str]
+    rewarded_texture: Dict[str, str]
     sessions: List[SessionSummary]
 
 
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
-    trial_start_closest_frame: float | None = None
-    trial_end_closest_frame: float | None = None
+    trial_start_closest_frame: int | None = None
+    trial_end_closest_frame: int | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]
@@ -102,11 +104,19 @@ class TrialInfo(BaseModel):
         ]
 
 
+class WheelFreeze(BaseModel):
+    pre_training_start_frame: int
+    pre_training_end_frame: int
+    post_training_start_frame: int
+    post_training_end_frame: int
+
+
 class Cached2pSession(BaseModel):
     trials: List[TrialInfo]
     mouse_name: str
     date: str
     session_type: str
+    wheel_freeze: WheelFreeze | None = None
 
 
 class ImagedTrialInfo(BaseModel):
