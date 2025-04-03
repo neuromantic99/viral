@@ -22,7 +22,7 @@ from viral.imaging_utils import (
     get_resting_chunks,
 )
 
-from viral.models import Cached2pSession
+from viral.models import Cached2pSession, GrosmarkConfig
 
 from viral.utils import (
     cross_correlation_pandas,
@@ -30,16 +30,18 @@ from viral.utils import (
     get_wheel_circumference_from_rig,
     has_five_consecutive_trues,
     remove_consecutive_ones,
+    remove_diagonal,
+    shuffle_rows,
     sort_matrix_peak,
 )
 
-# TODO: Naughty global
-bin_size = 2
-start = 20
-end = 160
 
-
-def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
+def grosmark_place_field(
+    session: Cached2pSession,
+    spks: np.ndarray,
+    rewarded: bool | None,
+    config: GrosmarkConfig,
+) -> None:
     """The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
       2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
     based on its sparsified spike estimate vector, Ssp. This firing rate by position vector was subsequently
@@ -58,7 +60,7 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
     n_cells_total = spks.shape[0]
 
     sigma_cm = 7.5  # Desired smoothing in cm
-    sigma_bins = sigma_cm / bin_size  # Convert to bin units
+    sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
     n_shuffles = 2000
 
@@ -70,15 +72,16 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
                 trial=trial,
                 flu=spks,
                 wheel_circumference=get_wheel_circumference_from_rig("2P"),
-                bin_size=bin_size,
-                start=start,
-                max_position=end,
+                bin_size=config.bin_size,
+                start=config.start,
+                max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
                 smoothing_sigma=sigma_bins,
             )
             for trial in session.trials
-            if not trial.texture_rewarded and trial_is_imaged(trial)
+            if trial_is_imaged(trial)
+            and (rewarded is None or trial.texture_rewarded == rewarded)
         ]
     )
 
@@ -86,8 +89,12 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
 
     # Probably delete cache logic once we're all sorted
     use_cache = True
-    if use_cache and (HERE / "shuffled_matrices.npy").exists():
-        shuffled_matrices = np.load(HERE / "shuffled_matrices.npy")
+    cache_file = (
+        HERE
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_shuffled_matrices.npy"
+    )
+    if use_cache and cache_file.exists():
+        shuffled_matrices = np.load(cache_file)
     else:
         # Create array of shape (n_shuffles, n_cells, n_bins)
         # where each (n_cells x bins) matrix is trial averaged but shuffled on a per-trial basis (as in Grosmark)
@@ -103,15 +110,16 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
                                 wheel_circumference=get_wheel_circumference_from_rig(
                                     "2P"
                                 ),
-                                bin_size=bin_size,
-                                start=start,
-                                max_position=end,
+                                bin_size=config.bin_size,
+                                start=config.start,
+                                max_position=config.end,
                                 verbose=False,
                                 do_shuffle=True,
                                 smoothing_sigma=sigma_bins,
                             )
                             for trial in session.trials
-                            if not trial.texture_rewarded and trial_is_imaged(trial)
+                            if trial_is_imaged(trial)
+                            and (rewarded is None or trial.texture_rewarded == rewarded)
                         ]
                     ),
                     0,
@@ -119,7 +127,7 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
                 for _ in range(n_shuffles)
             ]
         )
-        np.save(HERE / "shuffled_matrices.npy", shuffled_matrices)
+        np.save(cache_file, shuffled_matrices)
 
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
@@ -167,68 +175,80 @@ def grosmark_place_field(session: Cached2pSession, spks: np.ndarray) -> None:
     offline_correlations(
         session,
         spks[sorted_order, :],
+        rewarded=rewarded,
     )
 
     plt.show()
 
 
 def offline_correlations(
-    session: Cached2pSession,
-    spks: np.ndarray,
+    session: Cached2pSession, spks: np.ndarray, rewarded: bool | None
 ) -> None:
-    """Correlated offline activity with running. Currently a load of different options for
-    how you define offline activity"""
+    """Correlated offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
+    that can be found in the commit history (e.g. d2e7852f54282a52722767e52cca1ab71e56851b) if you need them
+
+    From Grosmark:
+    For pair-wise reactivation analysis, the run PF peak distance between pairs of PCs was compared to their offline firing-rate
+    Pearsons correlation coefficients in either the pre or post epochs. For calculating offline firing rate correlations,
+    the sparsified binary spike estimate vectors Ssp were restricted to periods of immobility during either the pre or post epoch
+    and convolved with a 150-ms Gaussian kernel.
+
+    """
 
     offline = get_ITI_matrix(
         trials=[
             trial
             for trial in session.trials
-            if trial_is_imaged(trial) and not trial.texture_rewarded
+            if trial_is_imaged(trial)
+            and (rewarded is None or trial.texture_rewarded == rewarded)
         ],
-        dff=spks,
-        bin_size=1,
+        flu=spks,
+        bin_size=None,
     )
 
-    n_trials, n_cells, n_frames = offline.shape
+    shuffled_corrs = get_offline_correlation_matrix(offline, do_shuffle=True, plot=True)
+    real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=True)
 
-    # TODO: Remove unused offline activity data
+    correlations_vs_peak_distance(real_corrs, config=config)
 
-    ############# DONT STACK ITI ###############
-    plt.figure()
+
+def get_offline_correlation_matrix(
+    offline: np.ndarray, do_shuffle: bool = False, plot: bool = False
+) -> np.ndarray:
+    n_trials = offline.shape[0]
     all_corrs = []
     for trial in range(n_trials):
+        trial_matrix = offline[trial, :, :]
+        if do_shuffle:
+            trial_matrix = shuffle_rows(trial_matrix)
         # 150-ms kernel convolution
-        shuffled_trial = np.copy(offline[trial, :, :])
-        np.random.shuffle(shuffled_trial)
-        ITI_trial = gaussian_filter1d(shuffled_trial, sigma=4.5, axis=1)
+        ITI_trial = gaussian_filter1d(trial_matrix, sigma=4.5, axis=1)
         all_corrs.append(cross_correlation_pandas(ITI_trial.T))
 
     corrs = np.nanmean(np.array(all_corrs), 0)
-    # corrs = remove_diagonal(corrs)
-    # corrs = gaussian_filter1d(corrs, sigma=2.5)
-    plt.title("shuffled")
-    plt.imshow(corrs, vmin=0, vmax=0.1, cmap="bwr")
 
-    plt.figure()
-    all_corrs = []
-    for trial in range(n_trials):
-        # 150-ms kernel convolution
-        ITI_trial = gaussian_filter1d(offline[trial, :, :], sigma=4.5, axis=1)
-        all_corrs.append(cross_correlation_pandas(ITI_trial.T))
+    if plot:
+        plt.figure()
+        plt.title("shuffled" if do_shuffle else "real")
+        plt.imshow(
+            gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
+            vmin=0,
+            vmax=0.1,
+            cmap="bwr",
+        )
 
-    corrs = np.nanmean(np.array(all_corrs), 0)
-    # corrs = remove_diagonal(corrs)
-    # corrs = gaussian_filter1d(corrs, sigma=2.5)
-    plt.title("REAL")
-    plt.imshow(corrs, vmin=0, vmax=0.1, cmap="bwr")
+    return corrs
 
+
+def correlations_vs_peak_distance(corrs: np.ndarray, config: GrosmarkConfig) -> None:
+    n_cells = corrs.shape[0]
     # This assumes cells equally span the field. Not true but ok for now
-    all_cell_peak_positions = np.linspace(start, end, n_cells)
+    # DOOOOOOOOOO THISSSSSSSSSSSSSSSSSSSSSSs
+    all_cell_peak_positions = np.linspace(config.start, config.end, n_cells)
     peak_distances = []
     cell_corrs = []
 
     for i, j in itertools.combinations(range(n_cells), r=2):
-
         cell1_peak = all_cell_peak_positions[i]
         cell2_peak = all_cell_peak_positions[j]
         peak_distances.append(abs(cell1_peak - cell2_peak))
@@ -251,56 +271,8 @@ def offline_correlations(
     plt.plot(x, y)
 
     plt.xlabel("Distance between peaks")
-    plt.ylabel("Spearmann correlation")
-
-    ################ HORIZONAL STACK ITI ############################
-    # offline = (
-    #     offline.reshape(-1, n_cells, n_frames).transpose(1, 0, 2).reshape(n_cells, -1)
-    # )
-    # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
-
-    # plt.figure()
-    # plt.title("real")
-    # corrs = cross_correlation_pandas(offline.T)
-    # corrs = remove_diagonal(corrs)
-    # corrs = gaussian_filter1d(corrs, sigma=2.5)
-    # plt.imshow(corrs, vmin=0, vmax=0.2)
-
-    # plt.figure()
-
-    # np.random.shuffle(offline)
-    # plt.title("Shuffled")
-    # corrs = cross_correlation_pandas(offline.T)
-    # corrs = remove_diagonal(corrs)
-    # corrs = gaussian_filter1d(corrs, sigma=2.5)
-    # plt.imshow(corrs, vmin=0, vmax=0.2)
-
-    # total_spikes_cells = np.sum(offline, (0, 2))
-    # offline = offline[:, total_spikes_cells > 100, :]
-
-    #####################################
-
-    ############ RESTING CHUNKS #########################
-    # offline = get_resting_chunks(
-    #     trials=[
-    #         session.trials[idx]
-    #         for idx in range(len(session.trials))
-    #         if trial_is_imaged(session.trials[idx])
-    #         and session.trials[idx - 1].texture_rewarded
-    #     ],
-    #     dff=spks,
-    #     chunk_size_frames=5 * 30,
-    #     speed_threshold=1,
-    # )
-
-    # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
-
-    # all_coors = []
-    # for offline_trial in offline:
-    #     # offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
-    #     corr_trial = cross_correlation_pandas(offline_trial.T)
-    #     corr_trial = remove_diagonal(corr_trial)
-    #     all_coors.append(corr_trial)
+    plt.ylabel("Pearson correlation")
+    plt.show()
 
 
 def plot_circular_distance_matrix(
@@ -386,7 +358,7 @@ def filter_additional_check(
             ):
                 count += 1
 
-        if count / n_trials > 0.4:
+        if count / n_trials > 0.15:
             valid_pcs[cell] = True
 
     return np.array(valid_pcs)
@@ -491,4 +463,15 @@ if __name__ == "__main__":
     ), "Tiff is too short"
 
     spks = binarise_spikes(spks)
-    grosmark_place_field(session, spks)
+
+    is_unsupervised = session.session_type.lower().startswith("unsupervised learning")
+
+    config = GrosmarkConfig(
+        bin_size=2,
+        start=20,
+        end=160,
+    )
+
+    grosmark_place_field(
+        session, spks, rewarded=None if is_unsupervised else True, config=config
+    )

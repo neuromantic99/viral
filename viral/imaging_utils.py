@@ -258,8 +258,8 @@ def running_during_ITI(trial: TrialInfo) -> bool:
 
 def get_ITI_matrix(
     trials: List[TrialInfo],
-    dff: np.ndarray,
-    bin_size: int,
+    flu: np.ndarray,
+    bin_size: int | None,
 ) -> np.ndarray:
     """
     In theory will be 600 frames in an ITI (as is always 20 seconds)
@@ -278,15 +278,15 @@ def get_ITI_matrix(
         # if running_during_ITI(trial):
         #     continue
 
-        chunk = dff[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
+        chunk = flu[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
 
         n_frames = chunk.shape[1]
 
-        if n_frames < 550:
-            # Imaging stopped in the middle
-            continue
-        elif n_frames in {598, 599}:
-            matrices.append(array_bin_mean(chunk[:, :598], bin_size=bin_size))
+        if n_frames in {598, 599, 600}:
+            if bin_size is None:
+                matrices.append(chunk[:, :598])
+            else:
+                matrices.append(array_bin_mean(chunk[:, :598], bin_size=bin_size))
         else:
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
