@@ -462,6 +462,5 @@ def remove_diagonal(A: np.ndarray) -> np.ndarray:
 def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
 
     df = pd.DataFrame(matrix)
-    corr = df.corr(method="spearman")
-
+    corr = df.corr(method="pearson")
     return corr.to_numpy()
