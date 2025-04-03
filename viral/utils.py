@@ -8,7 +8,7 @@ import numpy as np
 from enum import Enum
 
 from viral.constants import ENCODER_TICKS_PER_TURN
-from viral.models import SpeedPosition, TrialInfo
+from viral.models import SpeedPosition, TrialInfo, MouseSummary
 
 
 def shaded_line_plot(
@@ -170,7 +170,20 @@ def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
     return list(directory.glob("*.tif"))
 
 
-def pad_to_max_length(sequences: Any, fill_value: float = np.nan) -> np.ndarray:
+def extract_TTL_chunks(
+    frame_clock: np.ndarray, sampling_rate: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    frame_times = threshold_detect(frame_clock, 4)
+    diffed = np.diff(frame_times)
+    chunk_starts = np.where(diffed > sampling_rate)[0] + 1
+    # The first chunk starts on the first frame detected
+    chunk_starts = np.insert(chunk_starts, 0, 0)
+    # Add the final frame to allow the diff to work on the last chunk
+    chunk_starts = np.append(chunk_starts, len(frame_times))
+    return frame_times, np.diff(chunk_starts)
+
+
+def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
     """Return numpy array with the length of the longest sequence, padded with NaN values"""
     max_len = max(len(seq) for seq in sequences)
     return np.array(
@@ -310,36 +323,42 @@ def get_sex(mouse_name: str) -> str:
         raise ValueError(f"Unknown sex for mouse: {mouse_name}")
 
 
-def get_setup(mouse_name: str) -> str:
-    if mouse_name in {
-        "JB011",
-        "JB014",
-        "JB015",
-        "JB016",
-        "JB018",
-        "JB019",
-        "JB020",
-        "JB021",
-        "JB022",
-        "JB023",
-        "JB026",
-        "JB027",
-        "JB030",
-        "JB031",
-        "JB032",
-        "JB033",
-    }:
-        return "2P"
-    if mouse_name in {
-        "JB012",
-        "JB013",
-        "JB017",
-        "JB024",
-        "JB025",
-    }:
-        return "box"
+class SetupType(Enum):
+    TWO_PHOTON = "2P"
+    BOX = "box"
+
+
+def get_setup(setup_name: str) -> str:
+    if "2P" in setup_name.upper().strip():
+        return SetupType.TWO_PHOTON.value
+    elif "box" in setup_name.lower().strip():
+        return SetupType.BOX.value
     else:
-        raise ValueError(f"Unknown setup for mouse: {mouse_name}")
+        raise ValueError(f"Unknown setup '{setup_name}' for mouse!")
+
+
+def get_setup_for_session_type(mouse: MouseSummary, session_type: str) -> str:
+    return mouse.setup[session_type]
+
+
+class RewardedTexture(Enum):
+    PEBBLE = "pebble.jpg"
+    BLACK_AND_WHITE_CIRCLES = "blackAndWhiteCircles.png"
+
+
+def get_rewarded_texture(texture_name: str) -> str:
+    if "pebble" in texture_name.lower().strip():
+        return RewardedTexture.PEBBLE.value
+    elif "blackandwhitecircles" in texture_name.lower().strip():
+        return RewardedTexture.BLACK_AND_WHITE_CIRCLES.value
+    else:
+        raise ValueError(f"Unknown rewarded texture '{texture_name}'.")
+
+
+def get_rewarded_texture_for_session_type(
+    mouse: MouseSummary, session_type: str
+) -> str:
+    return mouse.rewarded_texture[session_type]
 
 
 class SessionType(Enum):
@@ -373,14 +392,12 @@ def shuffle(x: np.ndarray) -> np.ndarray:
     return x.reshape(shape)
 
 
-def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
-    peak_indices = np.argmax(matrix, axis=1)
-    sorted_order = np.argsort(peak_indices)
-    return matrix[sorted_order]
-
-
-def normalize(array: np.ndarray, axis: int) -> np.ndarray:
-    """Calculate the min and max along the specified axis"""
-    min_val = np.min(array, axis=axis, keepdims=True)
-    max_val = np.max(array, axis=axis, keepdims=True)
-    return (array - min_val) / (max_val - min_val)
+def get_sampling_rate(frame_clock: np.ndarray) -> int:
+    """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
+    two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
+    """
+    if 30 < len(frame_clock) / 1000 / 60 < 100:
+        return 1000
+    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+        return 10000
+    raise ValueError("Could not determine sampling rate")
