@@ -151,7 +151,7 @@ def extract_frozen_wheel_chunks(
     chunk_lengths_daq: np.ndarray,
     stack_lengths_tiffs: np.ndarray,
     expected_chunk_len: int = 27000,
-) -> tuple[int, int]:
+) -> tuple[tuple[int, int], tuple[int, int]]:
     """Extract start and end frame index for pre-training and post-training imaging chunks"""
     # first chunk (before behavioural chunks)
     first_chunk_len = stack_lengths_tiffs[0]
@@ -220,7 +220,7 @@ def add_imaging_info_to_trials(
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
-    # TODO: If you stop the acquisition manually, than this won't work. Think about a fix.
+    # TODO: If you stop the acquisition manually, then this won't work. Think about a fix.
     if wheel_blocked:
         frozen_wheel_chunks = extract_frozen_wheel_chunks(
             chunk_lengths_daq=chunk_lengths_daq, stack_lengths_tiffs=stack_lengths_tiffs
@@ -303,7 +303,7 @@ def add_imaging_info_to_trials(
         if wheel_blocked
         else None
     )
-    return trials, wheel_freeze if wheel_blocked else None
+    return trials, wheel_freeze
 
 
 def get_tiff_metadata(
@@ -416,9 +416,6 @@ def check_timestamps(
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
 
-        # TODO: for debugging, remove eventually
-        # print(f"Offset: {offset}")
-
         # Allow for some drift up to 15ms
         if not wheel_blocked:
             if trial.trial_start_time / 60 < 30:
@@ -483,7 +480,6 @@ def main() -> None:
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
     for mouse_name in ["JB031"]:
-    for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
@@ -491,10 +487,7 @@ def main() -> None:
 
                 date = row["Date"]
                 session_type = row["Type"].lower()
-                wheel_blocked = (
-                    True if row["Wheel blocked?"].lower() == "yes" else False
-                )
-
+                wheel_blocked = row["Wheel blocked?"].lower() == "yes"
                 if date == "2025-03-20":
                     if (
                         not redo
@@ -534,7 +527,7 @@ def main() -> None:
                         )
                         trials.extend(load_data(session_path))
 
-                    logger.info(f"\n")
+                    logger.info("\n")
                     logger.info(f"Processing {mouse_name} {date} {session_type}")
                     process_session(
                         trials=trials,

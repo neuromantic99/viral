@@ -607,7 +607,7 @@ def plot_performance_summaries(
                 print(f"There is no valid data for {mouse.name} in {session_type}")
                 continue
     plt.figure()
-    plt.ylabel(f"Trials to criterion")
+    plt.ylabel("Trials to criterion")
     plt.title(session_type.replace("_", " ").capitalize())
     sns.boxplot(to_plot, showfliers=False)
     ax = plt.gca()
@@ -696,12 +696,12 @@ def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
     plt.show()
 
 
-def main() -> None:
+if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
     window = 50
-    redo = True
+    redo = False
     # cache_mouse("JB013")
     # cache_mouse("JB025")
     # cache_mouse("JB032")
@@ -709,25 +709,25 @@ def main() -> None:
 
     for i, mouse_name in enumerate(
         [
-            # "JB011",
-            # "JB012",
-            # "JB013",
-            # "JB014",
-            # "JB015",
-            # "JB016",
-            # "JB017",
-            # "JB018",
-            # "JB019",
-            # "JB020",
-            # "JB021",
-            # "JB022",
-            # "JB023",
-            # "JB024",
-            # "JB025",
-            # "JB026",
-            # "JB027",
+            "JB011",
+            "JB012",
+            "JB013",
+            "JB014",
+            "JB015",
+            "JB016",
+            "JB017",
+            "JB018",
+            "JB019",
+            "JB020",
+            "JB021",
+            "JB022",
+            "JB023",
+            "JB024",
+            "JB025",
+            "JB026",
+            "JB027",
             # "JB030",
-            "JB031",
+            # "JB031",
             # "JB032",
             # "JB033",
         ]
@@ -748,13 +748,13 @@ def main() -> None:
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-        plot_mouse_performance(mice[i], window=window)
-    # plot_performance_summaries(
-    #     mice,
-    #     "learning",
-    #     ["genotype", "rewarded_texture"],
-    #     window=40,
-    # )
+        # plot_mouse_performance(mice[i], window=window)
+    plot_performance_summaries(
+        mice,
+        "learning",
+        ["genotype", "rewarded_texture"],
+        window=40,
+    )
     # plot_performance_summaries(mice, "reversal", ["genotype", "sex"], window=window)
     # plot_performance_summaries(mice, "learning", ["genotype"], window=window)
     # plot_performance_summaries(mice, "reversal", ["genotype"], window=window)

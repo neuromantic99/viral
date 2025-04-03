@@ -5,7 +5,6 @@ from typing import List, Tuple, TypeVar, Any
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
-import pandas as pd
 from enum import Enum
 
 from viral.constants import ENCODER_TICKS_PER_TURN
@@ -221,8 +220,6 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
     trigger_panda_states = [
         state
         for state in trial.states_info
-        if state.name
-        in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
         if state.name
         in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
     ]

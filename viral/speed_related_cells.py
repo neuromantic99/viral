@@ -2,6 +2,7 @@ import numpy as np
 import sys
 from matplotlib import pyplot as plt
 from pathlib import Path
+from typing import Callable
 from scipy.stats import pearsonr, spearmanr
 
 HERE = Path(__file__).parent
@@ -27,7 +28,6 @@ def bin_activity(
     for i in range(len(bins) - 1):
         bin_start = bins[i]
         bin_end = bins[i + 1]
-        print(bin_start)
         if i == len(bins) - 2:
             # Include upper bound in last bin
             frame_idx_bin = np.where((matrix >= bin_start) & (matrix <= bin_end))[0]
@@ -43,65 +43,51 @@ def bin_activity(
 
 def get_mean_value_per_bin(start: int, max: int, bin_size: float) -> np.ndarray:
     bin_edges = np.arange(start, max, bin_size)
-    return np.array([(start + start + bin_size) / 2 for start in bin_edges])
+    return bin_edges + bin_size / 2
+
+
+def calculate_correlation(
+    activity_speed: np.ndarray,
+    mean_speed_per_bin: np.ndarray,
+    correlation_func: Callable,
+) -> np.ndarray:
+    assert (
+        activity_speed.shape[1] == mean_speed_per_bin.shape[0]
+    ), f"There is {activity_speed.shape[1]} speed bins, but mean speeds for {mean_speed_per_bin.shape} speed bins"
+    if np.isnan(activity_speed).any():
+        print("Warning! NaN in activity_speed matrix")
+    return np.array(
+        [
+            correlation_func(activity_speed[i, :], mean_speed_per_bin)[0]
+            for i in range(activity_speed.shape[0])
+        ]
+    )
 
 
 def get_speed_pearsonr(
     activity_speed: np.ndarray, mean_speed_per_bin: np.ndarray
 ) -> np.ndarray:
-    assert (
-        activity_speed.shape[1] == mean_speed_per_bin.shape[0]
-    ), f"There is {activity_speed.shape[1]} speed bins, but mean speeds for {mean_speed_per_bin.shape} speed bins"
-    if np.isnan(activity_speed).any():
-        print("Warning! NaN in activity_speed matrix")
-    return np.array(
-        [
-            pearsonr(activity_speed[i, :], mean_speed_per_bin)[0]
-            for i in range(activity_speed.shape[0])
-        ]
-    )
+    return calculate_correlation(activity_speed, mean_speed_per_bin, pearsonr)
 
 
 def get_speed_spearmanr(
     activity_speed: np.ndarray, mean_speed_per_bin: np.ndarray
 ) -> np.ndarray:
-    assert (
-        activity_speed.shape[1] == mean_speed_per_bin.shape[0]
-    ), f"There is {activity_speed.shape[1]} speed bins, but mean speeds for {mean_speed_per_bin.shape} speed bins"
-    if np.isnan(activity_speed).any():
-        print("Warning! NaN in activity_speed matrix")
-    return np.array(
-        [
-            spearmanr(activity_speed[i, :], mean_speed_per_bin)[0]
-            for i in range(activity_speed.shape[0])
-        ]
-    )
+    return calculate_correlation(activity_speed, mean_speed_per_bin, spearmanr)
 
 
 def speed_related_cells(spks: np.ndarray, speed: np.ndarray, bin_size: int = 2) -> None:
     """Plot speed related cells (correlation histograms)"""
-<<<<<<< HEAD
-    spks_shuffled = shuffle_neuron_spikes(spks)
-=======
->>>>>>> main
     max_speed = np.max(speed)
     start = 0
     end = np.ceil(max_speed / bin_size) * bin_size
     mean_speed_per_bin = get_mean_value_per_bin(start, end, bin_size)
     spks_binned = bin_activity(spks, speed, start, end, bin_size)
-<<<<<<< HEAD
-    spks_shuffled_binned = bin_activity(spks_shuffled, speed, start, end, bin_size)
-    correlation_distribution = get_speed_spearmanr(spks_binned, mean_speed_per_bin)
-    correlation_distribution_shuffled = get_speed_spearmanr(
-        spks_shuffled_binned, mean_speed_per_bin
-=======
     spks_binned_shuffled = shuffle_neuron_spikes(spks_binned)
     correlation_distribution = get_speed_spearmanr(spks_binned, mean_speed_per_bin)
     correlation_distribution_shuffled = get_speed_spearmanr(
         spks_binned_shuffled, mean_speed_per_bin
->>>>>>> main
     )
-    # neuron_sort = np.argsort(pearson_distribution, axis=0)
     percentile_99 = np.percentile(correlation_distribution_shuffled, 99)
     percentile_1 = np.percentile(correlation_distribution_shuffled, 1)
     bins = 20
@@ -120,7 +106,7 @@ def speed_related_cells(spks: np.ndarray, speed: np.ndarray, bin_size: int = 2) 
         percentile_99, color="red", linestyle="--", label="99th percentile of shuffled"
     )
     plt.axvline(
-        percentile_1, color="red", linestyle="--", label="99th percentile of shuffled"
+        percentile_1, color="red", linestyle="--", label="1st percentile of shuffled"
     )
     plt.title("Neuron-Speed Correlation")
     plt.ylabel("Neurons")

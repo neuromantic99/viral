@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 from scipy.interpolate import interp1d
 from typing import List, Optional
-from enum import Enum
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -47,7 +46,7 @@ def align_trial_frames(trials: List[TrialInfo], include_ITI: bool = True) -> np.
 
     Args:
         trials (List[TrialInfo]):       A list of TrialInfo objects.
-        include_ITI (bool, optional):   Include the frames in the inter-trial interval (ITI). Defaults to False.
+        include_ITI (bool, optional):   Include the frames in the inter-trial interval (ITI). Defaults to True.
                                         If ITI, is False, then trial end is defined as the start of the ITI.
 
     Returns:
@@ -199,10 +198,7 @@ def get_speed_frame(frame_position: np.ndarray, bin_size: int = 5) -> np.ndarray
         frame_end_idx, position_frame_end = frame_position[end_idx, :]
         frame_diff = frame_end_idx - frame_start_idx
         position_diff = position_frame_end - position_frame_start
-        if frame_diff == 0:
-            speed = 0
-        else:
-            speed = position_diff / frame_diff
+        speed = 0 if frame_diff == 0 else (position_diff / frame_diff)
         if i == len(bins) - 1:
             speeds[start_idx:] = speed
         else:
@@ -336,7 +332,7 @@ def load_data(session: Cached2pSession, s2p_path: Path, signal_type: str) -> tup
         dff, xpos, ypos = get_dff_pos(session, s2p_path)
         return dff, xpos, ypos, trials
     else:
-        raise ValueError(f"Unknow signal type: {signal_type}")
+        raise ValueError(f"Unknown signal type: {signal_type}")
 
 
 def align_validate_data(signal: np.ndarray, trials: List[TrialInfo]) -> tuple:
@@ -382,7 +378,7 @@ def process_trials_data(
             # speed_threshold=0.5,
             # position_threshold=180,
         )
-        if np.all(valid_mask == False):
+        if not np.any(valid_mask):
             print("No valid frames in the trial")
         valid_trial_frames = trial_frames[valid_mask]
         valid_trial_start = valid_trial_frames[0]
@@ -623,7 +619,7 @@ def process_session(
             speed_combined=speed,
             ITI_split=False,
         )
-    print(f"Successfully cached 2P session for rastermap!")
+    print("Successfully cached 2P session for rastermap!")
 
 
 if __name__ == "__main__":
