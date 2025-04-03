@@ -5,7 +5,6 @@ from typing import List, Tuple, TypeVar, Any
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
-import pandas as pd
 from enum import Enum
 
 from viral.constants import ENCODER_TICKS_PER_TURN

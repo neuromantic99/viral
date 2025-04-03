@@ -1,9 +1,7 @@
 import numpy as np
 import sys
-import random
 from pathlib import Path
 from scipy.interpolate import interp1d
-from sklearn.preprocessing import MinMaxScaler
 from typing import List, Optional
 from enum import Enum
 
@@ -22,7 +20,7 @@ from viral.constants import TIFF_UMBRELLA
 from viral.two_photon import get_dff
 
 
-def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray]:
+def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
