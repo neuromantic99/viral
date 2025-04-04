@@ -2,7 +2,7 @@ import itertools
 from pathlib import Path
 import sys
 from matplotlib import pyplot as plt
-from scipy.stats import median_abs_deviation, zscore
+from scipy.stats import median_abs_deviation, zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
@@ -26,13 +26,16 @@ from viral.models import Cached2pSession, GrosmarkConfig
 
 from viral.utils import (
     cross_correlation_pandas,
+    degrees_to_cm,
     find_five_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_five_consecutive_trues,
     remove_consecutive_ones,
     remove_diagonal,
+    shaded_line_plot,
     shuffle_rows,
     sort_matrix_peak,
+    get_speed_positions,
 )
 
 
@@ -54,6 +57,8 @@ def grosmark_place_field(
 
     As an additional control, only those putative PFs in which the cell had a greater within-PF than outside-of-PF firing rates
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
+
+    TODO: Looks like there might be some real landmark activity that could be reactivated. Analyse this.
 
     """
 
@@ -131,6 +136,8 @@ def grosmark_place_field(
 
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
+    plot_speed(session, rewarded, config)
+
     shuffled_place_cells = np.array(
         [
             has_five_consecutive_trues(shuffled_matrices[idx, :, :] > place_threshold)
@@ -159,6 +166,7 @@ def grosmark_place_field(
         smoothed_matrix=smoothed_matrix,
         shuffled_matrices=shuffled_matrices,
         shuffled_place_cells=shuffled_place_cells,
+        config=config,
     )
 
     print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
@@ -168,21 +176,59 @@ def grosmark_place_field(
     )
 
     peak_indices = np.argmax(smoothed_matrix, axis=1)
+    peak_position_cm = peak_indices * config.bin_size + config.start
     sorted_order = np.argsort(peak_indices)
+    peak_position_cm = peak_position_cm[sorted_order]
 
     plot_circular_distance_matrix(smoothed_matrix, sorted_order)
 
     offline_correlations(
         session,
         spks[sorted_order, :],
+        peak_position_cm=peak_position_cm,
         rewarded=rewarded,
     )
 
     plt.show()
 
 
+def plot_speed(
+    session: Cached2pSession, rewarded: bool | None, config: GrosmarkConfig
+) -> None:
+    speeds = [
+        np.array(
+            [
+                speed.speed
+                for speed in get_speed_positions(
+                    degrees_to_cm(
+                        np.array(trial.rotary_encoder_position),
+                        get_wheel_circumference_from_rig("2P"),
+                    ),
+                    config.start,
+                    config.end,
+                    config.bin_size,
+                    sampling_rate=30,
+                )
+            ]
+        )
+        for trial in session.trials
+        if trial_is_imaged(trial)
+        and (rewarded is None or trial.texture_rewarded == rewarded)
+    ]
+
+    shaded_line_plot(
+        np.array(speeds),
+        x_axis=np.arange(config.start, config.end, config.bin_size),
+        color="red",
+        label="speed",
+    )
+
+
 def offline_correlations(
-    session: Cached2pSession, spks: np.ndarray, rewarded: bool | None
+    session: Cached2pSession,
+    spks: np.ndarray,
+    peak_position_cm: np.ndarray,
+    rewarded: bool | None,
 ) -> None:
     """Correlated offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
     that can be found in the commit history (e.g. d2e7852f54282a52722767e52cca1ab71e56851b) if you need them
@@ -209,7 +255,9 @@ def offline_correlations(
     shuffled_corrs = get_offline_correlation_matrix(offline, do_shuffle=True, plot=True)
     real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=True)
 
-    correlations_vs_peak_distance(real_corrs, config=config)
+    correlations_vs_peak_distance(
+        real_corrs, peak_position_cm=peak_position_cm, plot=True
+    )
 
 
 def get_offline_correlation_matrix(
@@ -240,17 +288,17 @@ def get_offline_correlation_matrix(
     return corrs
 
 
-def correlations_vs_peak_distance(corrs: np.ndarray, config: GrosmarkConfig) -> None:
+def correlations_vs_peak_distance(
+    corrs: np.ndarray, peak_position_cm: np.ndarray, plot: bool = False
+) -> None:
     n_cells = corrs.shape[0]
-    # This assumes cells equally span the field. Not true but ok for now
-    # DOOOOOOOOOO THISSSSSSSSSSSSSSSSSSSSSSs
-    all_cell_peak_positions = np.linspace(config.start, config.end, n_cells)
     peak_distances = []
     cell_corrs = []
 
     for i, j in itertools.combinations(range(n_cells), r=2):
-        cell1_peak = all_cell_peak_positions[i]
-        cell2_peak = all_cell_peak_positions[j]
+        assert i != j
+        cell1_peak = peak_position_cm[i]
+        cell2_peak = peak_position_cm[j]
         peak_distances.append(abs(cell1_peak - cell2_peak))
         cell_corrs.append(corrs[i, j])
 
@@ -260,19 +308,23 @@ def correlations_vs_peak_distance(corrs: np.ndarray, config: GrosmarkConfig) -> 
     x = []
     y = []
 
-    for bin_start in np.arange(0, 80):
+    for bin_start in np.arange(0, 100):
         in_bin = np.logical_and(
-            peak_distances > bin_start, peak_distances < bin_start + 20
+            peak_distances >= bin_start, peak_distances < bin_start + 20
         )
         x.append(bin_start)
         y.append(np.mean(cell_corrs[in_bin]))
 
-    plt.figure()
-    plt.plot(x, y)
+    if plot:
+        plt.figure()
+        plt.plot(x, y)
+        r, p = pearsonr(x, y)
 
-    plt.xlabel("Distance between peaks")
-    plt.ylabel("Pearson correlation")
-    plt.show()
+        plt.xlabel("Distance between peaks")
+        plt.ylabel("Pearson correlation")
+        plt.title(f"Pearson corrleation r = {r:.2f}, p = {p:.2f}")
+
+        plt.show()
 
 
 def plot_circular_distance_matrix(
@@ -292,6 +344,7 @@ def plot_place_cells(
     smoothed_matrix: np.ndarray,
     shuffled_matrices: np.ndarray,
     shuffled_place_cells: np.ndarray,
+    config: GrosmarkConfig,
 ) -> None:
     plt.figure()
     plt.imshow(
@@ -305,6 +358,11 @@ def plot_place_cells(
     plt.title("Real")
     plt.xlabel("Corridor position (cm)")
     plt.ylabel("Cell number")
+
+    plt.xticks(
+        np.linspace(0, smoothed_matrix.shape[1], 5),
+        np.linspace(config.start, config.end, 5).astype(int),
+    )
 
     plt.colorbar()
 
@@ -468,10 +526,10 @@ if __name__ == "__main__":
 
     config = GrosmarkConfig(
         bin_size=2,
-        start=20,
+        start=30,
         end=160,
     )
 
     grosmark_place_field(
-        session, spks, rewarded=None if is_unsupervised else True, config=config
+        session, spks, rewarded=None if is_unsupervised else False, config=config
     )

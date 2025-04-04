@@ -26,12 +26,7 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
 
 
 def get_dff(mouse: str, date: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    # s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
-    print(
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHh"
-    )
-    s2p_path = Path("/Users/jamesrowland/Desktop/plane0")
-
+    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
 
@@ -282,6 +277,9 @@ def get_ITI_matrix(
 
         n_frames = chunk.shape[1]
 
+        if n_frames < 550:
+            # Imaging stopped in the middle
+            continue
         if n_frames in {598, 599, 600}:
             if bin_size is None:
                 matrices.append(chunk[:, :598])
