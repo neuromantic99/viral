@@ -34,21 +34,16 @@ def create_mock_mouse() -> Mock:
 
 
 def mock_metric_fcn_trials(
-    trials: List[TrialSummary], rewarded: bool | None = None, window: int | None = None
+    trials: List[TrialSummary], rewarded: bool | None = None
 ) -> int:
     """Count trials"""
-    if rewarded:
+    if rewarded is not None:
         return len([trial for trial in trials if trial.rewarded == rewarded])
     else:
         return len(trials)
 
 
-def mock_metric_fcn_sessions(sessions, window=None):
-    """Count trials/sessions"""
-    return len(sessions)
-
-
-def mock_metric_fcn_sessions(sessions, window: int | None = None):
+def mock_metric_fcn_sessions(sessions):
     """Count trials/sessions"""
     return len(sessions)
 
