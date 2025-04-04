@@ -16,7 +16,6 @@ sys.path.append(str(HERE.parent.parent))
 sns.set_theme(context="talk", style="ticks")
 
 from viral.imaging_utils import trial_is_imaged
-from viral.rastermap_utils import get_ITI_start_frame
 from viral.utils import (
     degrees_to_cm,
     get_wheel_circumference_from_rig,
@@ -34,7 +33,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 
 
-from viral.constants import SERVER_PATH, TIFF_UMBRELLA
+from viral.constants import TIFF_UMBRELLA
 
 
 def compute_dff(f: np.ndarray) -> np.ndarray:

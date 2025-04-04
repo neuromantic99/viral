@@ -13,6 +13,8 @@ token.pickle
 
 data/
 
+OASIS/
+
 .DS_store
 
 # Byte-compiled / optimized / DLL files
