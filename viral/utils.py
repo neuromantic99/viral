@@ -170,7 +170,20 @@ def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
     return list(directory.glob("*.tif"))
 
 
-def pad_to_max_length(sequences: Any, fill_value: float = np.nan) -> np.ndarray:
+def extract_TTL_chunks(
+    frame_clock: np.ndarray, sampling_rate: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    frame_times = threshold_detect(frame_clock, 4)
+    diffed = np.diff(frame_times)
+    chunk_starts = np.where(diffed > sampling_rate)[0] + 1
+    # The first chunk starts on the first frame detected
+    chunk_starts = np.insert(chunk_starts, 0, 0)
+    # Add the final frame to allow the diff to work on the last chunk
+    chunk_starts = np.append(chunk_starts, len(frame_times))
+    return frame_times, np.diff(chunk_starts)
+
+
+def pad_to_max_length(sequences: Any, fill_value=np.nan) -> np.ndarray:
     """Return numpy array with the length of the longest sequence, padded with NaN values"""
     max_len = max(len(seq) for seq in sequences)
     return np.array(

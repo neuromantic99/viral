@@ -510,9 +510,7 @@ def plot_running_speed_summaries(
     plt.show()
 
 
-def plot_trial_time_summaries(
-    mice: List[MouseSummary], session_type: str = "learning"
-) -> None:
+def plot_trial_time_summaries(mice: List[MouseSummary], session_type: str = "learning"):
     trial_time_dict = create_metric_dict(
         mice, trial_time, flat_sessions=True, include_reward_status=True
     )
@@ -548,9 +546,7 @@ def plot_trial_time_summaries(
     plt.show()
 
 
-def plot_num_trials_summaries(
-    mice: List[MouseSummary], session_type: str = "learning"
-) -> None:
+def plot_num_trials_summaries(mice: List[MouseSummary], session_type: str = "learning"):
     num_trials_dict = create_metric_dict(
         mice, trials_run, flat_sessions=False, include_reward_status=False
     )
@@ -577,7 +573,7 @@ def plot_num_trials_summaries(
 
 def plot_performance_summaries(
     mice: List[MouseSummary], session_type: str, group_by: list[str], window: int = 50
-) -> None:
+):
     rolling_performance_dict = create_metric_dict(
         mice, rolling_performance, True, False, window
     )

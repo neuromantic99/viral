@@ -78,15 +78,16 @@ def get_speed_spearmanr(
 
 def speed_related_cells(spks: np.ndarray, speed: np.ndarray, bin_size: int = 2) -> None:
     """Plot speed related cells (correlation histograms)"""
+    spks_shuffled = shuffle_neuron_spikes(spks)
     max_speed = np.max(speed)
     start = 0
     end = np.ceil(max_speed / bin_size) * bin_size
     mean_speed_per_bin = get_mean_value_per_bin(start, end, bin_size)
     spks_binned = bin_activity(spks, speed, start, end, bin_size)
-    spks_binned_shuffled = shuffle_neuron_spikes(spks_binned)
+    spks_shuffled_binned = bin_activity(spks_shuffled, speed, start, end, bin_size)
     correlation_distribution = get_speed_spearmanr(spks_binned, mean_speed_per_bin)
     correlation_distribution_shuffled = get_speed_spearmanr(
-        spks_binned_shuffled, mean_speed_per_bin
+        spks_shuffled_binned, mean_speed_per_bin
     )
     percentile_99 = np.percentile(correlation_distribution_shuffled, 99)
     percentile_1 = np.percentile(correlation_distribution_shuffled, 1)
