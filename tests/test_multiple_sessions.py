@@ -1,6 +1,6 @@
-from viral.multiple_sessions import create_metric_dict, prepare_plot_data
-from viral.models import MouseSummary, SessionSummary, TrialSummary
-import pytest
+from typing import List
+from viral.multiple_sessions import create_metric_dict
+from viral.models import TrialSummary
 from unittest.mock import Mock
 
 
