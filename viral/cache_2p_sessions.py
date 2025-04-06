@@ -148,14 +148,25 @@ def add_daq_times_to_trial(
 
 
 def extract_frozen_wheel_chunks(
-    chunk_lengths_daq: np.ndarray,
     stack_lengths_tiffs: np.ndarray,
-    behavior_clock: np.ndarray,
+    chunk_lengths_daq: np.ndarray,
+    frame_times_daq: np.ndarray,
+    behaviour_times: np.ndarray,
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """Extract start and end frame index for pre-training and post-training imaging chunks"""
+    frame_times = list()
+    start_idx = 0
+    for chunk_len in chunk_lengths_daq:
+        frame_times.append(frame_times_daq[start_idx : start_idx + chunk_len])
+        start_idx += chunk_len
     # first chunk (before behavioural chunks)
     first_chunk_len = stack_lengths_tiffs[0]
     first_chunk = (0, first_chunk_len - 1)
+
+    # last chunk (after all behavioural chunks)
+    last_chunk_len = stack_lengths_tiffs[-1]
+    prev_frames_total = sum(stack_lengths_tiffs[:-1])
+    last_chunk = (prev_frames_total - 1, prev_frames_total + last_chunk_len - 1)
 
     # We want to make sure the chunks are >= 15 mins but < 20 mins
     # 15 mins = 27,000 frames
@@ -163,23 +174,18 @@ def extract_frozen_wheel_chunks(
     assert (
         27000 <= first_chunk_len < 36000
     ), "First chunk length does not match expected length"
-    prev_frames_total = sum(chunk_lengths_daq[:-1])
-
-    last_chunk_len = chunk_lengths_daq[-1]
-    last_chunk = (prev_frames_total, prev_frames_total + last_chunk_len - 1)
 
     assert (
         27000 <= last_chunk_len < 36000
     ), "Last chunk length does not match expected length"
 
     assert not np.any(
-        behavior_clock[:first_chunk_len] > 0
+        np.isin(behaviour_times, frame_times[0])
     ), "Behavioral pulses detected in pre-training period!"
 
     assert not np.any(
-        behavior_clock[:last_chunk_len] > 0
-    ), "Behavioral pulses detected in pre-training period!"
-
+        np.isin(behaviour_times, frame_times[-1])
+    ), "Behavioral pulses detected in post-training period!"
     return first_chunk, last_chunk
 
 
@@ -232,21 +238,6 @@ def add_imaging_info_to_trials(
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
-    # TODO: If you stop the acquisition manually, then this won't work. Think about a fix.
-    if wheel_blocked:
-        frozen_wheel_chunks = extract_frozen_wheel_chunks(
-            chunk_lengths_daq=chunk_lengths_daq,
-            stack_lengths_tiffs=stack_lengths_tiffs,
-            behavior_clock=behaviour_clock,
-        )
-
-    behavioral_chunk_lens_tiffs = (
-        stack_lengths_tiffs[1:-1] if wheel_blocked else stack_lengths_tiffs
-    )
-    behaviour_chunk_lens_daq = (
-        chunk_lengths_daq[1:-1] if wheel_blocked else chunk_lengths_daq
-    )
-
     # Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
     # This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
     # from a completed grab).
@@ -255,8 +246,23 @@ def add_imaging_info_to_trials(
     # frame is relaibly correct
     # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
     assert np.all(
-        behaviour_chunk_lens_daq - behavioral_chunk_lens_tiffs == 2
+        (np.isin(chunk_lengths_daq - stack_lengths_tiffs, [0, 2]))
     ), f"Chunk lengths do not match stack lengths. Chunk lengths: {chunk_lengths_daq}. Stack lengths: {stack_lengths_tiffs}. This will occcur especially on crashed recordings, think about a fix"
+
+    if wheel_blocked:
+        frozen_wheel_chunks = extract_frozen_wheel_chunks(
+            stack_lengths_tiffs=stack_lengths_tiffs,
+            chunk_lengths_daq=chunk_lengths_daq,
+            frame_times_daq=frame_times_daq,
+            behaviour_times=behaviour_times,
+        )
+
+    behavioral_chunk_lens_tiffs = (
+        stack_lengths_tiffs[1:-1] if wheel_blocked else stack_lengths_tiffs
+    )
+    behaviour_chunk_lens_daq = (
+        chunk_lengths_daq[1:-1] if wheel_blocked else chunk_lengths_daq
+    )
 
     # Remove the final two frames from valid frames
     valid_frame_times = np.array([])
@@ -493,7 +499,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB031"]:
+    for mouse_name in ["JB032"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
@@ -502,7 +508,7 @@ def main() -> None:
                 date = row["Date"]
                 session_type = row["Type"].lower()
                 wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                if date == "2025-03-20":
+                if date == "2025-03-28":
                     if (
                         not redo
                         and (
