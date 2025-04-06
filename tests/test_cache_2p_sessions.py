@@ -44,22 +44,16 @@ def test_extract_frozen_wheel_chunks_behaviour_pulses_pre() -> None:
     chunk_lengths_daq = np.array([27000, 10000, 27000])
     frame_times_daq = np.arange(sum(chunk_lengths_daq))
     behaviour_times = np.arange(26000, 36900)
-    try:
-        result = extract_frozen_wheel_chunks(
+
+    with pytest.raises(
+        AssertionError, match="Behavioral pulses detected in pre-training period!"
+    ):
+        extract_frozen_wheel_chunks(
             stack_lengths_tiffs=stack_lengths_tiff,
             chunk_lengths_daq=chunk_lengths_daq,
             frame_times_daq=frame_times_daq,
             behaviour_times=behaviour_times,
         )
-    except AssertionError as e:
-        print(
-            f"test_extract_frozen_wheel_chunks_behaviour_pulses_pre passed. Caught expection: {e}"
-        )
-        return
-
-    raise AssertionError(
-        "test_extract_frozen_wheel_chunks_behaviour_pulses_pre failed. Expection not caught."
-    )
 
 
 # Should be the exact same logic, as the pre-training neural only chunk, but still testing
@@ -69,22 +63,15 @@ def test_extract_frozen_wheel_chunks_behaviour_pulses_post() -> None:
     chunk_lengths_daq = np.array([27000, 10000, 27000])
     frame_times_daq = np.arange(sum(chunk_lengths_daq))
     behaviour_times = np.arange(37000, 40000)
-    try:
-        result = extract_frozen_wheel_chunks(
+    with pytest.raises(
+        AssertionError, match="Behavioral pulses detected in post-training period!"
+    ):
+        extract_frozen_wheel_chunks(
             stack_lengths_tiffs=stack_lengths_tiff,
             chunk_lengths_daq=chunk_lengths_daq,
             frame_times_daq=frame_times_daq,
             behaviour_times=behaviour_times,
         )
-    except AssertionError as e:
-        print(
-            f"test_extract_frozen_wheel_chunks_behaviour_pulses_post passed. Caught expection: {e}"
-        )
-        return
-
-    raise AssertionError(
-        "test_extract_frozen_wheel_chunks_behaviour_pulses_post failed. Expection not caught."
-    )
 
 
 def test_extract_frozen_wheel_chunks_unexpected_chunk_len() -> None:
@@ -95,19 +82,12 @@ def test_extract_frozen_wheel_chunks_unexpected_chunk_len() -> None:
     frame_times_daq = np.arange(sum(chunk_lengths_daq))
     behaviour_times = np.arange(27100, 36900)
 
-    try:
-        result = extract_frozen_wheel_chunks(
+    with pytest.raises(
+        AssertionError, match="First chunk length does not match expected length"
+    ):
+        extract_frozen_wheel_chunks(
             stack_lengths_tiffs=stack_lengths_tiff,
             chunk_lengths_daq=chunk_lengths_daq,
             frame_times_daq=frame_times_daq,
             behaviour_times=behaviour_times,
         )
-    except AssertionError as e:
-        print(
-            f"test_extract_frozen_wheel_chunks_unexpected_chunk_len passed. Caught expection: {e}"
-        )
-        return
-
-    raise AssertionError(
-        "test_extract_frozen_wheel_chunks_unexpected_chunk_len failed. Expection not caught."
-    )
