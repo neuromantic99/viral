@@ -150,15 +150,18 @@ def add_daq_times_to_trial(
 def extract_frozen_wheel_chunks(
     chunk_lengths_daq: np.ndarray,
     stack_lengths_tiffs: np.ndarray,
-    expected_chunk_len: int = 27000,
+    behavior_clock: np.ndarray,
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """Extract start and end frame index for pre-training and post-training imaging chunks"""
     # first chunk (before behavioural chunks)
     first_chunk_len = stack_lengths_tiffs[0]
     first_chunk = (0, first_chunk_len - 1)
 
+    # We want to make sure the chunks are >= 15 mins but < 20 mins
+    # 15 mins = 27,000 frames
+    # 20 mins = 36,000 frames
     assert (
-        first_chunk_len == expected_chunk_len
+        27000 <= first_chunk_len < 36000
     ), "First chunk length does not match expected length"
     prev_frames_total = sum(chunk_lengths_daq[:-1])
 
@@ -166,8 +169,17 @@ def extract_frozen_wheel_chunks(
     last_chunk = (prev_frames_total, prev_frames_total + last_chunk_len - 1)
 
     assert (
-        last_chunk_len == expected_chunk_len
+        27000 <= last_chunk_len < 36000
     ), "Last chunk length does not match expected length"
+
+    assert not np.any(
+        behavior_clock[:first_chunk_len] > 0
+    ), "Behavioral pulses detected in pre-training period!"
+
+    assert not np.any(
+        behavior_clock[:last_chunk_len] > 0
+    ), "Behavioral pulses detected in pre-training period!"
+
     return first_chunk, last_chunk
 
 
@@ -223,7 +235,9 @@ def add_imaging_info_to_trials(
     # TODO: If you stop the acquisition manually, then this won't work. Think about a fix.
     if wheel_blocked:
         frozen_wheel_chunks = extract_frozen_wheel_chunks(
-            chunk_lengths_daq=chunk_lengths_daq, stack_lengths_tiffs=stack_lengths_tiffs
+            chunk_lengths_daq=chunk_lengths_daq,
+            stack_lengths_tiffs=stack_lengths_tiffs,
+            behavior_clock=behaviour_clock,
         )
 
     behavioral_chunk_lens_tiffs = (
