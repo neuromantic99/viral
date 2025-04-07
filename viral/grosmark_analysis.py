@@ -16,7 +16,7 @@ sys.path.append(str(HERE.parent.parent))
 from viral.constants import HERE
 from viral.imaging_utils import (
     get_ITI_matrix,
-    get_dff,
+    load_imaging_data,
     trial_is_imaged,
     activity_trial_position,
     get_resting_chunks,
@@ -68,8 +68,6 @@ def grosmark_place_field(
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
     n_shuffles = 2000
-
-    # spks = shuffle_rows(spks)
 
     all_trials = np.array(
         [
@@ -230,7 +228,7 @@ def offline_correlations(
     peak_position_cm: np.ndarray,
     rewarded: bool | None,
 ) -> None:
-    """Correlated offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
+    """Correlates offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
     that can be found in the commit history (e.g. d2e7852f54282a52722767e52cca1ab71e56851b) if you need them
 
     From Grosmark:
@@ -291,6 +289,14 @@ def get_offline_correlation_matrix(
 def correlations_vs_peak_distance(
     corrs: np.ndarray, peak_position_cm: np.ndarray, plot: bool = False
 ) -> None:
+    """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
+    distance between their place field peaks.
+
+    Args:
+    corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
+    peak_position_cm: the position of the peak firing rate of each neuron in cm
+    """
+
     n_cells = corrs.shape[0]
     peak_distances = []
     cell_corrs = []
@@ -321,8 +327,8 @@ def correlations_vs_peak_distance(
         r, p = pearsonr(x, y)
 
         plt.xlabel("Distance between peaks")
-        plt.ylabel("Pearson correlation")
-        plt.title(f"Pearson corrleation r = {r:.2f}, p = {p:.2f}")
+        plt.ylabel("Average pearson correlation")
+        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
 
         plt.show()
 
@@ -507,7 +513,7 @@ if __name__ == "__main__":
         f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
     )
 
-    dff, spks, denoised = get_dff(mouse, date)
+    dff, spks, denoised = load_imaging_data(mouse, date)
 
     print("Got dff")
 

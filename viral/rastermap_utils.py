@@ -9,7 +9,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.imaging_utils import get_ITI_start_frame, get_dff, trial_is_imaged
+from viral.imaging_utils import get_ITI_start_frame, load_imaging_data, trial_is_imaged
 from viral.utils import (
     TrialInfo,
     degrees_to_cm,
@@ -32,7 +32,7 @@ def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def get_dff_pos(
     session: Cached2pSession, s2p_path: Path
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    dff = get_dff(mouse=session.mouse_name, date=session.date)
+    dff = load_imaging_data(mouse=session.mouse_name, date=session.date)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])

@@ -7,7 +7,6 @@ from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
 import pandas as pd
-from scipy.stats import zscore
 
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import SpeedPosition, TrialInfo
@@ -325,9 +324,6 @@ def get_setup(mouse_name: str) -> str:
         "JB022",
         "JB023",
         "JB026",
-        "JB031",
-        "JB032",
-        "JB033",
         "JB027",
         "JB030",
         "JB031",

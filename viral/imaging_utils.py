@@ -25,7 +25,9 @@ def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
     return f_raw - f_neu * 0.7
 
 
-def get_dff(mouse: str, date: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_imaging_data(
+    mouse: str, date: str
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
@@ -175,6 +177,7 @@ def get_resting_chunks(
 
         lick_frames = []
 
+        # TODO: This will error if the trial ends during a lick event
         for onset, offset in zip(
             [
                 event.closest_frame
