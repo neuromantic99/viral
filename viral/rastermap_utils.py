@@ -11,11 +11,10 @@ sys.path.append(str(HERE.parent.parent))
 
 from viral.imaging_utils import get_ITI_start_frame, load_imaging_data, trial_is_imaged
 from viral.utils import (
-    TrialInfo,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
 )
-from viral.models import Cached2pSession, ImagedTrialInfo
+from viral.models import Cached2pSession, TrialInfo, ImagedTrialInfo
 from viral.constants import TIFF_UMBRELLA
 
 
@@ -378,7 +377,7 @@ def process_trials_data(
         valid_trial_start = valid_trial_frames[0]
         if not licks:
             licks = np.array([])
-        if not rewards:
+        if not np.any(rewards):
             rewards = np.array([])
         imaged_trials_infos.append(
             ImagedTrialInfo(
@@ -572,6 +571,16 @@ def process_session(
     ), "Number of corridor widths and aligned_trial_frames do not match"
 
     assert positions.shape[0] == speed.shape[0] == neural_data.shape[1]
+    # Checking that neither positions nor speed have values that exceed the trial boundaries
+    assert np.min(positions[:, 0]) == aligned_trial_frames[0, 0]
+    assert np.max(positions[:, 0]) == aligned_trial_frames[-1, 1]
+    assert np.min(speed[:, 0]) == aligned_trial_frames[0, 0]
+    assert np.max(speed[:, 0]) == aligned_trial_frames[-1, 1]
+    valid_frames = set()
+    for start, end, _ in aligned_trial_frames:
+        valid_frames.update(np.arange(start, end + 1))
+    assert np.all(np.isin(positions[:, 0], list(valid_frames)))
+    assert np.all(np.isin(speed[:, 0], list(valid_frames)))
 
     if ITI_split:
         valid_frame_mask = filter_out_ITI(ITI_starts_ends, positions)

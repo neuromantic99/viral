@@ -143,22 +143,24 @@ def grosmark_place_field(
         ]
     )
 
-    pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
+    initial_pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
 
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
+    spks = spks[initial_pcs, :]
+    smoothed_matrix = smoothed_matrix[initial_pcs, :]
 
-    print(f"percent place cells before extra check {np.sum(pcs) / n_cells_total}")
+    print(
+        f"percent place cells before extra check {np.sum(initial_pcs) / n_cells_total}"
+    )
 
-    pcs = filter_additional_check(
-        all_trials=all_trials[:, pcs, :],
-        place_threshold=place_threshold[pcs, :],
+    final_pcs = filter_additional_check(
+        all_trials=all_trials[:, initial_pcs, :],
+        place_threshold=place_threshold[initial_pcs, :],
         smoothed_matrix=smoothed_matrix,
     )
 
     # Don't love this double indexing
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
+    spks = spks[final_pcs, :]
+    smoothed_matrix = smoothed_matrix[final_pcs, :]
 
     plot_place_cells(
         smoothed_matrix=smoothed_matrix,
@@ -167,7 +169,7 @@ def grosmark_place_field(
         config=config,
     )
 
-    print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
+    print(f"percent place cells after extra check {np.sum(final_pcs) / n_cells_total}")
 
     print(
         f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
@@ -188,6 +190,11 @@ def grosmark_place_field(
     )
 
     plt.show()
+
+    # TODO: probably move this to another function
+    place_cell_mask = np.zeros(n_cells_total, dtype=bool)
+    place_cell_mask[initial_pcs] = final_pcs
+    return place_cell_mask
 
 
 def plot_speed(
