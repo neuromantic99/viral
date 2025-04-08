@@ -20,7 +20,94 @@ from viral.rastermap_utils import (
     filter_out_ITI,
 )
 from viral.utils import get_wheel_circumference_from_rig, remove_diagonal
-from viral.grosmark_analysis import binarise_spikes, grosmark_place_field
+from viral.imaging_utils import activity_trial_position, trial_is_imaged, get_reactivation
+from viral.grosmark_analysis import (
+    binarise_spikes,
+    grosmark_place_field,
+    has_five_consecutive_trues,
+    filter_additional_check,
+)
+
+
+def get_place_cell_mask(
+    session: Cached2pSession,
+    spks: np.ndarray,
+    rewarded: bool | None,
+    config: GrosmarkConfig,
+) -> np.ndarray:
+    """Returns a boolean mask of place cells among all cells in spks.
+    Compare to grosmark_place_field."""
+
+    n_cells_total = spks.shape[0]
+    sigma_cm = 7.5
+    sigma_bins = sigma_cm / config.bin_size
+    n_shuffles = 2000
+
+    all_trials = np.array(
+        [
+            activity_trial_position(
+                trial=trial,
+                flu=spks,
+                wheel_circumference=get_wheel_circumference_from_rig("2P"),
+                bin_size=config.bin_size,
+                start=config.start,
+                max_position=config.end,
+                verbose=False,
+                do_shuffle=False,
+                smoothing_sigma=sigma_bins,
+            )
+            for trial in session.trials
+            if trial_is_imaged(trial)
+            and (rewarded is None or trial.texture_rewarded == rewarded)
+        ]
+    )
+
+    smoothed_matrix = np.mean(all_trials, axis=0)
+
+    shuffled_matrices = np.array(
+        [
+            np.mean(
+                np.array(
+                    [
+                        activity_trial_position(
+                            trial=trial,
+                            flu=spks,
+                            wheel_circumference=get_wheel_circumference_from_rig("2P"),
+                            bin_size=config.bin_size,
+                            start=config.start,
+                            max_position=config.end,
+                            verbose=False,
+                            do_shuffle=True,
+                            smoothing_sigma=sigma_bins,
+                        )
+                        for trial in session.trials
+                        if trial_is_imaged(trial)
+                        and (rewarded is None or trial.texture_rewarded == rewarded)
+                    ]
+                ),
+                axis=0,
+            )
+            for _ in range(n_shuffles)
+        ]
+    )
+
+    # Threshold (99th percentile of shuffled matrices)
+    place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
+
+    # filter firing above threshold in at least 5 consecutive bins
+    initial_pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
+
+    # apply lap-based filter
+    final_pcs = filter_additional_check(
+        all_trials=all_trials[:, initial_pcs, :],
+        place_threshold=place_threshold[initial_pcs, :],
+        smoothed_matrix=smoothed_matrix[initial_pcs, :],
+    )
+
+    # final mask in original cell template
+    place_cell_mask = np.zeros(n_cells_total, dtype=bool)
+    place_cell_mask[np.flatnonzero(initial_pcs)] = final_pcs
+    return place_cell_mask
 
 
 def process_behaviour(
@@ -103,7 +190,6 @@ def get_ssp_vectors(
 
 
 def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
-    # TODO: add args and return
     """
     Use Marcenko-Pastur distribution to detect significant compontents.
 
@@ -152,6 +238,56 @@ def square_projection_matrix(arr: np.ndarray) -> np.ndarray:
     return remove_diagonal(square_projection)
 
 
+def offline_reactivation(
+    reactivation: np.ndarray, ensemble_matrix: np.ndarray
+) -> np.ndarray:
+    """Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z.
+    For the ith time point (frame) in Z, the reactivation strength Rb,i
+    of the bth ICA component was calculated as the square of the projection length of Zi on Pb as follows:
+    Rbi = ZiT * Pb * Zb
+    """
+    sigma = 150 / 1000 * 30  # 150 ms kernel
+    offline_activity_matrix = np.apply_along_axis(
+        gaussian_filter1d, axis=1, arr=reactivation, sigma=sigma
+    )
+    # TODO: is this correctly getting the number of components (columns)??
+    n_components = ensemble_matrix.shape[1]
+    n_timepoints = reactivation.shape[1]
+    reactivation_strength = np.zeros((n_components, n_timepoints))
+    for t in range(n_timepoints):
+        offline_activity_matrix_t = offline_activity_matrix[:, t]
+        for c in range(n_components):
+            projection_length = np.outer(ensemble_matrix[:, c], ensemble_matrix[:, c])
+            reactivation_strength[c, t] = np.matmul(
+                np.matmul(offline_activity_matrix_t.T, projection_length),
+                offline_activity_matrix_t,
+            )
+    return reactivation_strength
+
+def pcc_scores(reactivation: np.ndarray, ensemble_matrix: np.ndarray) -> np.ndarray:
+    # TODO: add args and return
+    """
+    To assess the xth cell’s contribution to ICA reactivation, a PCC score was defined as the mean across all components b and
+    timepoints i of the reactivation score R computed from all PCs c minus the reactivation score Rc\x computed after
+    the exclusion xth cell from the activity and template matrices.
+    """
+    n_cells = reactivation.shape[0]
+
+    pcc_scores = list()
+    for cell_idx in range(n_cells):
+        # reactivation score R computer from all PCs
+        R_full = offline_reactivation(reactivation=reactivation, ensemble_matrix=ensemble_matrix)
+
+        # reactivation score Rc\x after excluding xth cell
+        reactivation_excluded = np.delete(reactivation, cell_idx, axis=0)
+        ensemble_matrix_excluded = np.delete(ensemble_matrix, cell_idx, axis=0)
+        R_excluded = offline_reactivation(reactivation=reactivation_excluded, ensemble_matrix=ensemble_matrix_excluded)
+
+        delta_R = R_full - R_excluded
+        # mean across all components and timepoints
+        pcc_scores.append(np.mean(delta_R))
+    return np.array([pcc_scores])
+
 def main():
     # Load stuff from rastermap utils
     # get place cells
@@ -177,10 +313,14 @@ def main():
         TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
         "spks",
     )
-    pcs_mask = grosmark_place_field(
+    spks = binarise_spikes(spks)
+    print("Getting place cells")
+    pcs_mask = get_place_cell_mask(
         session=session, spks=spks, rewarded=None, config=config
     )
     place_cells = spks[pcs_mask, :]
+    reactivation = get_reactivation(flu=spks, wheel_freeze=session.wheel_freeze)[pcs_mask]
+    print("Got place cells")
     running_bouts = get_running_bouts(
         place_cells=place_cells,
         speed=speed,
@@ -188,9 +328,16 @@ def main():
         ITI_starts_ends=ITI_starts_ends,
         aligned_trial_frames=aligned_trial_frames,
     )
+    print("Got runninbg bouts")
     ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
+    print("Got ssp vectors")
     ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+    print("Got ensemble matrix")
     square_projection_matrix = square_projection_matrix(arr=ensemble_matrix)
+    print("Got square projection matrix")
+    1 / 0
+    reactivation_strength = offline_reactivation(reactivation=reactivation, ensemble_matrix=ensemble_matrix)
+    pcc_scores = pcc_scores(reactivation=reactivation, ensemble_matrix=ensemble_matrix)
 
 
 if __name__ == "__main__":
