@@ -158,6 +158,7 @@ def extract_frozen_wheel_chunks(
         stack_lengths_tiffs (np.ndarray):           A NumPy array of length tiffs, with the number of frames in each tiff.
         valid_frame_times (np.ndarray):             A NumPy array with times for valid frames.
         behaviour_times (np.ndarray):               A NumPy array with all times when a Bpod spacer signal occured.
+        sampling_rate (int):                        The sampling rate of the DAQ system in Hz.
 
     Returns:
         tuple[tuple[int, int], tuple[int, int]]:    First chunk and last chunk, with their respective start and end frame.
@@ -483,7 +484,8 @@ def process_session(
     )
 
     if wheel_blocked:
-        print("Wheel blocked")
+        print("Wheel blocked detected")
+        logger.info(f"Wheel blocked detected for {mouse_name} {date}")
 
     with open(
         HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"
