@@ -64,18 +64,6 @@ def calculate_correlation(
     )
 
 
-def get_speed_pearsonr(
-    activity_speed: np.ndarray, mean_speed_per_bin: np.ndarray
-) -> np.ndarray:
-    return calculate_correlation(activity_speed, mean_speed_per_bin, pearsonr)
-
-
-def get_speed_spearmanr(
-    activity_speed: np.ndarray, mean_speed_per_bin: np.ndarray
-) -> np.ndarray:
-    return calculate_correlation(activity_speed, mean_speed_per_bin, spearmanr)
-
-
 def speed_related_cells(spks: np.ndarray, speed: np.ndarray, bin_size: int = 2) -> None:
     """Plot speed related cells (correlation histograms)"""
     spks_shuffled = shuffle_neuron_spikes(spks)
@@ -85,9 +73,11 @@ def speed_related_cells(spks: np.ndarray, speed: np.ndarray, bin_size: int = 2) 
     mean_speed_per_bin = get_mean_value_per_bin(start, end, bin_size)
     spks_binned = bin_activity(spks, speed, start, end, bin_size)
     spks_shuffled_binned = bin_activity(spks_shuffled, speed, start, end, bin_size)
-    correlation_distribution = get_speed_spearmanr(spks_binned, mean_speed_per_bin)
-    correlation_distribution_shuffled = get_speed_spearmanr(
-        spks_shuffled_binned, mean_speed_per_bin
+    correlation_distribution = calculate_correlation(
+        spks_binned, mean_speed_per_bin, spearmanr
+    )
+    correlation_distribution_shuffled = calculate_correlation(
+        spks_shuffled_binned, mean_speed_per_bin, spearmanr
     )
     percentile_99 = np.percentile(correlation_distribution_shuffled, 99)
     percentile_1 = np.percentile(correlation_distribution_shuffled, 1)

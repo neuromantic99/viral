@@ -18,9 +18,9 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
     """
-    if 30 < len(frame_clock) / 1000 / 60 < 100:
+    if 30 < len(frame_clock) / 1000 / 60 < 120:
         return 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+    elif 30 < len(frame_clock) / 10000 / 60 < 120:
         return 10000
     raise ValueError("Could not determine sampling rate")
 

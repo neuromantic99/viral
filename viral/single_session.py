@@ -365,9 +365,8 @@ def plot_speed_reward_unrewarded(
     prev_unrewarded = []
 
     first_position = 0
-    # TODO: change back!
-    # last_position = 200
-    last_position = 180
+    last_position = 200
+    # last_position = 180
     step_size = 5
     for idx, trial in enumerate(trials):
         position = degrees_to_cm(
@@ -395,10 +394,9 @@ def plot_speed_reward_unrewarded(
 
     # Should be the same for all trials
     # Use the bin_stop so there is no forward look ahead
-    # TODO: change back!
-    # plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=-1)
-    # plt.xlim(0, 200)
-    plt.xlim(0, 180)
+    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=-1)
+    plt.xlim(0, 200)
+    # plt.xlim(0, 180)
     x_axis = [bin.position_stop for bin in rewarded[0]]
     shaded_line_plot(
         np.array([[bin.speed for bin in trial] for trial in rewarded]),
