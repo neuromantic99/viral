@@ -151,18 +151,31 @@ def extract_frozen_wheel_chunks(
     stack_lengths_tiffs: np.ndarray,
     valid_frame_times: np.ndarray,
     behaviour_times: np.ndarray,
+    sampling_rate: int,
 ) -> tuple[tuple[int, int], tuple[int, int]]:
-    """Extract start and end frame index for pre-training and post-training imaging chunks"""
-    # TODO: where is valid_frame_times coming into play?
+    """Extract start and end frame index for pre-training and post-training imaging chunks.
+    Args:
+        stack_lengths_tiffs (np.ndarray):           A NumPy array of length tiffs, with the number of frames in each tiff.
+        valid_frame_times (np.ndarray):             A NumPy array with times for valid frames.
+        behaviour_times (np.ndarray):               A NumPy array with all times when a Bpod spacer signal occured.
+
+    Returns:
+        tuple[tuple[int, int], tuple[int, int]]:    First chunk and last chunk, with their respective start and end frame.
+    """
 
     # first chunk (before behavioural chunks)
     first_chunk_len = stack_lengths_tiffs[0]
-    first_chunk = (0, first_chunk_len - 1)
+    first_chunk = (0, first_chunk_len - 1)  # start and end frame
+    first_chunk_times = valid_frame_times[first_chunk[0] : first_chunk[1] + 1]
 
     # last chunk (after all behavioural chunks)
     last_chunk_len = stack_lengths_tiffs[-1]
     prev_frames_total = sum(stack_lengths_tiffs[:-1])
-    last_chunk = (prev_frames_total - 1, prev_frames_total + last_chunk_len - 1)
+    last_chunk = (
+        prev_frames_total - 1,
+        prev_frames_total + last_chunk_len - 1,
+    )  # start and end frame
+    last_chunk_times = valid_frame_times[last_chunk[0] : last_chunk[1] + 1]
 
     # We want to make sure the chunks are >= 15 mins but < 20 mins
     # 15 mins = 27,000 frames
@@ -170,17 +183,29 @@ def extract_frozen_wheel_chunks(
     assert (
         27000 <= first_chunk_len < 36000
     ), "First chunk length does not match expected length"
+    assert (
+        15 * 60 * sampling_rate
+        <= (last_chunk_times[-1] - last_chunk_times[0])
+        <= 20 * 60 * sampling_rate
+    ), "First chunk length does not match expected length"
 
     assert (
         27000 <= last_chunk_len < 36000
     ), "Last chunk length does not match expected length"
+    assert (
+        15 * 60 * sampling_rate
+        <= (last_chunk_times[-1] - last_chunk_times[0])
+        <= 20 * 60 * sampling_rate
+    ), "Last chunk length does not match expected length"
 
     assert not np.any(
-        (behaviour_times >= first_chunk[0]) & (behaviour_times <= first_chunk[1])
+        (behaviour_times >= first_chunk_times[0])
+        & (behaviour_times <= first_chunk_times[-1])
     ), "Behavioral pulses detected in pre-training period!"
 
     assert not np.any(
-        (behaviour_times >= last_chunk[0]) & (behaviour_times <= last_chunk[1])
+        (behaviour_times >= last_chunk_times[0])
+        & (behaviour_times <= last_chunk_times[-1])
     ), "Behavioral pulses detected in post-training period!"
     return first_chunk, last_chunk
 
@@ -245,6 +270,7 @@ def add_imaging_info_to_trials(
             stack_lengths_tiffs=stack_lengths_tiffs,
             valid_frame_times=valid_frame_times,
             behaviour_times=behaviour_times,
+            sampling_rate=sampling_rate,
         )
 
     for idx, trial in enumerate(trials):
@@ -432,18 +458,13 @@ def check_timestamps(
         offset = (frame_datetime - frame_daq_time).total_seconds()
 
         # Allow for some drift up to 15ms
-        increase_offset_allowance_time = 30 if not wheel_blocked else 50
         # Take into account that the recording in wheel block is 1.5x longer,
         # i.e. one minute into the behaviour is at least 15 mins into the entire session
-        # TODO: for JB031 2025-03-28 learning day 14 wheel blocked, the offset was still 0.013 or so
+        increase_offset_allowance_time = 30 if not wheel_blocked else 50
         if trial.trial_start_time / 60 < increase_offset_allowance_time:
-            # TODO: change back!
-            # assert abs(offset) <= 0.01,
-            assert abs(offset) <= 0.02, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
         else:
-            # TODO: change back!
-            # assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
-            assert abs(offset) <= 0.025, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -485,7 +506,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB031"]:
+    for mouse_name in ["JB032"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
@@ -493,61 +514,52 @@ def main() -> None:
 
                 date = row["Date"]
                 session_type = row["Type"].lower()
-                # TODO: remove before commit
-                if date == "2025-03-28":
-                    try:
-                        wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                    except KeyError as e:
-                        print(f"No column 'Wheel blocked?' found: {e}")
-                        print("Wheel blocked set to None")
-                        wheel_blocked = None
-                    if (
-                        not redo
-                        and (
-                            HERE.parent
-                            / "data"
-                            / "cached_2p"
-                            / f"{mouse_name}_{date}.json"
-                        ).exists()
-                    ):
-                        print(f"Skipping {mouse_name} {date} as already exists")
-                        continue
-                    if (
-                        "learning day" not in session_type
-                        and "reversal learning" not in session_type
-                    ):
-                        print(f"Skipping {mouse_name} {date} {session_type}")
-                        continue
-                    if not row["Sync file"]:
-                        print(
-                            f"Skipping {mouse_name} {date} {session_type} as no sync file"
-                        )
-                        continue
-                    session_numbers = parse_session_number(row["Session Number"])
-                    trials = []
-                    for session_number in session_numbers:
-                        session_path = (
-                            BEHAVIOUR_DATA_PATH
-                            / mouse_name
-                            / row["Date"]
-                            / session_number
-                        )
-                        trials.extend(load_data(session_path))
-                    logger.info("\n")
-                    logger.info(f"Processing {mouse_name} {date} {session_type}")
-                    process_session(
-                        trials=trials,
-                        tiff_directory=TIFF_UMBRELLA / date / mouse_name,
-                        tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
-                        mouse_name=mouse_name,
-                        session_type=session_type,
-                        date=date,
-                        wheel_blocked=wheel_blocked,
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
+                if (
+                    not redo
+                    and (
+                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
+                    ).exists()
+                ):
+                    print(f"Skipping {mouse_name} {date} as already exists")
+                    continue
+                if (
+                    "learning day" not in session_type
+                    and "reversal learning" not in session_type
+                ):
+                    print(f"Skipping {mouse_name} {date} {session_type}")
+                    continue
+                if not row["Sync file"]:
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} as no sync file"
                     )
-                    logger.info(
-                        f"Completed processing for {mouse_name} {date} {session_type}"
+                    continue
+                session_numbers = parse_session_number(row["Session Number"])
+                trials = []
+                for session_number in session_numbers:
+                    session_path = (
+                        BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
                     )
-
+                    trials.extend(load_data(session_path))
+                logger.info("\n")
+                logger.info(f"Processing {mouse_name} {date} {session_type}")
+                process_session(
+                    trials=trials,
+                    tiff_directory=TIFF_UMBRELLA / date / mouse_name,
+                    tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                    mouse_name=mouse_name,
+                    session_type=session_type,
+                    date=date,
+                    wheel_blocked=wheel_blocked,
+                )
+                logger.info(
+                    f"Completed processing for {mouse_name} {date} {session_type}"
+                )
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
                 line_number = tb[-1].lineno  # Get the line number of the exception
