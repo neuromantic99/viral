@@ -299,4 +299,4 @@ def get_reactivation(flu: np.ndarray, wheel_freeze: WheelFreeze) -> np.ndarray:
         wheel_freeze.post_training_start_frame,
         wheel_freeze.post_training_end_frame,
     )
-    return flu[:, start : end + 1]
+    return flu[:, start:end]

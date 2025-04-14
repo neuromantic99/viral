@@ -28,7 +28,6 @@ from viral.imaging_utils import (
 )
 from viral.grosmark_analysis import (
     binarise_spikes,
-    grosmark_place_field,
     has_five_consecutive_trues,
     filter_additional_check,
 )
@@ -205,16 +204,15 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
 
     Used description in '2.2. Determination of the number of cell assemblies', Lopes-dos-Santos, Ribeiro and Tort, 2013.
     """
-    # TODO: check that all of these operations are correct
     n_components, n_timepoints = ica_comp.shape
 
     ica_comp_z = zscore(ica_comp, axis=1, ddof=1)
-    # TODO: sigma2 = 1!!!
+    # TODO: check that sigma2 = 1!!!
     corr_matrix = np.corrcoef(ica_comp_z)
     eigenvalues = eigvalsh(corr_matrix)
 
     # compute threshold using Marcenko-Pastur distribution (lambda max)
-    q = n_components / n_timepoints
+    q = n_timepoints / n_components  # n_cols / n_rows
     lambda_max = (1 + 1 / np.sqrt(q)) ** 2
     return np.where(eigenvalues > lambda_max)[0]
 
@@ -227,10 +225,13 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     matrix¸ w, with rows corresponding to PCs and columns corresponding to
     significant ICA components."""
     ica_transfomer = FastICA()
-    ica_transfomer.fit_transform(ssp_vectors)
-    significant_components = detect_significant_components(ica_transfomer.components_.T)
-    component_matrix = ica_transfomer.components_.T
-    return component_matrix[:, significant_components]
+    # expected input: (n_samples, n_features)
+    # independent components (frames, components)
+    independent_components = ica_transfomer.fit_transform(ssp_vectors.T)
+    # mixing matrix (n_features, n_components)
+    mixing_matrix = ica_transfomer.mixing_
+    significant_components = detect_significant_components(ica_transfomer.components_)
+    return mixing_matrix[:, significant_components]
 
 
 def square_projection_matrix(arr: np.ndarray) -> np.ndarray:
@@ -259,25 +260,25 @@ def offline_reactivation(
     Rbi = ZiT * Pb * Zb
     """
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
-    # TODO: is this correctly getting the number of components (columns)??
     n_components = ensemble_matrix.shape[1]
     n_timepoints = reactivation.shape[1]
     reactivation_strength = np.zeros((n_components, n_timepoints))
-    for t in range(n_timepoints):
-        offline_activity_matrix_t = offline_activity_matrix[:, t]
-        for c in range(n_components):
-            projection_length = np.outer(ensemble_matrix[:, c], ensemble_matrix[:, c])
-            reactivation_strength[c, t] = np.matmul(
-                np.matmul(offline_activity_matrix_t.T, projection_length),
-                offline_activity_matrix_t,
-            )
+    for b in range(n_components):
+        pb = ensemble_matrix[:, b]  # shape: (place cells,)
+        for i in range(n_timepoints):
+            zi = offline_activity_matrix[:, i]  # shape: (place cells,)
+            # R_bi = (zi.T @ pb)**2
+            projection = np.dot(zi, pb)
+            reactivation_strength[b, i] = projection**2
     return reactivation_strength
 
 
-def pcc_scores(reactivation: np.ndarray, ensemble_matrix: np.ndarray) -> np.ndarray:
+def compute_pcc_scores(
+    reactivation: np.ndarray, ensemble_matrix: np.ndarray
+) -> np.ndarray:
     # TODO: add args and return
     """
-    To assess the xth cell’s contribution to ICA reactivation, a PCC score was defined as the mean across all components b and
+    To assess the xth cell's contribution to ICA reactivation, a PCC score was defined as the mean across all components b and
     timepoints i of the reactivation score R computed from all PCs c minus the reactivation score Rcx computed after
     the exclusion xth cell from the activity and template matrices.
     """
@@ -300,7 +301,7 @@ def pcc_scores(reactivation: np.ndarray, ensemble_matrix: np.ndarray) -> np.ndar
         delta_R = R_full - R_excluded
         # mean across all components and timepoints
         pcc_scores.append(np.mean(delta_R))
-    return np.array([pcc_scores])
+    return np.array(pcc_scores)
 
 
 def sort_ensembles_by_reactivation_strength(
@@ -323,27 +324,40 @@ def plot_ensemble_reactivation(
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
     """
     colours = ["r", "b"]
-    # TODO: is reactivation strength already z-scored?
-    # TODO: do we need to specify colours?
+    reactivation_strength_z_scored = zscore(reactivation_strength, axis=1)
     plt.figure()
     for i, idx in enumerate(top_ensembles):
-        plt.plot(reactivation_strength[idx, :], color=colours[i], label=f"ensemble {i}")
+        plt.plot(
+            reactivation_strength_z_scored[idx, :],
+            color=colours[i],
+            label=f"ensemble {i}",
+        )
     plt.xlabel("Time (frames)")
-    plt.ylabel("Reactivation strength")
+    plt.ylabel("Reactivation strength (zscored)")
     plt.tight_layout()
+    # TODO: Change back
+    plt.savefig("plots/ensemble_reactivation_shuffled.svg", dpi=300)
 
 
 def plot_cell_weights(ensemble_matrix: np.ndarray, top_ensembles: np.ndarray) -> None:
     """
     Producing Fig. 4j, panel III. Plotting each cell's weight in the top ICA components/ensembles.
     """
+    colours = ["r", "b"]
     # TODO: classify as having a preference
     plt.figure()
     for i, idx in enumerate(top_ensembles):
-        plt.plot(ensemble_matrix[:, idx], marker="o", label=f"ensemble {i}")
+        plt.plot(
+            ensemble_matrix[:, idx],
+            marker="o",
+            linestyle="",
+            color=colours[i],
+            label=f"ensemble {i}",
+        )
     plt.xlabel("Place cell no.")
     plt.ylabel("Cell weight in template")
     plt.tight_layout()
+    plt.savefig("plots/cell_weights.svg", dpi=300)
 
 
 def plot_smoothed_offline_firing_rate_raster(reactivation: np.ndarray) -> None:
@@ -353,19 +367,23 @@ def plot_smoothed_offline_firing_rate_raster(reactivation: np.ndarray) -> None:
     """
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
     plt.figure()
-    plt.plot(offline_activity_matrix)
+    plt.imshow(offline_activity_matrix, cmap="gray")
     plt.tight_layout()
+    plt.savefig("plots/smoothed_offline_firing_rate_raster.svg", dpi=300)
 
 
-def main():
+# def main():
+if __name__ == "__main__":
     # Load stuff from rastermap utils
     # get place cells
     # do rest
     mouse = "JB031"
-    date = "2025-03-07"
+    date = "2025-03-28"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
+    if not session.wheel_freeze:
+        print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
     positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
         session,
         wheel_circumference=get_wheel_circumference_from_rig(
@@ -399,31 +417,36 @@ def main():
         ITI_starts_ends=ITI_starts_ends,
         aligned_trial_frames=aligned_trial_frames,
     )
-    print("Got runninbg bouts")
+    print("Got running bouts")
     ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
     print("Got ssp vectors")
     ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
     print("Got ensemble matrix")
-    square_projection_matrix = square_projection_matrix(arr=ensemble_matrix)
+    square_projection = square_projection_matrix(arr=ensemble_matrix)
     print("Got square projection matrix")
     reactivation_strength = offline_reactivation(
         reactivation=reactivation, ensemble_matrix=ensemble_matrix
     )
-    pcc_scores = pcc_scores(reactivation=reactivation, ensemble_matrix=ensemble_matrix)
+    pcc_scores = compute_pcc_scores(
+        reactivation=reactivation, ensemble_matrix=ensemble_matrix
+    )
     # """ICA components were shuffled by randomly permuting the weight matrix w across
     # PCs and recalculating the reactivation strength."""
     ensemble_matrix_shuffled = np.copy(ensemble_matrix)
-    ensemble_matrix_shuffled = np.random.shuffle(ensemble_matrix_shuffled)
+    np.random.shuffle(ensemble_matrix_shuffled)
     reactivation_strength_shuffled = offline_reactivation(
         reactivation=reactivation, ensemble_matrix=ensemble_matrix_shuffled
     )
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength
     )
-    plot_ensemble_reactivation(top_ensembles=top_ensembles)
-    plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
-    plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
+    plot_ensemble_reactivation(
+        reactivation_strength=reactivation_strength_shuffled,
+        top_ensembles=top_ensembles,
+    )
+    # plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
+    # plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
