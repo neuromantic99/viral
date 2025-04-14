@@ -18,7 +18,7 @@ def test_extract_frozen_wheel_chunks_standard_case() -> None:
         behaviour_times=behaviour_times,
         sampling_rate=sampling_rate,
     )
-    assert expected == tuple(tuple(int(x) for x in t) for t in result)
+    assert expected == result
 
 
 def test_extract_frozen_wheel_chunks_manual_stop() -> None:

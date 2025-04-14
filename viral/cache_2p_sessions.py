@@ -167,7 +167,7 @@ def extract_frozen_wheel_chunks(
     # first chunk (before behavioural chunks)
     first_chunk_len = stack_lengths_tiffs[0]
     first_chunk = (0, first_chunk_len - 1)  # start and end frame
-    first_chunk_times = valid_frame_times[first_chunk[0] : first_chunk[1] + 1]
+    first_chunk_times = valid_frame_times[first_chunk[0] : first_chunk[1]]
 
     # last chunk (after all behavioural chunks)
     last_chunk_len = stack_lengths_tiffs[-1]
@@ -314,13 +314,18 @@ def get_valid_frame_times(
     frame_times_daq: np.ndarray,
     chunk_lengths_daq: np.ndarray,
 ) -> np.ndarray:
-    # Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
-    # This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
-    # from a completed grab).
-    # The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
-    # The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
-    # frame is relaibly correct
-    # Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
+    """
+    Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
+    This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
+    from a completed grab).
+    The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
+    The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
+    frame is relaibly correct
+    Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this
+
+    We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
+    """
+
     valid_frame_times = np.array([])
     offset = 0
     for stack_len_tiff, chunk_len_daq in zip(
