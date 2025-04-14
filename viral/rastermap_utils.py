@@ -8,6 +8,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+from viral.imaging_utils import get_ITI_start_frame, load_imaging_data, trial_is_imaged
 from viral.utils import (
     TrialInfo,
     trial_is_imaged,
@@ -16,7 +17,6 @@ from viral.utils import (
 )
 from viral.models import Cached2pSession, ImagedTrialInfo
 from viral.constants import TIFF_UMBRELLA
-from viral.two_photon import get_dff
 
 
 def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -29,8 +29,10 @@ def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return spks, xpos, ypos
 
 
-def get_dff_pos(session: Cached2pSession, s2p_path: Path) -> tuple[np.ndarray]:
-    dff = get_dff(mouse=session.mouse_name, date=session.date)
+def get_dff_pos(
+    session: Cached2pSession, s2p_path: Path
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    dff = load_imaging_data(mouse=session.mouse_name, date=session.date)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])
@@ -71,15 +73,6 @@ def align_trial_frames(trials: List[TrialInfo], include_ITI: bool = True) -> np.
         ), "Overlapping frames for trials"
     rewarded = np.array([trial.texture_rewarded for trial in trials])
     return np.column_stack((trial_frames, rewarded)).astype(int)
-
-
-def get_ITI_start_frame(trial: TrialInfo) -> int:
-    for state in trial.states_info:
-        if state.name == "ITI":
-            return state.closest_frame_start
-        elif state.name == "trigger_ITI":
-            return state.closest_frame_start
-    raise ValueError("ITI state not found")
 
 
 def get_signal_for_trials(

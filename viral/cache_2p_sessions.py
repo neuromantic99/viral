@@ -445,6 +445,8 @@ def check_timestamps(
 
     first_frame_trial = trial.trial_start_closest_frame
     last_frame_trial = trial.trial_end_closest_frame
+    assert first_frame_trial is not None
+    assert last_frame_trial is not None
 
     assert first_frame_trial <= len(valid_frame_times) and last_frame_trial <= len(
         valid_frame_times
@@ -516,6 +518,7 @@ def main() -> None:
     for mouse_name in ["JB032"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
+
             try:
                 print(f"the type is {row['Type']}")
 

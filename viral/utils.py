@@ -6,9 +6,15 @@ import warnings
 from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
+import pandas as pd
 
 from viral.constants import ENCODER_TICKS_PER_TURN
-from viral.models import SpeedPosition, TrialInfo, MouseSummary
+from viral.models import (
+    Cached2pSession,
+    SpeedPosition,
+    TrialInfo,
+    MouseSummary,
+)
 
 
 def shaded_line_plot(
@@ -398,8 +404,87 @@ def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
     return matrix[sorted_order]
 
 
-def normalize(array: np.ndarray, axis: int) -> np.ndarray:
-    """Calculate the min and max along the specified axis"""
-    min_val = np.min(array, axis=axis, keepdims=True)
-    max_val = np.max(array, axis=axis, keepdims=True)
-    return (array - min_val) / (max_val - min_val)
+def array_bin_mean(arr: np.ndarray, bin_size: int = 2, axis: int = 1) -> np.ndarray:
+    """Bins elements along a given axis  with a specified bin size, computing the mean in the bin"""
+    shape = arr.shape[axis]
+    indices = np.arange(0, shape, bin_size)
+    binned_sum = np.add.reduceat(arr, indices, axis=axis)
+
+    # Count elements in each bin (handling the last bin if it's smaller)
+    counts = (
+        np.diff(indices, append=shape)[:, None]
+        if axis == 0
+        else np.diff(indices, append=shape)
+    )
+    return binned_sum / counts
+
+
+def remove_consecutive_ones(matrix: np.ndarray) -> np.ndarray:
+
+    def driver(row: np.ndarray) -> np.ndarray:
+        # Create a mask to identify the first occurrence of 1 in consecutive sequences
+        mask = np.diff(row, prepend=0) == 1
+        # Apply the mask to keep only the first 1 in consecutive sequences
+        return row * mask
+
+    return np.apply_along_axis(driver, 1, matrix)
+
+
+def shuffle_rows(matrix: np.ndarray) -> np.ndarray:
+    """
+    Shuffles the elements within each row of the given matrix independently.
+
+    Parameters:
+    matrix (numpy.ndarray): A 2D NumPy array where each row's elements are shuffled.
+
+    Returns:
+    numpy.ndarray: A new matrix with shuffled rows.
+    """
+    shuffled_matrix = (
+        matrix.copy()
+    )  # Make a copy to avoid modifying the original matrix
+    for row in shuffled_matrix:
+        np.random.shuffle(row)  # Shuffle elements within the row
+    return shuffled_matrix
+
+
+def has_five_consecutive_trues(matrix: np.ndarray) -> np.ndarray:
+    matrix = np.array(matrix, dtype=bool)  # Ensure it's a boolean NumPy array
+    kernel = np.ones(5, dtype=int)  # Kernel to check consecutive 5 Trues
+    # Perform a 1D convolution along each row
+    conv_results = np.apply_along_axis(
+        lambda row: np.convolve(row, kernel, mode="valid"), axis=1, arr=matrix
+    )
+    # Check if any value in the result equals 5 (meaning 5 consecutive Trues)
+    return np.any(conv_results == 5, axis=1)
+
+
+def find_five_consecutive_trues_center(matrix: np.ndarray) -> np.ndarray:
+    def find_center(row: np.ndarray) -> int:
+        conv_result = np.convolve(row, np.ones(5, dtype=int), mode="valid") == 5
+        if np.any(conv_result):
+            start = np.argmax(conv_result).astype(
+                int
+            )  # First occurrence of 5 consecutive Trues
+            return start + 2  # Center index
+        raise ValueError(
+            "You should only pass PCs run through has_five_consective_trues to this function"
+        )
+
+    matrix = np.asarray(matrix, dtype=bool)
+    return np.apply_along_axis(find_center, axis=1, arr=matrix)
+
+
+def remove_diagonal(A: np.ndarray) -> np.ndarray:
+    return A[~np.eye(A.shape[0], dtype=bool)].reshape(A.shape[0], -1)
+
+
+def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
+
+    df = pd.DataFrame(matrix)
+    corr = df.corr(method="pearson")
+    return corr.to_numpy()
+
+
+def session_is_unsupervised(session: Cached2pSession) -> bool:
+    return session.session_type.lower().startswith("unsupervised learning")
