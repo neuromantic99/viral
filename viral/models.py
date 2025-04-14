@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Dict
 from pydantic import BaseModel, computed_field
 import numpy as np
 
@@ -63,7 +63,8 @@ class MouseSummary(BaseModel):
     name: str
     genotype: str
     sex: str
-    setup: str  # TODO As of now, we had one mouse which had to switch for the recall, think about a fix
+    setup: Dict[str, str]
+    rewarded_texture: Dict[str, str]
     sessions: List[SessionSummary]
 
 
@@ -120,9 +121,9 @@ class ImagedTrialInfo(BaseModel):
     frames_positions: np.ndarray
     frames_speed: np.ndarray
     corridor_width: int
-    lick_idx: np.ndarray
-    reward_idx: np.ndarray
-    neural_data: np.ndarray
+    lick_idx: Optional[np.ndarray] = None
+    reward_idx: Optional[np.ndarray] = None
+    signal: np.ndarray
 
     class Config:
         arbitrary_types_allowed = True
