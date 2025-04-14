@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import List, Optional, Dict
 from pydantic import BaseModel, computed_field
 import numpy as np
@@ -126,3 +127,10 @@ class ImagedTrialInfo(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
+
+@dataclass
+class GrosmarkConfig:
+    bin_size: int
+    start: int
+    end: int

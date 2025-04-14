@@ -25,7 +25,6 @@ from viral.single_session import (
 from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
 from viral.models import MouseSummary, SessionSummary, TrialSummary
 from viral.utils import (
-    average_different_lengths,
     d_prime,
     get_genotype,
     get_wheel_circumference_from_rig,
@@ -37,7 +36,6 @@ from viral.utils import (
 )
 
 import seaborn as sns
-import pandas as pd
 
 sns.set_theme(context="talk", style="ticks")
 
@@ -696,38 +694,31 @@ if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
-    window = 50
     redo = False
-    # cache_mouse("JB013")
-    # cache_mouse("JB025")
-    # cache_mouse("JB032")
-    # cache_mouse("JB033")
 
-    for i, mouse_name in enumerate(
-        [
-            "JB011",
-            "JB012",
-            "JB013",
-            "JB014",
-            "JB015",
-            "JB016",
-            "JB017",
-            "JB018",
-            "JB019",
-            "JB020",
-            "JB021",
-            "JB022",
-            "JB023",
-            "JB024",
-            "JB025",
-            "JB026",
-            "JB027",
-            # "JB030",
-            # "JB031",
-            # "JB032",
-            # "JB033",
-        ]
-    ):
+    for mouse_name in {
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
+    }:
 
         print(f"\nProcessing {mouse_name}...")
         if redo:
@@ -744,28 +735,8 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-        # plot_mouse_performance(mice[i], window=window)
-    plot_performance_summaries(
-        mice,
-        "learning",
-        ["genotype", "rewarded_texture"],
-        window=40,
-    )
-    # plot_performance_summaries(mice, "reversal", ["genotype", "sex"], window=window)
-    # plot_performance_summaries(mice, "learning", ["genotype"], window=window)
-    # plot_performance_summaries(mice, "reversal", ["genotype"], window=window)
-    # plot_performance_summaries(mice, "recall", ["genotype", "sex"], window=window)
-    # plot_performance_summaries(
-    #     mice, "recall_reversal", ["genotype", "sex"], window=window
-    # )
-    # plot_performance_summaries(mice, "recall", ["genotype"], window=window)
-    # plot_performance_summaries(mice, "recall_reversal", ["genotype"], window=window)
-    # plot_running_speed_summaries(mice, "learning", running_speed_overall)
-    # plot_running_speed_summaries(mice, "reversal", running_speed_overall)
-    # plot_running_speed_summaries(mice, "recall", running_speed_overall)
-    # plot_running_speed_summaries(mice, "recall_reversal", running_speed_overall)
-    # plot_running_speed_summaries(mice, "learning", running_speed_AZ)
-    # plot_running_speed_summaries(mice, "reversal", running_speed_AZ)
+    plot_performance_summaries(mice, "learning", ["genotype"], window=50)
+    # plot_mouse_performance(mice[0])
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # plot_running_speed_summaries(mice, "recall_reversal", running_speed_AZ)
     # plot_running_speed_summaries(mice, "learning", running_speed_nonAZ)
