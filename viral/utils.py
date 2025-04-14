@@ -9,7 +9,7 @@ from enum import Enum
 import pandas as pd
 
 from viral.constants import ENCODER_TICKS_PER_TURN
-from viral.models import SpeedPosition, TrialInfo
+from viral.models import Cached2pSession, SpeedPosition, TrialInfo
 
 
 def shaded_line_plot(
@@ -460,3 +460,7 @@ def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
     df = pd.DataFrame(matrix)
     corr = df.corr(method="pearson")
     return corr.to_numpy()
+
+
+def session_is_unsupervised(session: Cached2pSession) -> bool:
+    return session.session_type.lower().startswith("unsupervised learning")

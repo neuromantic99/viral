@@ -32,6 +32,7 @@ from viral.utils import (
     has_five_consecutive_trues,
     remove_consecutive_ones,
     remove_diagonal,
+    session_is_unsupervised,
     shaded_line_plot,
     shuffle_rows,
     sort_matrix_peak,
@@ -528,7 +529,7 @@ if __name__ == "__main__":
 
     spks = binarise_spikes(spks)
 
-    is_unsupervised = session.session_type.lower().startswith("unsupervised learning")
+    is_unsupervised = session_is_unsupervised(session)
 
     config = GrosmarkConfig(
         bin_size=2,
