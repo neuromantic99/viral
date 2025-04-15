@@ -166,17 +166,17 @@ def extract_frozen_wheel_chunks(
 
     # first chunk (before behavioural chunks)
     first_chunk_len = stack_lengths_tiffs[0]
-    first_chunk = (0, first_chunk_len - 1)  # start and end frame
+    first_chunk = (0, first_chunk_len)  # start and end frame
     first_chunk_times = valid_frame_times[first_chunk[0] : first_chunk[1]]
 
     # last chunk (after all behavioural chunks)
     last_chunk_len = stack_lengths_tiffs[-1]
     prev_frames_total = sum(stack_lengths_tiffs[:-1])
     last_chunk = (
-        prev_frames_total - 1,
-        prev_frames_total + last_chunk_len - 1,
+        prev_frames_total,
+        prev_frames_total + last_chunk_len,
     )  # start and end frame
-    last_chunk_times = valid_frame_times[last_chunk[0] : last_chunk[1] + 1]
+    last_chunk_times = valid_frame_times[last_chunk[0] : last_chunk[1]]
 
     # We want to make sure the chunks are >= 15 mins but < 20 mins
     # 15 mins = 27,000 frames
