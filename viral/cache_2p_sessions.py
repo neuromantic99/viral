@@ -28,7 +28,7 @@ from viral.constants import (
     TIFF_UMBRELLA,
 )
 from viral.gsheets_importer import gsheet2df
-from viral.models import Cached2pSession, TrialInfo
+from viral.models import Cached2pSession, TrialInfo, WheelFreeze
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
@@ -147,9 +147,77 @@ def add_daq_times_to_trial(
         )
 
 
+def extract_frozen_wheel_chunks(
+    stack_lengths_tiffs: np.ndarray,
+    valid_frame_times: np.ndarray,
+    behaviour_times: np.ndarray,
+    sampling_rate: int,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Extract start and end frame index for pre-training and post-training imaging chunks.
+    Args:
+        stack_lengths_tiffs (np.ndarray):           A NumPy array of length tiffs, with the number of frames in each tiff.
+        valid_frame_times (np.ndarray):             A NumPy array with times for valid frames.
+        behaviour_times (np.ndarray):               A NumPy array with all times when a Bpod spacer signal occured.
+        sampling_rate (int):                        The sampling rate of the DAQ system in Hz.
+
+    Returns:
+        tuple[tuple[int, int], tuple[int, int]]:    First chunk and last chunk, with their respective start and end frame.
+    """
+
+    # first chunk (before behavioural chunks)
+    first_chunk_len = stack_lengths_tiffs[0]
+    first_chunk = (0, first_chunk_len)  # start and end frame
+    first_chunk_times = valid_frame_times[first_chunk[0] : first_chunk[1]]
+
+    # last chunk (after all behavioural chunks)
+    last_chunk_len = stack_lengths_tiffs[-1]
+    prev_frames_total = sum(stack_lengths_tiffs[:-1])
+    last_chunk = (
+        prev_frames_total,
+        prev_frames_total + last_chunk_len,
+    )  # start and end frame
+    last_chunk_times = valid_frame_times[last_chunk[0] : last_chunk[1]]
+
+    # We want to make sure the chunks are >= 15 mins but < 20 mins
+    # 15 mins = 27,000 frames
+    # 20 mins = 36,000 frames
+    assert (
+        27000 <= first_chunk_len < 36000
+    ), "First chunk length does not match expected length"
+    assert (
+        15 * 60 * sampling_rate
+        <= (last_chunk_times[-1] - last_chunk_times[0])
+        <= 20 * 60 * sampling_rate
+    ), "First chunk length does not match expected length"
+
+    assert (
+        27000 <= last_chunk_len < 36000
+    ), "Last chunk length does not match expected length"
+    assert (
+        15 * 60 * sampling_rate
+        <= (last_chunk_times[-1] - last_chunk_times[0])
+        <= 20 * 60 * sampling_rate
+    ), "Last chunk length does not match expected length"
+
+    assert not np.any(
+        (behaviour_times >= first_chunk_times[0])
+        & (behaviour_times <= first_chunk_times[-1])
+    ), "Behavioral pulses detected in pre-training period!"
+
+    assert not np.any(
+        (behaviour_times >= last_chunk_times[0])
+        & (behaviour_times <= last_chunk_times[-1])
+    ), "Behavioral pulses detected in post-training period!"
+    return first_chunk, last_chunk
+
+
 def add_imaging_info_to_trials(
-    tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
-) -> List[TrialInfo]:
+    tdms_path: Path,
+    tiff_directory: Path,
+    trials: List[TrialInfo],
+    wheel_blocked: bool = False,
+) -> tuple[List[TrialInfo], WheelFreeze | None]:
+    """Adds imaging info to trials and creates a WheelFreeze object if the wheel was blocked"""
 
     logger.info("Adding imaging info to trials")
     t1 = time.time()
@@ -193,8 +261,18 @@ def add_imaging_info_to_trials(
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
     valid_frame_times = get_valid_frame_times(
-        stack_lengths_tiffs, frame_times_daq, chunk_lengths_daq
+        stack_lengths_tiffs=stack_lengths_tiffs,
+        frame_times_daq=frame_times_daq,
+        chunk_lengths_daq=chunk_lengths_daq,
     )
+
+    if wheel_blocked:
+        frozen_wheel_chunks = extract_frozen_wheel_chunks(
+            stack_lengths_tiffs=stack_lengths_tiffs,
+            valid_frame_times=valid_frame_times,
+            behaviour_times=behaviour_times,
+            sampling_rate=sampling_rate,
+        )
 
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -216,9 +294,19 @@ def add_imaging_info_to_trials(
             valid_frame_times=valid_frame_times,
             sampling_rate=sampling_rate,
             daq_start_time=daq_start_time,
+            wheel_blocked=wheel_blocked,
         )
-
-    return trials
+    wheel_freeze = (
+        WheelFreeze(
+            pre_training_start_frame=frozen_wheel_chunks[0][0],
+            pre_training_end_frame=frozen_wheel_chunks[0][1],
+            post_training_start_frame=frozen_wheel_chunks[1][0],
+            post_training_end_frame=frozen_wheel_chunks[1][1],
+        )
+        if wheel_blocked
+        else None
+    )
+    return trials, wheel_freeze
 
 
 def get_valid_frame_times(
@@ -226,16 +314,16 @@ def get_valid_frame_times(
     frame_times_daq: np.ndarray,
     chunk_lengths_daq: np.ndarray,
 ) -> np.ndarray:
-    """Consistently, the number of triggers recorded is two more than the number of frames recorded.
+    """
+    Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
     This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
     from a completed grab).
     The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
     The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
     frame is relaibly correct
-    Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this.
+    Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
-
     """
 
     valid_frame_times = np.array([])
@@ -341,6 +429,7 @@ def check_timestamps(
     valid_frame_times: np.ndarray,
     sampling_rate: int,
     daq_start_time: datetime,
+    wheel_blocked: bool = False,
 ) -> None:
     """Compares the timestamps in the tiff to the timestamps in the Daq (the time of the trigger, offset to the timestamp that the daq started)
     Currently works trial by trial which isn't really necessary.
@@ -359,6 +448,10 @@ def check_timestamps(
     assert first_frame_trial is not None
     assert last_frame_trial is not None
 
+    assert first_frame_trial <= len(valid_frame_times) and last_frame_trial <= len(
+        valid_frame_times
+    )
+
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
 
@@ -371,8 +464,12 @@ def check_timestamps(
         )
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
+
         # Allow for some drift up to 15ms
-        if trial.trial_start_time / 60 < 30:
+        # Take into account that the recording in wheel block is 1.5x longer,
+        # i.e. one minute into the behaviour is at least 15 mins into the entire session
+        increase_offset_allowance_time = 30 if not wheel_blocked else 50
+        if trial.trial_start_time / 60 < increase_offset_allowance_time:
             assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
         else:
             assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
@@ -385,14 +482,17 @@ def process_session(
     mouse_name: str,
     date: str,
     session_type: str,
+    wheel_blocked: bool = False,
 ) -> None:
 
     print(f"Off we go for {mouse_name} {date} {session_type}")
-    trials = add_imaging_info_to_trials(
-        tdms_path,
-        tiff_directory,
-        trials,
+    trials, wheel_freeze = add_imaging_info_to_trials(
+        tdms_path, tiff_directory, trials, wheel_blocked
     )
+
+    if wheel_blocked:
+        print("Wheel blocked detected")
+        logger.info(f"Wheel blocked detected for {mouse_name} {date}")
 
     with open(
         HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"
@@ -403,6 +503,7 @@ def process_session(
                 date=date,
                 trials=trials,
                 session_type=session_type,
+                wheel_freeze=wheel_freeze,
             ).model_dump(),
             f,
         )
@@ -414,7 +515,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB031"]:
+    for mouse_name in ["JB032"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
 
@@ -423,7 +524,12 @@ def main() -> None:
 
                 date = row["Date"]
                 session_type = row["Type"].lower()
-
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
                 if (
                     not redo
                     and (
@@ -432,31 +538,25 @@ def main() -> None:
                 ):
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue
-
                 if (
                     "learning day" not in session_type
                     and "reversal learning" not in session_type
                 ):
                     print(f"Skipping {mouse_name} {date} {session_type}")
                     continue
-
                 if not row["Sync file"]:
                     print(
                         f"Skipping {mouse_name} {date} {session_type} as no sync file"
                     )
                     continue
-
                 session_numbers = parse_session_number(row["Session Number"])
-
                 trials = []
-
                 for session_number in session_numbers:
                     session_path = (
                         BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
                     )
                     trials.extend(load_data(session_path))
-
-                logger.info(f"\n")
+                logger.info("\n")
                 logger.info(f"Processing {mouse_name} {date} {session_type}")
                 process_session(
                     trials=trials,
@@ -465,11 +565,11 @@ def main() -> None:
                     mouse_name=mouse_name,
                     session_type=session_type,
                     date=date,
+                    wheel_blocked=wheel_blocked,
                 )
                 logger.info(
                     f"Completed processing for {mouse_name} {date} {session_type}"
                 )
-
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
                 line_number = tb[-1].lineno  # Get the line number of the exception
