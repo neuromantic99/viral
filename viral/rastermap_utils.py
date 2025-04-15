@@ -375,7 +375,7 @@ def process_trials_data(
             print("No valid frames in the trial")
         valid_trial_frames = trial_frames[valid_mask]
         valid_trial_start = valid_trial_frames[0]
-        if not licks:
+        if not np.any(licks):
             licks = np.array([])
         if not np.any(rewards):
             rewards = np.array([])

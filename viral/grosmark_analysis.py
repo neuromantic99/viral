@@ -468,7 +468,7 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-def binarise_spikes(spks: np.ndarray) -> np.ndarray:
+def binarise_spikes(spks: np.ndarray, threshold: int = 1.5) -> np.ndarray:
     """Implements the calcium imaging preprocessing stepts here:
     https://www.nature.com/articles/s41593-021-00920-7#Sec12
 
@@ -499,7 +499,7 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     # threshold = mad * 1.5
 
     # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * threshold
     mask = spks - threshold[:, np.newaxis] > 0
     spks[~mask] = 0
     spks[mask] = 1

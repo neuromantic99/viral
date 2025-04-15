@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import time
 from pathlib import Path
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
@@ -199,7 +200,7 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
 
     'Only the subset of components found to be significant under the Marcenko–Pasteur
     distribution were considered ICA ensembles and included in the ICA ensemble
-    matrix¸ w, with rows corresponding to PCs and columns corresponding to
+    matrix w, with rows corresponding to PCs and columns corresponding to
     significant ICA components.' (Grosmark et al., 2021)
 
     Used description in '2.2. Determination of the number of cell assemblies', Lopes-dos-Santos, Ribeiro and Tort, 2013.
@@ -208,6 +209,7 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
 
     ica_comp_z = zscore(ica_comp, axis=1, ddof=1)
     # TODO: check that sigma2 = 1!!!
+    np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0)
     corr_matrix = np.corrcoef(ica_comp_z)
     eigenvalues = eigvalsh(corr_matrix)
 
@@ -317,6 +319,38 @@ def sort_ensembles_by_reactivation_strength(
     return sorted_indices[:n_top]
 
 
+def classify_and_sort_place_cells(
+    ensemble_matrix: np.ndarray, top_ensembles: np.ndarray
+) -> tuple[np.ndarray, int, int]:
+    """
+    Panel (iii) shows the ICA component for each PC, with dashed lines separating those cells with large weights
+    in ensemble A (top), ensemble B (middle) or neither (bottom; for the purposes of this illustration, large
+    weights were those ≥1 s.d. above the mean for each template).
+    """
+    # TODO: args and returns
+    weights_a = ensemble_matrix[:, top_ensembles[0]]
+    weights_b = ensemble_matrix[:, top_ensembles[1]]
+
+    mean_a, std_a = np.mean(weights_a), np.std(weights_a)
+    mean_b, std_b = np.mean(weights_b), np.std(weights_b)
+
+    high_a = weights_a >= mean_a + std_a
+    high_b = weights_b >= mean_b + std_b
+
+    a_only = np.where(high_a & ~high_b)[0]
+    b_only = np.where(high_b & ~high_a)[0]
+    neither = np.where(~high_a & ~high_b)[0]
+
+    a_only_sorted = a_only[np.argsort(-weights_a[a_only])]
+    b_only_sorted = b_only[np.argsort(-weights_b[b_only])]
+    neither_sorted = neither[
+        np.argsort(-(np.maximum(weights_a[neither], weights_b[neither])))
+    ]
+
+    sorted_indices = np.concatenate([a_only_sorted, b_only_sorted, neither_sorted])
+    return sorted_indices, len(a_only_sorted), len(b_only_sorted)
+
+
 def plot_ensemble_reactivation(
     reactivation_strength: np.ndarray, top_ensembles: np.ndarray
 ) -> None:
@@ -344,41 +378,67 @@ def plot_cell_weights(ensemble_matrix: np.ndarray, top_ensembles: np.ndarray) ->
     Producing Fig. 4j, panel III. Plotting each cell's weight in the top ICA components/ensembles.
     """
     colours = ["r", "b"]
-    # TODO: classify as having a preference
+    sorted_cells, n_a, n_b = classify_and_sort_place_cells(
+        ensemble_matrix, top_ensembles
+    )
     plt.figure()
     for i, idx in enumerate(top_ensembles):
         plt.plot(
-            ensemble_matrix[:, idx],
-            marker="o",
-            linestyle="",
+            ensemble_matrix[sorted_cells, idx],
+            # marker="o",
+            # linestyle="",
             color=colours[i],
             label=f"ensemble {i}",
         )
-    plt.xlabel("Place cell no.")
+    plt.axvline(
+        x=n_a,
+        color=colours[0],
+        linestyle="dotted",
+        zorder=3,
+    )
+    plt.axvline(
+        x=n_a + n_b,
+        color=colours[1],
+        linestyle="dotted",
+        zorder=3,
+    )
+    # we changed the place cell no through sorting, should it be place cell ID as in Grosmark et al.?
+    plt.xlabel("Place cell ID")
     plt.ylabel("Cell weight in template")
     plt.tight_layout()
     plt.savefig("plots/cell_weights.svg", dpi=300)
 
 
 def plot_smoothed_offline_firing_rate_raster(reactivation: np.ndarray) -> None:
-    # TODO: classify as having a preference
     """
     Producing Fig. 4j, panel IV. Plotting the smoothed offline firing rate raster.
     """
+    # TODO: make this a dataclass or some kind of argument
+    sorted_cells, n_a, n_b = classify_and_sort_place_cells(
+        ensemble_matrix, top_ensembles
+    )
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
-    plt.figure()
-    plt.imshow(offline_activity_matrix, cmap="gray")
+    # plt.imshow(offline_activity_matrix[sorted_cells, :], cmap="gray")
+    plt.imshow(
+        offline_activity_matrix[sorted_cells, :],
+        cmap="gray",
+        # cmap="gray_r",
+        aspect="auto",
+        vmin=0,
+        vmax=np.percentile(offline_activity_matrix, 99),
+    )
+    print(offline_activity_matrix.shape)
+    print(np.min(offline_activity_matrix), np.max(offline_activity_matrix))
     plt.tight_layout()
     plt.savefig("plots/smoothed_offline_firing_rate_raster.svg", dpi=300)
 
 
 # def main():
 if __name__ == "__main__":
-    # Load stuff from rastermap utils
-    # get place cells
-    # do rest
     mouse = "JB031"
     date = "2025-03-28"
+
+    verbose = True
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -400,16 +460,26 @@ if __name__ == "__main__":
         TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
         "spks",
     )
-    spks = binarise_spikes(spks)
-    print("Getting place cells")
-    pcs_mask = get_place_cell_mask(
-        session=session, spks=spks, rewarded=None, config=config
+    # Based on the observed differences in calcium activity waveforms between the online and
+    # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
+    # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.
+    online_spks = binarise_spikes(
+        spks[
+            :,
+            session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
+        ],
+        threshold=1.5,
     )
-    place_cells = spks[pcs_mask, :]
-    reactivation = get_reactivation(flu=spks, wheel_freeze=session.wheel_freeze)[
-        pcs_mask
-    ]
-    print("Got place cells")
+    t1 = time.time()
+    pcs_mask = get_place_cell_mask(
+        session=session, spks=online_spks, rewarded=None, config=config
+    )
+    print(f"Time to get place cells: {time.time() - t1}")
+    place_cells = online_spks[pcs_mask, :]
+    reactivation = binarise_spikes(
+        get_reactivation(flu=spks, wheel_freeze=session.wheel_freeze),
+        threshold=1.25,
+    )[pcs_mask]
     running_bouts = get_running_bouts(
         place_cells=place_cells,
         speed=speed,
@@ -422,8 +492,8 @@ if __name__ == "__main__":
     print("Got ssp vectors")
     ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
     print("Got ensemble matrix")
-    square_projection = square_projection_matrix(arr=ensemble_matrix)
-    print("Got square projection matrix")
+    # square_projection = square_projection_matrix(arr=ensemble_matrix)
+    # print("Got square projection matrix")
     reactivation_strength = offline_reactivation(
         reactivation=reactivation, ensemble_matrix=ensemble_matrix
     )
@@ -440,12 +510,18 @@ if __name__ == "__main__":
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength
     )
-    plot_ensemble_reactivation(
-        reactivation_strength=reactivation_strength_shuffled,
-        top_ensembles=top_ensembles,
+    sorted_place_cells = classify_and_sort_place_cells(
+        ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles
     )
-    # plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
-    # plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
+    if verbose:
+        print(f"# place cells: {running_bouts.shape[0]}")
+        print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
+    # plot_ensemble_reactivation(
+    #     reactivation_strength=reactivation_strength_shuffled,
+    #     top_ensembles=top_ensembles,
+    # )
+    plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
+    plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
 
 
 # if __name__ == "__main__":

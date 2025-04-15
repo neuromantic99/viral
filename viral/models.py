@@ -103,11 +103,19 @@ class TrialInfo(BaseModel):
         ]
 
 
+class WheelFreeze(BaseModel):
+    pre_training_start_frame: int
+    pre_training_end_frame: int
+    post_training_start_frame: int
+    post_training_end_frame: int
+
+
 class Cached2pSession(BaseModel):
     trials: List[TrialInfo]
     mouse_name: str
     date: str
     session_type: str
+    wheel_freeze: WheelFreeze | None = None
 
 
 class ImagedTrialInfo(BaseModel):
