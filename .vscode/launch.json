@@ -55,5 +55,13 @@
       "console": "integratedTerminal",
       "justMyCode": true
     },
+    {
+      "name": "OASIS deconvolution",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/run_oasis.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
   ]
 }

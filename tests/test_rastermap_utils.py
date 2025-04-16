@@ -213,19 +213,6 @@ def test_get_speed_frame() -> None:
     assert np.array_equal(result, expected)
 
 
-def test_get_speed_frame_different_bin_sizes() -> None:
-    """Test that the speed for a given array of frame indices and positions will return the right speeds."""
-    frame_position = np.array(
-        [[0, 0.1], [1, 0.2], [2, 0.3], [3, 0.4], [4, 0.5], [3, 0.6]]
-    )
-
-    assert (
-        get_speed_frame(frame_position, bin_size=2)[0, 0]
-        == get_speed_frame(frame_position, bin_size=3)[0, 0]
-        == get_speed_frame(frame_position, bin_size=4)[0, 0]
-    )
-
-
 def test_get_speed_frame_negative_speed() -> None:
     frame_position = np.array([[0, 0], [1, 2], [2, 2], [3, 4], [4, 5], [5, 4], [6, 6]])
     expected = np.array(
@@ -501,7 +488,7 @@ def test_filter_speed_position_both() -> None:
     position_threshold = 20
     expected = np.array([0, 0, 1, 1, 1, 1])
     result = filter_speed_position(
-        speed, frames_positions, speed_threshold, position_threshold
+        speed, frames_positions, speed_threshold, position_threshold, True, True
     ).astype(int)
     assert np.array_equal(result, expected)
 
@@ -515,6 +502,8 @@ def test_filter_speed_position_just_speed() -> None:
         speed=speed,
         frames_positions=frames_positions,
         speed_threshold=speed_threshold,
+        filter_position=False,
+        filter_speed=True,
     ).astype(int)
     assert np.array_equal(result, expected)
 
@@ -528,15 +517,9 @@ def test_filter_speed_position_just_position() -> None:
         speed=speed,
         frames_positions=frames_positions,
         position_threshold=position_threshold,
+        filter_position=True,
+        filter_speed=False,
     ).astype(int)
-    assert np.array_equal(result, expected)
-
-
-def test_filter_speed_position_none() -> None:
-    speed = np.array([[0, 0], [1, 0], [2, 10], [3, 10], [4, 0], [5, 10]])
-    frames_positions = np.array([[0, 0], [1, 0], [2, 10], [3, 20], [4, 20], [5, 30]])
-    expected = np.array([1, 1, 1, 1, 1, 1])
-    result = filter_speed_position(speed, frames_positions).astype(int)
     assert np.array_equal(result, expected)
 
 

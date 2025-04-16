@@ -32,6 +32,7 @@ from viral.utils import (
     has_five_consecutive_trues,
     remove_consecutive_ones,
     remove_diagonal,
+    session_is_unsupervised,
     shaded_line_plot,
     shuffle_rows,
     sort_matrix_peak,
@@ -143,24 +144,22 @@ def grosmark_place_field(
         ]
     )
 
-    initial_pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
+    pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
 
-    spks = spks[initial_pcs, :]
-    smoothed_matrix = smoothed_matrix[initial_pcs, :]
+    spks = spks[pcs, :]
+    smoothed_matrix = smoothed_matrix[pcs, :]
 
-    print(
-        f"percent place cells before extra check {np.sum(initial_pcs) / n_cells_total}"
-    )
+    print(f"percent place cells before extra check {np.sum(pcs) / n_cells_total}")
 
-    final_pcs = filter_additional_check(
-        all_trials=all_trials[:, initial_pcs, :],
-        place_threshold=place_threshold[initial_pcs, :],
+    pcs = filter_additional_check(
+        all_trials=all_trials[:, pcs, :],
+        place_threshold=place_threshold[pcs, :],
         smoothed_matrix=smoothed_matrix,
     )
 
     # Don't love this double indexing
-    spks = spks[final_pcs, :]
-    smoothed_matrix = smoothed_matrix[final_pcs, :]
+    spks = spks[pcs, :]
+    smoothed_matrix = smoothed_matrix[pcs, :]
 
     plot_place_cells(
         smoothed_matrix=smoothed_matrix,
@@ -169,7 +168,7 @@ def grosmark_place_field(
         config=config,
     )
 
-    print(f"percent place cells after extra check {np.sum(final_pcs) / n_cells_total}")
+    print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
 
     print(
         f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
@@ -190,11 +189,6 @@ def grosmark_place_field(
     )
 
     plt.show()
-
-    # TODO: probably move this to another function
-    place_cell_mask = np.zeros(n_cells_total, dtype=bool)
-    place_cell_mask[initial_pcs] = final_pcs
-    return place_cell_mask
 
 
 def plot_speed(
@@ -468,7 +462,7 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-def binarise_spikes(spks: np.ndarray, threshold: int = 1.5) -> np.ndarray:
+def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     """Implements the calcium imaging preprocessing stepts here:
     https://www.nature.com/articles/s41593-021-00920-7#Sec12
 
@@ -499,7 +493,7 @@ def binarise_spikes(spks: np.ndarray, threshold: int = 1.5) -> np.ndarray:
     # threshold = mad * 1.5
 
     # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * threshold
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
     mask = spks - threshold[:, np.newaxis] > 0
     spks[~mask] = 0
     spks[mask] = 1
@@ -535,7 +529,7 @@ if __name__ == "__main__":
 
     spks = binarise_spikes(spks)
 
-    is_unsupervised = session.session_type.lower().startswith("unsupervised learning")
+    is_unsupervised = session_is_unsupervised(session)
 
     config = GrosmarkConfig(
         bin_size=2,
