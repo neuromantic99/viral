@@ -2,10 +2,11 @@ import itertools
 from pathlib import Path
 import sys
 from matplotlib import pyplot as plt
-from scipy.stats import median_abs_deviation, zscore, pearsonr
+from scipy.stats import median_abs_deviation, zscore, pearsonr, ttest_ind
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
+import seaborn as sns
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -94,8 +95,10 @@ def grosmark_place_field(
     # Probably delete cache logic once we're all sorted
     use_cache = True
     cache_file = (
-        HERE
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_shuffled_matrices.npy"
+        HERE.parent
+        / "data"
+        / "grosmark_cache"
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_start_{config.start}_end_{config.end}_binsize_{config.bin_size}_shuffled_matrices.npy"
     )
     if use_cache and cache_file.exists():
         shuffled_matrices = np.load(cache_file)
@@ -215,12 +218,15 @@ def plot_speed(
         and (rewarded is None or trial.texture_rewarded == rewarded)
     ]
 
+    plt.figure()
     shaded_line_plot(
         np.array(speeds),
         x_axis=np.arange(config.start, config.end, config.bin_size),
         color="red",
         label="speed",
     )
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Speed (cm/s)")
 
 
 def offline_correlations(
@@ -258,6 +264,39 @@ def offline_correlations(
         real_corrs, peak_position_cm=peak_position_cm, plot=True
     )
 
+    # landmark_positions = [90]
+    landmark_positions = [45, 90, 135]
+
+    landmark_width = 5
+    landmark_cells = np.any(
+        [
+            np.logical_and(
+                peak_position_cm >= pos - landmark_width,
+                peak_position_cm <= pos + landmark_width,
+            )
+            for pos in landmark_positions
+        ],
+        axis=0,
+    )
+
+    to_plot = {
+        "landmark_landmark": [],
+        "landmark_nonlandmark": [],
+        "nonlandmark_nonlandmark": [],
+    }
+
+    for i, j in itertools.combinations(range(len(landmark_cells)), r=2):
+        assert i != j
+        if landmark_cells[i] and landmark_cells[j]:
+            to_plot["landmark_landmark"].append(real_corrs[i, j])
+        elif landmark_cells[i] or landmark_cells[j]:
+            to_plot["landmark_nonlandmark"].append(real_corrs[i, j])
+        else:
+            to_plot["nonlandmark_nonlandmark"].append(real_corrs[i, j])
+
+    plt.figure()
+    sns.kdeplot(to_plot, common_norm=False, fill=True)
+
 
 def get_offline_correlation_matrix(
     offline: np.ndarray, do_shuffle: bool = False, plot: bool = False
@@ -266,8 +305,6 @@ def get_offline_correlation_matrix(
     all_corrs = []
     for trial in range(n_trials):
         trial_matrix = offline[trial, :, :]
-        if do_shuffle:
-            trial_matrix = shuffle_rows(trial_matrix)
         # 150-ms kernel convolution
         ITI_trial = gaussian_filter1d(trial_matrix, sigma=4.5, axis=1)
         all_corrs.append(cross_correlation_pandas(ITI_trial.T))
@@ -277,6 +314,8 @@ def get_offline_correlation_matrix(
     if plot:
         plt.figure()
         plt.title("shuffled" if do_shuffle else "real")
+        if do_shuffle:
+            np.random.shuffle(corrs)
         plt.imshow(
             gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
             vmin=0,
@@ -330,8 +369,6 @@ def correlations_vs_peak_distance(
         plt.xlabel("Distance between peaks")
         plt.ylabel("Average pearson correlation")
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
-
-        plt.show()
 
 
 def plot_circular_distance_matrix(
@@ -503,8 +540,8 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
 if __name__ == "__main__":
 
     mouse = "JB027"
-    date = "2025-02-26"
-    # date = "2024-12-10"
+    # date = "2025-02-26"
+    date = "2024-12-10"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
