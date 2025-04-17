@@ -401,7 +401,7 @@ def process_trials_data(
                 corridor_width=(ITI_start_frame - start),
                 lick_idx=licks,
                 reward_idx=rewards,
-                neural_data=spikes_trial[:, valid_mask],
+                signal=spikes_trial[:, valid_mask],
             )
         )
     return imaged_trials_infos
