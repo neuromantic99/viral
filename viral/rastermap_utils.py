@@ -11,7 +11,6 @@ sys.path.append(str(HERE.parent.parent))
 
 from viral.imaging_utils import get_ITI_start_frame, load_imaging_data, trial_is_imaged
 from viral.utils import (
-    TrialInfo,
     trial_is_imaged,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
@@ -408,20 +407,20 @@ def filter_speed_position(
     frames_positions: np.ndarray,
     speed_threshold: Optional[float] = None,
     position_threshold: Optional[float] = None,
-    filter_speed: bool = False,
-    filter_position: bool = False,
 ) -> np.ndarray:
     """Return a mask of valid frames"""
 
+    if speed_threshold is None and position_threshold is None:
+        return np.ones(len(speed), dtype=bool)
     valid_mask = np.zeros(len(speed), dtype=bool)
 
     # filter out frames with sub-threshold speeds
     # converting cm/s to cm/frames
-    if filter_speed and speed_threshold is not None:
+    if speed_threshold is not None:
         speed_mask = speed[:, 1] >= (speed_threshold)
         valid_mask |= speed_mask
     # specified positions that should always be included
-    if filter_position and position_threshold is not None:
+    if position_threshold is not None:
         position_mask = frames_positions[:, 1] >= position_threshold
         valid_mask |= position_mask  # bitwise OR?
 
@@ -574,7 +573,7 @@ def process_session(
         aligned_trial_frames
     ), "Number of corridor widths and aligned_trial_frames do not match"
 
-    assert positions.shape[0] == speed.shape[0] == neural_data.shape[1]
+    assert positions.shape[0] == speed.shape[0] == signals.shape[1]
     # Checking that neither positions nor speed have values that exceed the trial boundaries
     assert np.min(positions[:, 0]) == aligned_trial_frames[0, 0]
     assert np.max(positions[:, 0]) == aligned_trial_frames[-1, 1]

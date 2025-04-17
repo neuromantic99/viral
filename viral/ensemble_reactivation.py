@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import os
 import time
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -144,7 +145,7 @@ def process_behaviour(
         [[trial.iti_start_frame, trial.iti_end_frame] for trial in imaged_trials_infos]
     )
     neural_data = np.concatenate(
-        [trial.neural_data for trial in imaged_trials_infos], axis=1
+        [trial.signal for trial in imaged_trials_infos], axis=1
     )
     assert len(corridor_widths) == len(
         aligned_trial_frames
@@ -491,7 +492,7 @@ if __name__ == "__main__":
     if not session.wheel_freeze:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
 
-    cache_file = HERE / f"{session.mouse_name}_{session.date}_place_cells.npy"
+    cache_file = HERE.parent / f"{session.mouse_name}_{session.date}_place_cells.npy"
     positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
         session,
         wheel_circumference=get_wheel_circumference_from_rig(
@@ -530,18 +531,18 @@ if __name__ == "__main__":
     spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
     # TODO: shape is off by one frame (pre is one short), do we care?
     # assert spks_raw.shape == spks.shape
-    if not use_cache:
+    if use_cache and os.path.exists(cache_file):
+        print("Using cached pcs mask")
+        pcs_mask = np.load(cache_file)
+    else:
         t1 = time.time()
         # TODO: why is place cells now soooo low (23 vs 101 before??)
         # TODO: probably slicing issue??? Put back the pre-period!!!
         pcs_mask = get_place_cell_mask(
             session=session, spks=spks, rewarded=None, config=config
         )
+        np.save(cache_file, pcs_mask)
         print(f"Time to get place cells: {time.time() - t1}")
-
-    else:
-        print("Using cached pcs mask")
-        pcs_mask = np.load(cache_file)
     place_cells = spks[pcs_mask, :]
     reactivation = offline_spks_post[pcs_mask]
     preactivation = offline_spks_pre[pcs_mask]
