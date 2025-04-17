@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
-from scipy.stats import zscore
+from scipy.stats import zscore, rankdata
 from numpy.linalg import eigvalsh
 from sklearn.decomposition import FastICA
 
@@ -21,11 +21,16 @@ from viral.rastermap_utils import (
     filter_speed_position,
     filter_out_ITI,
 )
-from viral.utils import get_wheel_circumference_from_rig, remove_diagonal
+from viral.utils import (
+    get_wheel_circumference_from_rig,
+    remove_diagonal,
+    shuffle_rows,
+    shuffle,
+)
 from viral.imaging_utils import (
     activity_trial_position,
     trial_is_imaged,
-    get_reactivation,
+    get_preactivation_reactivation,
 )
 from viral.grosmark_analysis import (
     binarise_spikes,
@@ -208,7 +213,7 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
     n_components, n_timepoints = ica_comp.shape
 
     ica_comp_z = zscore(ica_comp, axis=1, ddof=1)
-    # TODO: check that sigma2 = 1!!!
+    assert np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0, rtol=1e-5)
     np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0)
     corr_matrix = np.corrcoef(ica_comp_z)
     eigenvalues = eigvalsh(corr_matrix)
@@ -222,9 +227,9 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
 def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     """Subsequently, the ICA components of these smoothed run
     activity estimates were calculated across time using the fastICA algorithm. Only
-    the subset of components found to be significant under the Marcenko–Pasteur
+    the subset of components found to be significant under the Marcenko-Pasteur
     distribution were considered ICA ensembles and included in the ICA ensemble
-    matrix¸ w, with rows corresponding to PCs and columns corresponding to
+    matrix w, with rows corresponding to PCs and columns corresponding to
     significant ICA components."""
     ica_transfomer = FastICA()
     # expected input: (n_samples, n_features)
@@ -236,17 +241,6 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     return mixing_matrix[:, significant_components]
 
 
-def square_projection_matrix(arr: np.ndarray) -> np.ndarray:
-    """For each component, b, of ICA ensemble matrix w, a
-    square projection matrix, P, was computed from wb as follows:
-    Pb = wb * wbT
-    Where T denotes the transpose operator. Subsequently, the diagonal of the
-    projection matrix P was set to zero to exclude each cell’s individual firing rate
-    variance."""
-    square_projection = np.matmul(arr, arr.T)
-    return remove_diagonal(square_projection)
-
-
 def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
     """Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z."""
     sigma = 150 / 1000 * 30  # 150 ms kernel
@@ -256,7 +250,14 @@ def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
 def offline_reactivation(
     reactivation: np.ndarray, ensemble_matrix: np.ndarray
 ) -> np.ndarray:
-    """Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z.
+    """
+    For each component, b, of ICA ensemble matrix w, a
+    square projection matrix, P, was computed from wb as follows:
+    Pb = wb * wbT
+    Where T denotes the transpose operator. Subsequently, the diagonal of the
+    projection matrix P was set to zero to exclude each cell'2s individual firing rate
+    variance.
+    Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z.
     For the ith time point (frame) in Z, the reactivation strength Rb,i
     of the bth ICA component was calculated as the square of the projection length of Zi on Pb as follows:
     Rbi = ZiT * Pb * Zb
@@ -266,19 +267,21 @@ def offline_reactivation(
     n_timepoints = reactivation.shape[1]
     reactivation_strength = np.zeros((n_components, n_timepoints))
     for b in range(n_components):
-        pb = ensemble_matrix[:, b]  # shape: (place cells,)
+        wb = ensemble_matrix[:, b]  # shape: (place cells,)
+        pb = np.outer(wb, wb)
+        np.fill_diagonal(pb, 0)  # shape: (place cells, place cells)
+        # pb = remove_diagonal(pb)
         for i in range(n_timepoints):
             zi = offline_activity_matrix[:, i]  # shape: (place cells,)
-            # R_bi = (zi.T @ pb)**2
-            projection = np.dot(zi, pb)
-            reactivation_strength[b, i] = projection**2
+            # is Z_b a typo in the Grosmark paper? It would be ZiT * Pb * Zi
+            projection = zi.T @ pb @ zi
+            reactivation_strength[b, i] = projection
     return reactivation_strength
 
 
 def compute_pcc_scores(
     reactivation: np.ndarray, ensemble_matrix: np.ndarray
 ) -> np.ndarray:
-    # TODO: add args and return
     """
     To assess the xth cell's contribution to ICA reactivation, a PCC score was defined as the mean across all components b and
     timepoints i of the reactivation score R computed from all PCs c minus the reactivation score Rcx computed after
@@ -306,6 +309,36 @@ def compute_pcc_scores(
     return np.array(pcc_scores)
 
 
+def get_normalised_pcc_scores(
+    reactivation: np.ndarray, preactivation: np.ndarray, ensemble_matrix: np.ndarray
+) -> np.ndarray:
+    """
+    To assess the xth cell's contribution to ICA reactivation, a PCC score was defined as the mean across all components b and
+    timepoints i of the reactivation score R computed from all PCs c minus the reactivation score Rcx computed after
+    the exclusion xth cell from the activity and template matrices.
+    To account for putatively nonspecific changes in ICA reactivation strength from the pre to the post epochs, a normalized
+    PCC score was taken per session as the pre to post change in within-epoch PCC rank.
+    """
+    post_pcc_scores = compute_pcc_scores(
+        reactivation=reactivation, ensemble_matrix=ensemble_matrix
+    )
+    pre_pcc_scores = compute_pcc_scores(
+        reactivation=preactivation, ensemble_matrix=ensemble_matrix
+    )
+
+    assert reactivation.shape[0] == preactivation.shape[0]
+    # n_cells = reactivation.shape[0]
+
+    post_ranks = rankdata(post_pcc_scores)
+    pre_ranks = rankdata(pre_pcc_scores)
+
+    # TODO: No normalisation? 'a normalized PCC score was taken per session as the pre to post change in within-epoch PCC rank.'
+    # pre_ranks_norm = (pre_ranks - 1) / (n_cells - 1)
+    # post_ranks_norm = (post_ranks - 1) / (n_cells - 1)
+
+    return post_ranks - pre_ranks
+
+
 def sort_ensembles_by_reactivation_strength(
     reactivation_strength: np.ndarray, n_top: int = 2
 ) -> np.ndarray:
@@ -327,7 +360,6 @@ def classify_and_sort_place_cells(
     in ensemble A (top), ensemble B (middle) or neither (bottom; for the purposes of this illustration, large
     weights were those ≥1 s.d. above the mean for each template).
     """
-    # TODO: args and returns
     weights_a = ensemble_matrix[:, top_ensembles[0]]
     weights_b = ensemble_matrix[:, top_ensembles[1]]
 
@@ -352,25 +384,39 @@ def classify_and_sort_place_cells(
 
 
 def plot_ensemble_reactivation(
-    reactivation_strength: np.ndarray, top_ensembles: np.ndarray
+    reactivation_strength: np.ndarray,
+    top_ensembles: np.ndarray,
+    shuffled: bool,
+    smooth: bool = False,
 ) -> None:
+    # TODO: remove the shuffled tag, this is dumb
     """
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
     """
     colours = ["r", "b"]
     reactivation_strength_z_scored = zscore(reactivation_strength, axis=1)
-    plt.figure()
+    if smooth:
+        reactivation_strength_z_scored = gaussian_filter1d(
+            reactivation_strength_z_scored, 30
+        )
+    plt.figure(figsize=(14, 4))
     for i, idx in enumerate(top_ensembles):
         plt.plot(
             reactivation_strength_z_scored[idx, :],
             color=colours[i],
             label=f"ensemble {i}",
         )
+    plt.ylim(-1.5, 7)
     plt.xlabel("Time (frames)")
     plt.ylabel("Reactivation strength (zscored)")
     plt.tight_layout()
-    # TODO: Change back
-    plt.savefig("plots/ensemble_reactivation_shuffled.svg", dpi=300)
+    # TODO: change back!
+    file_name = (
+        f"plots/{mouse}_{date}_ensemble_reactivation_shuffled.svg"
+        if shuffled
+        else f"plots/{mouse}_{date}_ensemble_reactivation.svg"
+    )
+    plt.savefig(file_name, dpi=300)
 
 
 def plot_cell_weights(ensemble_matrix: np.ndarray, top_ensembles: np.ndarray) -> None:
@@ -394,19 +440,17 @@ def plot_cell_weights(ensemble_matrix: np.ndarray, top_ensembles: np.ndarray) ->
         x=n_a,
         color=colours[0],
         linestyle="dotted",
-        zorder=3,
     )
     plt.axvline(
         x=n_a + n_b,
         color=colours[1],
         linestyle="dotted",
-        zorder=3,
     )
     # we changed the place cell no through sorting, should it be place cell ID as in Grosmark et al.?
     plt.xlabel("Place cell ID")
     plt.ylabel("Cell weight in template")
     plt.tight_layout()
-    plt.savefig("plots/cell_weights.svg", dpi=300)
+    plt.savefig(f"plots/{mouse}_{date}_cell_weights.svg", dpi=300)
 
 
 def plot_smoothed_offline_firing_rate_raster(reactivation: np.ndarray) -> None:
@@ -418,19 +462,20 @@ def plot_smoothed_offline_firing_rate_raster(reactivation: np.ndarray) -> None:
         ensemble_matrix, top_ensembles
     )
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
-    # plt.imshow(offline_activity_matrix[sorted_cells, :], cmap="gray")
+    # TODO: axis labels!
     plt.imshow(
         offline_activity_matrix[sorted_cells, :],
-        cmap="gray",
-        # cmap="gray_r",
+        cmap="gray_r",
         aspect="auto",
-        vmin=0,
-        vmax=np.percentile(offline_activity_matrix, 99),
+        # vmin=0,
+        # vmax=np.percentile(offline_activity_matrix, 99),
     )
-    print(offline_activity_matrix.shape)
-    print(np.min(offline_activity_matrix), np.max(offline_activity_matrix))
+    plt.ylabel("Place cell ID")
+    plt.xlabel("Frames")
     plt.tight_layout()
-    plt.savefig("plots/smoothed_offline_firing_rate_raster.svg", dpi=300)
+    plt.savefig(
+        f"plots/{mouse}_{date}_smoothed_offline_firing_rate_raster.svg", dpi=300
+    )
 
 
 # def main():
@@ -439,11 +484,14 @@ if __name__ == "__main__":
     date = "2025-03-28"
 
     verbose = True
+    use_cache = True
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
     if not session.wheel_freeze:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
+
+    cache_file = HERE / f"{session.mouse_name}_{session.date}_place_cells.npy"
     positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
         session,
         wheel_circumference=get_wheel_circumference_from_rig(
@@ -455,7 +503,7 @@ if __name__ == "__main__":
         start=30,
         end=160,
     )
-    spks, _, _, _ = load_data(
+    spks_raw, _, _, _ = load_data(
         session,
         TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
         "spks",
@@ -464,22 +512,40 @@ if __name__ == "__main__":
     # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
     # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.
     online_spks = binarise_spikes(
-        spks[
+        spks_raw[
             :,
             session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
         ],
-        threshold=1.5,
+        mad_threshold=1.5,
     )
-    t1 = time.time()
-    pcs_mask = get_place_cell_mask(
-        session=session, spks=online_spks, rewarded=None, config=config
+    offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
+        flu=spks_raw, wheel_freeze=session.wheel_freeze
     )
-    print(f"Time to get place cells: {time.time() - t1}")
-    place_cells = online_spks[pcs_mask, :]
-    reactivation = binarise_spikes(
-        get_reactivation(flu=spks, wheel_freeze=session.wheel_freeze),
-        threshold=1.25,
-    )[pcs_mask]
+    # TODO: should pre and post be binarised as one??
+    offline_spks_pre = binarise_spikes(
+        offline_spks_pre,
+        mad_threshold=1.25,
+    )
+    offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
+    spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
+    # TODO: shape is off by one frame (pre is one short), do we care?
+    # assert spks_raw.shape == spks.shape
+    if not use_cache:
+        t1 = time.time()
+        # TODO: why is place cells now soooo low (23 vs 101 before??)
+        # TODO: probably slicing issue??? Put back the pre-period!!!
+        pcs_mask = get_place_cell_mask(
+            session=session, spks=spks, rewarded=None, config=config
+        )
+        print(f"Time to get place cells: {time.time() - t1}")
+
+    else:
+        print("Using cached pcs mask")
+        pcs_mask = np.load(cache_file)
+    place_cells = spks[pcs_mask, :]
+    reactivation = offline_spks_post[pcs_mask]
+    preactivation = offline_spks_pre[pcs_mask]
+    # ONLINE
     running_bouts = get_running_bouts(
         place_cells=place_cells,
         speed=speed,
@@ -492,18 +558,34 @@ if __name__ == "__main__":
     print("Got ssp vectors")
     ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
     print("Got ensemble matrix")
-    # square_projection = square_projection_matrix(arr=ensemble_matrix)
-    # print("Got square projection matrix")
+    if verbose:
+        print(f"# place cells: {running_bouts.shape[0]}")
+        print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
+    # OFFLINE
     reactivation_strength = offline_reactivation(
         reactivation=reactivation, ensemble_matrix=ensemble_matrix
     )
-    pcc_scores = compute_pcc_scores(
-        reactivation=reactivation, ensemble_matrix=ensemble_matrix
+    preactivation_strength = offline_reactivation(
+        reactivation=preactivation, ensemble_matrix=ensemble_matrix
     )
+    pcc_scores = get_normalised_pcc_scores(
+        reactivation=reactivation,
+        preactivation=preactivation,
+        ensemble_matrix=ensemble_matrix,
+    )
+    # TODO: Move or remove eventually
+    plt.figure()
+    plt.plot(pcc_scores)
+    plt.savefig("plots/pcc_scores.svg", dpi=300)
+    plt.close()
+
     # """ICA components were shuffled by randomly permuting the weight matrix w across
     # PCs and recalculating the reactivation strength."""
+    # TODO: Where do they use the shuffled ICA components???
     ensemble_matrix_shuffled = np.copy(ensemble_matrix)
-    np.random.shuffle(ensemble_matrix_shuffled)
+    # ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
+    ensemble_matrix_shuffled = shuffle(ensemble_matrix)
+    # np.random.shuffle(ensemble_matrix_shuffled)
     reactivation_strength_shuffled = offline_reactivation(
         reactivation=reactivation, ensemble_matrix=ensemble_matrix_shuffled
     )
@@ -513,13 +595,19 @@ if __name__ == "__main__":
     sorted_place_cells = classify_and_sort_place_cells(
         ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles
     )
-    if verbose:
-        print(f"# place cells: {running_bouts.shape[0]}")
-        print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
-    # plot_ensemble_reactivation(
-    #     reactivation_strength=reactivation_strength_shuffled,
-    #     top_ensembles=top_ensembles,
-    # )
+    # TODO: Change back
+    plot_ensemble_reactivation(
+        reactivation_strength=reactivation_strength,
+        top_ensembles=top_ensembles,
+        shuffled=False,
+        smooth=True,
+    )
+    plot_ensemble_reactivation(
+        reactivation_strength=reactivation_strength_shuffled,
+        top_ensembles=top_ensembles,
+        shuffled=True,
+        smooth=True,
+    )
     plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
     plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
 
