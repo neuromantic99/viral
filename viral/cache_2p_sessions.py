@@ -53,6 +53,19 @@ logging.info("Starting 2p cacher")
 logger = logging.getLogger("2p_cacher")
 
 
+def compute_clock_offset(
+    epochs: np.ndarray,
+    frame_times_daq: np.ndarray,
+    daq_start_time: datetime,
+    sampling_rate: int,
+) -> datetime:
+    clock_offset = time_list_to_datetime(epochs[0]) - (
+        daq_start_time + timedelta(seconds=float(frame_times_daq[0] / sampling_rate))
+    )
+    print(f"DAQ clock and ScanImage clock offset: {clock_offset}")
+    return clock_offset
+
+
 def sanity_check_imaging_frames(
     frame_times: np.ndarray, sampling_rate: float, frame_clock: np.ndarray
 ) -> None:
@@ -186,7 +199,7 @@ def extract_frozen_wheel_chunks(
     ), "First chunk length does not match expected length"
     assert (
         15 * 60 * sampling_rate
-        <= (last_chunk_times[-1] - last_chunk_times[0])
+        <= (first_chunk_times[-1] - first_chunk_times[0])
         <= 20 * 60 * sampling_rate
     ), "First chunk length does not match expected length"
 
@@ -213,6 +226,8 @@ def extract_frozen_wheel_chunks(
 
 def add_imaging_info_to_trials(
     tdms_path: Path,
+    mouse_name: str,
+    date: int,
     tiff_directory: Path,
     trials: List[TrialInfo],
     wheel_blocked: bool = False,
@@ -258,6 +273,119 @@ def add_imaging_info_to_trials(
 
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
+    if mouse_name == "JB031" and date == "2025-03-31":
+        # stack_lengths_tiffs
+        # array([   161,  27000,    294, 113116,    165,  23307])
+        # chunk_lengths_daq
+        # array([  1325,   3224,    147,    296, 113118,    167,  23309,    657])
+        # cut out the failed recordings
+        stack_lengths_tiffs = np.array([294, 113116, 165, 23307])
+        chunk_lengths_daq = np.array([296, 113118, 167, 23309])
+        bad_tiff_len = sum([161, 27000])
+        # TODO: timestamps are off by almost exactly one hour, is it due to BST change on 30/03/25, just one day before?fr
+        all_tiff_timestamps = all_tiff_timestamps[bad_tiff_len:]
+        # TODO: add some docstring what each variable is!!!!
+        # epochs refer to the start time of each tiff file!!! they are in a matlab format, that's why each epoch has 6 values
+        epochs = np.delete(epochs, [0, 1], axis=0)  # remove rows 1 and 2
+        bad_daq_len_pre = sum([1325, 3224, 147])
+        bad_daq_len_post = 657
+        frame_times_daq = frame_times_daq[bad_daq_len_pre:-bad_daq_len_post]
+        # TODO: CAUTION!!! Validate that the clocks were 1hr apart!
+        clock_offset = time_list_to_datetime(epochs[0]) - (
+            daq_start_time
+            + timedelta(seconds=float(frame_times_daq[0] / sampling_rate))
+        )
+        print(f"DAQ clock and ScanImage clock offset: {clock_offset}")
+        frame_times_daq = frame_times_daq + clock_offset.total_seconds()
+        daq_start_time = daq_start_time + clock_offset
+
+    if mouse_name == "JB031" and date == "2025-04-01":
+        # stack_lengths_tiffs
+        # array([27000, 94469, 16183, 27000])
+        # chunk_lengths_daq
+        # array([27000,   246,   423, 94471, 16185, 27000])
+        # TODO: CAUTION!!! Validate that the clocks were 1hr apart!
+        clock_offset = time_list_to_datetime(epochs[0]) - (
+            daq_start_time
+            + timedelta(seconds=float(frame_times_daq[0] / sampling_rate))
+        )
+        print(f"DAQ clock and ScanImage clock offset: {clock_offset}")
+        frame_times_daq = frame_times_daq + clock_offset.total_seconds()
+        daq_start_time = daq_start_time + clock_offset
+        chunk_lengths_daq = np.delete(chunk_lengths_daq, [1, 2])
+        frame_times_daq = np.concatenate(
+            [frame_times_daq[:27000], frame_times_daq[sum([27000, 246, 423]) :]]
+        )
+
+        # TODO: remove
+        plt.figure(figsize=(10, 5))
+        time_since_daq_start = frame_times_daq / sampling_rate  # X-axis
+        frame_indices = np.arange(len(frame_times_daq))  # Y-axis
+        plt.plot(
+            frame_indices,
+            time_since_daq_start,
+            label="Frame time (sec since DAQ start)",
+            color="green",
+        )
+        plt.axhline(0, color="red", linestyle="--", label="DAQ start")
+        plt.savefig(HERE / "frame_times.svg", dpi=300)
+
+    if mouse_name == "JB031" and date == "2025-04-02":
+        stack_lengths_tiffs = np.delete(stack_lengths_tiffs, 0)
+        all_tiff_timestamps = all_tiff_timestamps[27000:]
+        epochs = np.delete(epochs, 0, axis=0)
+        clock_offset = compute_clock_offset(
+            epochs=epochs,
+            frame_times_daq=frame_times_daq,
+            daq_start_time=daq_start_time,
+            sampling_rate=sampling_rate,
+        )
+        print(f"DAQ clock and ScanImage clock offset: {clock_offset}")
+    if mouse_name == "JB031" and date == "2025-04-03":
+        # stack_lengths_tiffs
+        # array([ 27000, 116771,  27000])
+        # chunk_lengths_daq
+        # array([ 27000, 116773,     46,  27000,   3028,   2634])
+        assert sum(chunk_lengths_daq) == len(frame_times_daq)
+        chunk_lengths_daq = np.delete(chunk_lengths_daq, [2, 4, 5])
+        frame_times_daq = np.concatenate(
+            [
+                frame_times_daq[0:27000],
+                frame_times_daq[27000:143773],
+                frame_times_daq[143819:170819],
+            ]
+        )
+        assert sum(chunk_lengths_daq) == len(frame_times_daq)
+        clock_offset = compute_clock_offset(
+            epochs=epochs,
+            frame_times_daq=frame_times_daq,
+            daq_start_time=daq_start_time,
+            sampling_rate=sampling_rate,
+        )
+        frame_times_daq = frame_times_daq + clock_offset.total_seconds()
+        daq_start_time = daq_start_time + clock_offset
+
+    if mouse_name == "JB031" and date == "2025-04-04":
+        # stack_lengths_tiffs
+        # array([ 27000, 108943,  27000])
+        # chunk_lengths_daq
+        # array([   104,  27000, 108945,  27000])
+        assert sum(chunk_lengths_daq) == len(frame_times_daq)
+        print(f"All tiff timestamps: {all_tiff_timestamps.shape}")
+        print(f"Stack lengths tiffs: {sum(stack_lengths_tiffs)}")
+        chunk_lengths_daq = np.delete(chunk_lengths_daq, 0)
+        frame_times_daq = frame_times_daq[104:]
+        print(f"Frame times daq: {frame_times_daq.shape}")
+        assert sum(chunk_lengths_daq) == len(frame_times_daq)
+        clock_offset = compute_clock_offset(
+            epochs=epochs,
+            frame_times_daq=frame_times_daq,
+            daq_start_time=daq_start_time,
+            sampling_rate=sampling_rate,
+        )
+        frame_times_daq = frame_times_daq + clock_offset.total_seconds()
+        daq_start_time = daq_start_time + clock_offset
+
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
     valid_frame_times = get_valid_frame_times(
@@ -267,12 +395,17 @@ def add_imaging_info_to_trials(
     )
 
     if wheel_blocked:
-        frozen_wheel_chunks = extract_frozen_wheel_chunks(
-            stack_lengths_tiffs=stack_lengths_tiffs,
-            valid_frame_times=valid_frame_times,
-            behaviour_times=behaviour_times,
-            sampling_rate=sampling_rate,
-        )
+        if mouse_name == "JB031" and date == "2025-03-31":
+            # TODO better check again did this at 11:30 PM on a Friday
+            # manually give frame indices for start and end of frozen wheel chunks
+            frozen_wheel_chunks = ((0, 27000), (113575, 136882))
+        else:
+            frozen_wheel_chunks = extract_frozen_wheel_chunks(
+                stack_lengths_tiffs=stack_lengths_tiffs,
+                valid_frame_times=valid_frame_times,
+                behaviour_times=behaviour_times,
+                sampling_rate=sampling_rate,
+            )
 
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -373,6 +506,8 @@ def get_tiff_metadata(
             return stack_lengths, epochs, all_tiff_timestamps
 
     print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
+    print(tiff_paths)
+    print(len(tiff_paths))
     tiffs = [ScanImageTiffReader(str(tiff)) for tiff in tiff_paths]
     stack_lengths = [tiff.shape()[0] for tiff in tiffs]
     epochs = []
@@ -407,6 +542,7 @@ def get_tiff_metadata(
         assert (
             round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
         ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
+    print(len(epochs))
 
     if use_cache:
         for variable, name in zip(
@@ -455,6 +591,9 @@ def check_timestamps(
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
     chunk_start = time_list_to_datetime(epochs[epoch_trial])
 
+    # TODO for debugging, remove eventually
+    # offsets = list()
+
     for frame in range(first_frame_trial, last_frame_trial):
 
         # The time in the tiff. Not sure if this is the end or the start of the tiff
@@ -464,7 +603,9 @@ def check_timestamps(
         )
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
+        # offsets.append(offset)
 
+        # TODO comment back in!
         # Allow for some drift up to 15ms
         # Take into account that the recording in wheel block is 1.5x longer,
         # i.e. one minute into the behaviour is at least 15 mins into the entire session
@@ -473,6 +614,11 @@ def check_timestamps(
             assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
         else:
             assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
+    # plt.figure(figsize=(20, 8))
+    # plt.plot(offsets)
+    # plt.tight_layout()
+    # plt.savefig(HERE / "offsets.svg", dpi=300)
+    # 1 / 0
 
 
 def process_session(
@@ -487,7 +633,7 @@ def process_session(
 
     print(f"Off we go for {mouse_name} {date} {session_type}")
     trials, wheel_freeze = add_imaging_info_to_trials(
-        tdms_path, tiff_directory, trials, wheel_blocked
+        tdms_path, mouse_name, date, tiff_directory, trials, wheel_blocked
     )
 
     if wheel_blocked:
@@ -515,15 +661,16 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB032"]:
+    for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
 
-            try:
-                print(f"the type is {row['Type']}")
+            # try:
+            print(f"the type is {row['Type']}")
 
-                date = row["Date"]
-                session_type = row["Type"].lower()
+            date = row["Date"]
+            session_type = row["Type"].lower()
+            if date == "2025-04-04":
                 try:
                     wheel_blocked = row["Wheel blocked?"].lower() == "yes"
                 except KeyError as e:
@@ -570,12 +717,12 @@ def main() -> None:
                 logger.info(
                     f"Completed processing for {mouse_name} {date} {session_type}"
                 )
-            except Exception as e:
-                tb = traceback.extract_tb(e.__traceback__)
-                line_number = tb[-1].lineno  # Get the line number of the exception
-                msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
-                logger.debug(msg)
-                print(msg)
+        # except Exception as e:
+        #     tb = traceback.extract_tb(e.__traceback__)
+        #     line_number = tb[-1].lineno  # Get the line number of the exception
+        #     msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
+        #     logger.debug(msg)
+        #     print(msg)
 
 
 if __name__ == "__main__":
