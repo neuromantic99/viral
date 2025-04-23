@@ -3,6 +3,7 @@ import math
 from pathlib import Path
 from typing import List, Tuple, TypeVar, Any
 import warnings
+from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
@@ -222,6 +223,18 @@ def time_list_to_datetime(time_list: List[float]) -> datetime:
         int(time_list[4]),
         whole_seconds,
         int(fractional_seconds * 1e6),
+    )
+
+
+def uk_to_utc(dt: datetime) -> datetime:
+    """Converts a datetime object in UK time to UTC time and strips the timezone info for further calculations.
+    dt: datetime object in UK time
+
+    """
+    return (
+        dt.replace(tzinfo=ZoneInfo("Europe/London"))
+        .astimezone(ZoneInfo("UTC"))
+        .replace(tzinfo=None)
     )
 
 
