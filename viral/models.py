@@ -111,6 +111,13 @@ class Cached2pSession(BaseModel):
     session_type: str
 
 
+class Mouse2pSessions(BaseModel):
+    mouse_name: str
+    unsupervised: Cached2pSession
+    learning: Cached2pSession
+    learned: Cached2pSession
+
+
 class ImagedTrialInfo(BaseModel):
     trial_start_frame: int
     trial_end_frame: int
