@@ -1,6 +1,6 @@
 """Contains functions that act on fluorescence data, either spks or dff, either alone or with behavioural data"""
 
-from pathlib import Path
+from datetime import datetime, timedelta
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
@@ -11,6 +11,7 @@ from viral.utils import (
     get_wheel_circumference_from_rig,
     shuffle_rows,
     threshold_detect,
+    time_list_to_datetime,
 )
 
 from viral.constants import TIFF_UMBRELLA
@@ -292,3 +293,15 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
+
+
+def compute_clock_offset(
+    epochs: np.ndarray,
+    frame_times_daq: np.ndarray,
+    daq_start_time: datetime,
+    sampling_rate: int,
+) -> datetime:
+    """Compute offset between the DAQ clock and imaging clock."""
+    return time_list_to_datetime(epochs[0]) - (
+        daq_start_time + timedelta(seconds=float(frame_times_daq[0] / sampling_rate))
+    )

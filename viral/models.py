@@ -142,3 +142,13 @@ class GrosmarkConfig:
     bin_size: int
     start: int
     end: int
+
+
+@dataclass
+class SessionCorrection:
+    epochs: np.ndarray
+    all_tiff_timestamps: np.ndarray
+    stack_lengths_tiffs: np.ndarray
+    chunk_lengths_daq: np.ndarray
+    frame_times_daq: np.ndarray
+    offset_after_pre_epoch: int
