@@ -24,20 +24,13 @@ from viral.rastermap_utils import (
 )
 from viral.utils import (
     get_wheel_circumference_from_rig,
-    remove_diagonal,
-    shuffle_rows,
-    shuffle,
 )
 from viral.imaging_utils import (
-    activity_trial_position,
-    trial_is_imaged,
     get_preactivation_reactivation,
 )
 from viral.grosmark_analysis import (
     binarise_spikes,
     grosmark_place_field,
-    has_five_consecutive_trues,
-    filter_additional_check,
 )
 
 
@@ -157,6 +150,10 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     ica_transfomer.fit_transform(ssp_vectors.T)
     # mixing matrix (n_features, n_components)
     mixing_matrix = ica_transfomer.mixing_
+    # TODO: there are two ways of retrieving the components
+    # 1. ica_transfomer.components_ (n_components, n_features)
+    # 2. ica_transfomer.fit_transform(ssp_vectors.T) (n_samples, n_components)
+    # I think number 1 is correct for our use case? it would be components, frames
     significant_components = detect_significant_components(ica_transfomer.components_)
     return mixing_matrix[:, significant_components]
 
@@ -503,13 +500,11 @@ if __name__ == "__main__":
     plot_ensemble_reactivation(
         reactivation_strength=reactivation_strength,
         top_ensembles=top_ensembles,
-        shuffled=False,
         smooth=True,
     )
     plot_ensemble_reactivation(
         reactivation_strength=reactivation_strength_shuffled,
         top_ensembles=top_ensembles,
-        shuffled=True,
         smooth=True,
     )
     plot_cell_weights(
