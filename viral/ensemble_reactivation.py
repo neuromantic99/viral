@@ -396,8 +396,8 @@ def plot_smoothed_offline_firing_rate_raster(
     plt.show()
 
 
-if __name__ == "__main__":
-    mouse = "JB032"
+def main():
+    mouse = "JB031"
     date = "2025-03-28"
 
     verbose = True
@@ -507,11 +507,9 @@ if __name__ == "__main__":
         top_ensembles=top_ensembles,
         smooth=True,
     )
-    plot_cell_weights(
-        ensemble_matrix=ensemble_matrix,
-        top_ensembles=top_ensembles,
-        sorted_pcs=sorted_pcs,
-    )
-    plot_smoothed_offline_firing_rate_raster(
-        reactivation=reactivation, sorted_pcs=sorted_pcs
-    )
+    plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
+    plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
+
+
+if __name__ == "__main__":
+    main()
