@@ -5,7 +5,6 @@ from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
 from viral.models import TrialInfo, WheelFreeze
-from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     array_bin_mean,
     degrees_to_cm,

@@ -142,3 +142,10 @@ class GrosmarkConfig:
     bin_size: int
     start: int
     end: int
+
+
+@dataclass
+class SortedPlaceCells:
+    sorted_indices: np.ndarray
+    n_ensemble_a: int
+    n_ensemble_b: int

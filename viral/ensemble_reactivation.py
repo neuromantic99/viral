@@ -14,7 +14,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 from viral.constants import TIFF_UMBRELLA
-from viral.models import Cached2pSession, GrosmarkConfig
+from viral.models import Cached2pSession, GrosmarkConfig, SortedPlaceCells
 from viral.rastermap_utils import (
     load_data,
     align_validate_data,
@@ -35,101 +35,20 @@ from viral.imaging_utils import (
 )
 from viral.grosmark_analysis import (
     binarise_spikes,
+    grosmark_place_field,
     has_five_consecutive_trues,
     filter_additional_check,
 )
 
 
-def get_place_cell_mask(
-    session: Cached2pSession,
-    spks: np.ndarray,
-    rewarded: bool | None,
-    config: GrosmarkConfig,
-) -> np.ndarray:
-    """Returns a boolean mask of place cells among all cells in spks.
-    Compare to grosmark_place_field."""
-
-    n_cells_total = spks.shape[0]
-    sigma_cm = 7.5
-    sigma_bins = sigma_cm / config.bin_size
-    n_shuffles = 2000
-
-    all_trials = np.array(
-        [
-            activity_trial_position(
-                trial=trial,
-                flu=spks,
-                wheel_circumference=get_wheel_circumference_from_rig("2P"),
-                bin_size=config.bin_size,
-                start=config.start,
-                max_position=config.end,
-                verbose=False,
-                do_shuffle=False,
-                smoothing_sigma=sigma_bins,
-            )
-            for trial in session.trials
-            if trial_is_imaged(trial)
-            and (rewarded is None or trial.texture_rewarded == rewarded)
-        ]
-    )
-
-    smoothed_matrix = np.mean(all_trials, axis=0)
-
-    shuffled_matrices = np.array(
-        [
-            np.mean(
-                np.array(
-                    [
-                        activity_trial_position(
-                            trial=trial,
-                            flu=spks,
-                            wheel_circumference=get_wheel_circumference_from_rig("2P"),
-                            bin_size=config.bin_size,
-                            start=config.start,
-                            max_position=config.end,
-                            verbose=False,
-                            do_shuffle=True,
-                            smoothing_sigma=sigma_bins,
-                        )
-                        for trial in session.trials
-                        if trial_is_imaged(trial)
-                        and (rewarded is None or trial.texture_rewarded == rewarded)
-                    ]
-                ),
-                axis=0,
-            )
-            for _ in range(n_shuffles)
-        ]
-    )
-
-    # Threshold (99th percentile of shuffled matrices)
-    place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
-
-    # filter firing above threshold in at least 5 consecutive bins
-    initial_pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
-
-    # apply lap-based filter
-    final_pcs = filter_additional_check(
-        all_trials=all_trials[:, initial_pcs, :],
-        place_threshold=place_threshold[initial_pcs, :],
-        smoothed_matrix=smoothed_matrix[initial_pcs, :],
-    )
-
-    # final mask in original cell template
-    place_cell_mask = np.zeros(n_cells_total, dtype=bool)
-    place_cell_mask[np.flatnonzero(initial_pcs)] = final_pcs
-    return place_cell_mask
-
-
 def process_behaviour(
-    # TODO: add args and return
     session: Cached2pSession,
     wheel_circumference: float,
     speed_bin_size: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
-    signal, xpos, ypos, trials = load_data(session, s2p_path, "spks")
+    signal, _, _, trials = load_data(session, s2p_path, "spks")
     aligned_trial_frames, neural_data_trials = align_validate_data(signal, trials)
     imaged_trials_infos = process_trials_data(
         trials,
@@ -173,7 +92,7 @@ def get_running_bouts(
 ) -> np.ndarray:
     # TODO: do we want to keep the ITI out?
     # TODO: do we want to have start end and stuff same as in grosmark config??
-    # TODO: what are missing frames here? not imaged trials?
+    # TODO: think about the speed_threshold, arbitrarily set it to 5 cm/s
     trial_activities = list()
     for start, end, _ in aligned_trial_frames:
         trial_activity = place_cells[:, start : end + 1]
@@ -182,7 +101,7 @@ def get_running_bouts(
     behaviour_mask = filter_speed_position(
         speed=speed,
         frames_positions=frames_positions,
-        speed_threshold=1,  # cm/s
+        speed_threshold=2,  # cm/s
         position_threshold=None,
     ) & filter_out_ITI(ITI_starts_ends=ITI_starts_ends, positions=frames_positions)
     return place_cells_behaviour[:, behaviour_mask]
@@ -204,7 +123,7 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
     """
     Use Marcenko-Pastur distribution to detect significant compontents.
 
-    'Only the subset of components found to be significant under the Marcenko–Pasteur
+    'Only the subset of components found to be significant under the Marcenko-Pasteur
     distribution were considered ICA ensembles and included in the ICA ensemble
     matrix w, with rows corresponding to PCs and columns corresponding to
     significant ICA components.' (Grosmark et al., 2021)
@@ -215,7 +134,6 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
 
     ica_comp_z = zscore(ica_comp, axis=1, ddof=1)
     assert np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0, rtol=1e-5)
-    np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0)
     corr_matrix = np.corrcoef(ica_comp_z)
     eigenvalues = eigvalsh(corr_matrix)
 
@@ -232,10 +150,11 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     distribution were considered ICA ensembles and included in the ICA ensemble
     matrix w, with rows corresponding to PCs and columns corresponding to
     significant ICA components."""
-    ica_transfomer = FastICA()
+    # TODO: keep random state as ICA is non-deterministic to keep results reproducible?
+    ica_transfomer = FastICA(random_state=999)
     # expected input: (n_samples, n_features)
     # independent components (frames, components)
-    independent_components = ica_transfomer.fit_transform(ssp_vectors.T)
+    ica_transfomer.fit_transform(ssp_vectors.T)
     # mixing matrix (n_features, n_components)
     mixing_matrix = ica_transfomer.mixing_
     significant_components = detect_significant_components(ica_transfomer.components_)
@@ -249,7 +168,7 @@ def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
 
 
 def offline_reactivation(
-    reactivation: np.ndarray, ensemble_matrix: np.ndarray
+    reactivation: np.ndarray, ensemble_matrix: np.ndarray, do_shuffle: bool = False
 ) -> np.ndarray:
     """
     For each component, b, of ICA ensemble matrix w, a
@@ -263,20 +182,28 @@ def offline_reactivation(
     of the bth ICA component was calculated as the square of the projection length of Zi on Pb as follows:
     Rbi = ZiT * Pb * Zb
     """
+    # is Z_b a typo in the Grosmark paper? It would be ZiT * Pb * Zi
+
+    if do_shuffle:
+        # """ICA components were shuffled by randomly permuting the weight matrix w across
+        # PCs and recalculating the reactivation strength."""
+        # Shuffling columns, i.e. ICA components, like Grosmark?
+        ensemble_matrix = ensemble_matrix[
+            :, np.random.permutation(ensemble_matrix.shape[1])
+        ]
+
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
     n_components = ensemble_matrix.shape[1]
     n_timepoints = reactivation.shape[1]
     reactivation_strength = np.zeros((n_components, n_timepoints))
     for b in range(n_components):
         wb = ensemble_matrix[:, b]  # shape: (place cells,)
-        pb = np.outer(wb, wb)
-        np.fill_diagonal(pb, 0)  # shape: (place cells, place cells)
-        # pb = remove_diagonal(pb)
+        pb = np.outer(wb, wb)  # shape: (place cells, place cells)
+        np.fill_diagonal(pb, 0)  # shape: (place cells, place cells); diagonal set to 0
         for i in range(n_timepoints):
             zi = offline_activity_matrix[:, i]  # shape: (place cells,)
-            # is Z_b a typo in the Grosmark paper? It would be ZiT * Pb * Zi
-            projection = zi.T @ pb @ zi
-            reactivation_strength[b, i] = projection
+            # Rbi = ZiT * Pb * Zi
+            reactivation_strength[b, i] = zi.T @ pb @ zi
     return reactivation_strength
 
 
@@ -328,14 +255,10 @@ def get_normalised_pcc_scores(
     )
 
     assert reactivation.shape[0] == preactivation.shape[0]
-    # n_cells = reactivation.shape[0]
 
+    # TODO: should there be a normalisation step?
     post_ranks = rankdata(post_pcc_scores)
     pre_ranks = rankdata(pre_pcc_scores)
-
-    # TODO: No normalisation? 'a normalized PCC score was taken per session as the pre to post change in within-epoch PCC rank.'
-    # pre_ranks_norm = (pre_ranks - 1) / (n_cells - 1)
-    # post_ranks_norm = (post_ranks - 1) / (n_cells - 1)
 
     return post_ranks - pre_ranks
 
@@ -347,7 +270,7 @@ def sort_ensembles_by_reactivation_strength(
     In Fig. 4j, panel II, it is not clear how they got to their 'run ensembles' A and B.
     I assumed, they select the two ensembles with the strongest reactivation.
     """
-    # TODO: should we normalise?
+    # TODO: should we normalise? right now it is the strongest ensembles in total
     total_strength = np.sum(reactivation_strength, axis=1)
     sorted_indices = np.argsort(total_strength)[::-1]
     return sorted_indices[:n_top]
@@ -357,9 +280,9 @@ def classify_and_sort_place_cells(
     ensemble_matrix: np.ndarray, top_ensembles: np.ndarray
 ) -> tuple[np.ndarray, int, int]:
     """
-    Panel (iii) shows the ICA component for each PC, with dashed lines separating those cells with large weights
+    'Panel (iii) shows the ICA component for each PC, with dashed lines separating those cells with large weights
     in ensemble A (top), ensemble B (middle) or neither (bottom; for the purposes of this illustration, large
-    weights were those ≥1 s.d. above the mean for each template).
+    weights were those ≥1 s.d. above the mean for each template)'.
     """
     weights_a = ensemble_matrix[:, top_ensembles[0]]
     weights_b = ensemble_matrix[:, top_ensembles[1]]
@@ -381,16 +304,18 @@ def classify_and_sort_place_cells(
     ]
 
     sorted_indices = np.concatenate([a_only_sorted, b_only_sorted, neither_sorted])
-    return sorted_indices, len(a_only_sorted), len(b_only_sorted)
+    return SortedPlaceCells(
+        sorted_indices=sorted_indices,
+        n_ensemble_a=len(a_only_sorted),
+        n_ensemble_b=len(b_only_sorted),
+    )
 
 
 def plot_ensemble_reactivation(
     reactivation_strength: np.ndarray,
     top_ensembles: np.ndarray,
-    shuffled: bool,
     smooth: bool = False,
 ) -> None:
-    # TODO: remove the shuffled tag, this is dumb
     """
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
     """
@@ -411,29 +336,26 @@ def plot_ensemble_reactivation(
     plt.xlabel("Time (frames)")
     plt.ylabel("Reactivation strength (zscored)")
     plt.tight_layout()
-    # TODO: change back!
-    file_name = (
-        f"plots/{mouse}_{date}_ensemble_reactivation_shuffled.svg"
-        if shuffled
-        else f"plots/{mouse}_{date}_ensemble_reactivation.svg"
-    )
-    plt.savefig(file_name, dpi=300)
+    # plt.savefig(f"plots/{mouse}_{date}_ensemble_reactivation.svg", dpi=300)
+    plt.show()
 
 
-def plot_cell_weights(ensemble_matrix: np.ndarray, top_ensembles: np.ndarray) -> None:
+def plot_cell_weights(
+    ensemble_matrix: np.ndarray, top_ensembles: np.ndarray, sorted_pcs: SortedPlaceCells
+) -> None:
     """
     Producing Fig. 4j, panel III. Plotting each cell's weight in the top ICA components/ensembles.
     """
     colours = ["r", "b"]
-    sorted_cells, n_a, n_b = classify_and_sort_place_cells(
-        ensemble_matrix, top_ensembles
+    sorted_cells, n_a, n_b = (
+        sorted_pcs.sorted_indices,
+        sorted_pcs.n_ensemble_a,
+        sorted_pcs.n_ensemble_b,
     )
     plt.figure()
     for i, idx in enumerate(top_ensembles):
         plt.plot(
             ensemble_matrix[sorted_cells, idx],
-            # marker="o",
-            # linestyle="",
             color=colours[i],
             label=f"ensemble {i}",
         )
@@ -447,41 +369,38 @@ def plot_cell_weights(ensemble_matrix: np.ndarray, top_ensembles: np.ndarray) ->
         color=colours[1],
         linestyle="dotted",
     )
-    # we changed the place cell no through sorting, should it be place cell ID as in Grosmark et al.?
+    # calling it place cell ID as in Grosmark et al. as the order has been changed by sorting
     plt.xlabel("Place cell ID")
     plt.ylabel("Cell weight in template")
     plt.tight_layout()
-    plt.savefig(f"plots/{mouse}_{date}_cell_weights.svg", dpi=300)
+    # plt.savefig(f"plots/{mouse}_{date}_cell_weights.svg", dpi=300)
+    plt.show()
 
 
-def plot_smoothed_offline_firing_rate_raster(reactivation: np.ndarray) -> None:
+def plot_smoothed_offline_firing_rate_raster(
+    reactivation: np.ndarray, sorted_pcs: SortedPlaceCells
+) -> None:
     """
     Producing Fig. 4j, panel IV. Plotting the smoothed offline firing rate raster.
     """
-    # TODO: make this a dataclass or some kind of argument
-    sorted_cells, n_a, n_b = classify_and_sort_place_cells(
-        ensemble_matrix, top_ensembles
-    )
+    sorted_cells = sorted_pcs.sorted_indices
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
-    # TODO: axis labels!
     plt.imshow(
         offline_activity_matrix[sorted_cells, :],
         cmap="gray_r",
         aspect="auto",
-        # vmin=0,
-        # vmax=np.percentile(offline_activity_matrix, 99),
     )
     plt.ylabel("Place cell ID")
     plt.xlabel("Frames")
     plt.tight_layout()
-    plt.savefig(
-        f"plots/{mouse}_{date}_smoothed_offline_firing_rate_raster.svg", dpi=300
-    )
+    # plt.savefig(
+    #     f"plots/{mouse}_{date}_smoothed_offline_firing_rate_raster.svg", dpi=300
+    # )
+    plt.show()
 
 
-# def main():
 if __name__ == "__main__":
-    mouse = "JB031"
+    mouse = "JB032"
     date = "2025-03-28"
 
     verbose = True
@@ -493,11 +412,13 @@ if __name__ == "__main__":
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
 
     cache_file = HERE.parent / f"{session.mouse_name}_{session.date}_place_cells.npy"
+    # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
     positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
         session,
         wheel_circumference=get_wheel_circumference_from_rig(
             "2P",
         ),
+        speed_bin_size=30,
     )
     config = config = GrosmarkConfig(
         bin_size=2,
@@ -509,9 +430,9 @@ if __name__ == "__main__":
         TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
         "spks",
     )
-    # Based on the observed differences in calcium activity waveforms between the online and
+    # """Based on the observed differences in calcium activity waveforms between the online and
     # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-    # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.
+    # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
     online_spks = binarise_spikes(
         spks_raw[
             :,
@@ -522,7 +443,7 @@ if __name__ == "__main__":
     offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
         flu=spks_raw, wheel_freeze=session.wheel_freeze
     )
-    # TODO: should pre and post be binarised as one??
+    # TODO: should pre and post be binarised as one?
     offline_spks_pre = binarise_spikes(
         offline_spks_pre,
         mad_threshold=1.25,
@@ -536,10 +457,8 @@ if __name__ == "__main__":
         pcs_mask = np.load(cache_file)
     else:
         t1 = time.time()
-        # TODO: why is place cells now soooo low (23 vs 101 before??)
-        # TODO: probably slicing issue??? Put back the pre-period!!!
-        pcs_mask = get_place_cell_mask(
-            session=session, spks=spks, rewarded=None, config=config
+        pcs_mask = grosmark_place_field(
+            session=session, spks=spks, rewarded=None, config=config, plot=False
         )
         np.save(cache_file, pcs_mask)
         print(f"Time to get place cells: {time.time() - t1}")
@@ -554,12 +473,10 @@ if __name__ == "__main__":
         ITI_starts_ends=ITI_starts_ends,
         aligned_trial_frames=aligned_trial_frames,
     )
-    print("Got running bouts")
     ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
-    print("Got ssp vectors")
     ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
-    print("Got ensemble matrix")
     if verbose:
+        print(f"# frames with running: {running_bouts.shape[1]}")
         print(f"# place cells: {running_bouts.shape[0]}")
         print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
     # OFFLINE
@@ -574,29 +491,15 @@ if __name__ == "__main__":
         preactivation=preactivation,
         ensemble_matrix=ensemble_matrix,
     )
-    # TODO: Move or remove eventually
-    plt.figure()
-    plt.plot(pcc_scores)
-    plt.savefig("plots/pcc_scores.svg", dpi=300)
-    plt.close()
-
-    # """ICA components were shuffled by randomly permuting the weight matrix w across
-    # PCs and recalculating the reactivation strength."""
-    # TODO: Where do they use the shuffled ICA components???
-    ensemble_matrix_shuffled = np.copy(ensemble_matrix)
-    # ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
-    ensemble_matrix_shuffled = shuffle(ensemble_matrix)
-    # np.random.shuffle(ensemble_matrix_shuffled)
     reactivation_strength_shuffled = offline_reactivation(
-        reactivation=reactivation, ensemble_matrix=ensemble_matrix_shuffled
+        reactivation=reactivation, ensemble_matrix=ensemble_matrix, do_shuffle=True
     )
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength
     )
-    sorted_place_cells = classify_and_sort_place_cells(
+    sorted_pcs = classify_and_sort_place_cells(
         ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles
     )
-    # TODO: Change back
     plot_ensemble_reactivation(
         reactivation_strength=reactivation_strength,
         top_ensembles=top_ensembles,
@@ -609,9 +512,11 @@ if __name__ == "__main__":
         shuffled=True,
         smooth=True,
     )
-    plot_cell_weights(ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles)
-    plot_smoothed_offline_firing_rate_raster(reactivation=reactivation)
-
-
-# if __name__ == "__main__":
-#     main()
+    plot_cell_weights(
+        ensemble_matrix=ensemble_matrix,
+        top_ensembles=top_ensembles,
+        sorted_pcs=sorted_pcs,
+    )
+    plot_smoothed_offline_firing_rate_raster(
+        reactivation=reactivation, sorted_pcs=sorted_pcs
+    )
