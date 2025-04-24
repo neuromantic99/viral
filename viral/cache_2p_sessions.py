@@ -273,29 +273,34 @@ def add_imaging_info_to_trials(
 
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
+    print([time_list_to_datetime(epochs[i]) for i in range(len(epochs))])
+
     if mouse_name == "JB031" and date == "2025-03-31":
         # stack_lengths_tiffs
         # array([   161,  27000,    294, 113116,    165,  23307])
         # chunk_lengths_daq
         # array([  1325,   3224,    147,    296, 113118,    167,  23309,    657])
         # cut out the failed recordings
+        assert all_tiff_timestamps.shape[0] == sum(stack_lengths_tiffs)
         stack_lengths_tiffs = np.array([294, 113116, 165, 23307])
         chunk_lengths_daq = np.array([296, 113118, 167, 23309])
         bad_tiff_len = sum([161, 27000])
-        # TODO: timestamps are off by almost exactly one hour, is it due to BST change on 30/03/25, just one day before?fr
         all_tiff_timestamps = all_tiff_timestamps[bad_tiff_len:]
+        assert all_tiff_timestamps.shape[0] == sum(stack_lengths_tiffs)
+        # Calculate cumulative sums for chunk starts
         # TODO: add some docstring what each variable is!!!!
         # epochs refer to the start time of each tiff file!!! they are in a matlab format, that's why each epoch has 6 values
         epochs = np.delete(epochs, [0, 1], axis=0)  # remove rows 1 and 2
         bad_daq_len_pre = sum([1325, 3224, 147])
         bad_daq_len_post = 657
         frame_times_daq = frame_times_daq[bad_daq_len_pre:-bad_daq_len_post]
-        # TODO: CAUTION!!! Validate that the clocks were 1hr apart!
-        clock_offset = time_list_to_datetime(epochs[0]) - (
-            daq_start_time
-            + timedelta(seconds=float(frame_times_daq[0] / sampling_rate))
+        assert sum(chunk_lengths_daq) == len(frame_times_daq)
+        clock_offset = compute_clock_offset(
+            epochs=epochs,
+            frame_times_daq=frame_times_daq,
+            daq_start_time=daq_start_time,
+            sampling_rate=sampling_rate,
         )
-        print(f"DAQ clock and ScanImage clock offset: {clock_offset}")
         frame_times_daq = frame_times_daq + clock_offset.total_seconds()
         daq_start_time = daq_start_time + clock_offset
 
@@ -392,6 +397,25 @@ def add_imaging_info_to_trials(
         stack_lengths_tiffs=stack_lengths_tiffs,
         frame_times_daq=frame_times_daq,
         chunk_lengths_daq=chunk_lengths_daq,
+    )
+
+    validate_timestamps_by_chunk(
+        epochs=epochs,
+        all_tiff_timestamps=all_tiff_timestamps,
+        chunk_lens=chunk_lengths_daq,
+        valid_frame_times=valid_frame_times,
+        sampling_rate=sampling_rate,
+        daq_start_time=daq_start_time,
+    )
+
+    check_all_timestamps(
+        epochs=epochs,
+        all_tiff_timestamps=all_tiff_timestamps,
+        chunk_lens=chunk_lengths_daq,
+        valid_frame_times=valid_frame_times,
+        sampling_rate=sampling_rate,
+        daq_start_time=daq_start_time,
+        wheel_blocked=wheel_blocked,
     )
 
     if wheel_blocked:
@@ -557,6 +581,83 @@ def get_tiff_metadata(
     return stack_lengths, epochs, all_tiff_timestamps
 
 
+def validate_timestamps_by_chunk(
+    epochs: List[List[float]],
+    all_tiff_timestamps: np.ndarray,
+    chunk_lens: np.ndarray,
+    valid_frame_times: np.ndarray,
+    sampling_rate: int,
+    daq_start_time: datetime,
+) -> None:
+    frame_offset = 0
+
+    for chunk_idx, chunk_len in enumerate(chunk_lens):
+        chunk_start = time_list_to_datetime(epochs[chunk_idx])
+        chunk_offsets = list()
+
+        chunk_frames = valid_frame_times[frame_offset : frame_offset + chunk_len]
+        chunk_timestamps = all_tiff_timestamps[frame_offset : frame_offset + chunk_len]
+
+        for frame_idx, (frame_time, tiff_timestamp) in enumerate(
+            zip(chunk_frames, chunk_timestamps, strict=True)
+        ):
+            frame_datetime = chunk_start + timedelta(seconds=tiff_timestamp)
+            frame_daq_time = daq_start_time + timedelta(
+                seconds=frame_time / sampling_rate
+            )
+            offset = (frame_datetime - frame_daq_time).total_seconds()
+            chunk_offsets.append(offset)
+            if abs(offset) > 0.40:
+                raise ValueError("Offset too big")
+
+
+def check_all_timestamps(
+    epochs: List[List[float]],
+    all_tiff_timestamps: np.ndarray,
+    chunk_lens: np.ndarray,
+    valid_frame_times: np.ndarray,
+    sampling_rate: int,
+    daq_start_time: datetime,
+    wheel_blocked: bool = False,
+) -> None:
+    # TODO: remove eventually!
+
+    assert len(all_tiff_timestamps) == len(valid_frame_times)
+
+    offsets = list()
+
+    for idx, frame in enumerate(valid_frame_times):
+        frame = idx
+        epoch = find_chunk(chunk_lens, frame)
+        chunk_start = time_list_to_datetime(epochs[epoch])
+        frame_datetime = chunk_start + timedelta(seconds=all_tiff_timestamps[frame])
+        frame_daq_time = daq_start_time + timedelta(
+            seconds=valid_frame_times[frame] / sampling_rate
+        )
+
+        offset = (frame_datetime - frame_daq_time).total_seconds()
+        exceeds = abs(offset) > 1
+        if exceeds:
+            print(f"frame {idx}")
+            print(offset)
+            print(frame_datetime)
+            print(frame_daq_time)
+        offsets.append(offset)
+
+    np.save(HERE / "offsets.npy", offsets)
+
+    plt.figure(figsize=(20, 8))
+    plt.plot(offsets)
+
+    cumsum = 0
+    for chunk_len in chunk_lens:
+        plt.axvline(x=cumsum, color="r", linestyle="--", alpha=0.5)
+        cumsum += chunk_len
+
+    plt.tight_layout()
+    plt.savefig(HERE / "offsets.png", dpi=300)
+
+
 def check_timestamps(
     epochs: List[List[float]],
     trial: TrialInfo,
@@ -670,7 +771,7 @@ def main() -> None:
 
             date = row["Date"]
             session_type = row["Type"].lower()
-            if date == "2025-04-04":
+            if date == "2025-03-31":
                 try:
                     wheel_blocked = row["Wheel blocked?"].lower() == "yes"
                 except KeyError as e:
