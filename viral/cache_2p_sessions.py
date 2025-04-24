@@ -18,12 +18,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.imaging_utils import (
-    extract_TTL_chunks,
-    get_sampling_rate,
-    get_imaging_crashed,
-    trial_is_imaged,
-)
+from viral.imaging_utils import extract_TTL_chunks, get_sampling_rate, trial_is_imaged
 
 
 from viral.constants import (
@@ -41,7 +36,6 @@ from viral.utils import (
     get_tiff_paths_in_directory,
     time_list_to_datetime,
     degrees_to_cm,
-    uk_to_utc,
 )
 
 import logging
@@ -232,10 +226,13 @@ def extract_frozen_wheel_chunks(
 
 def add_imaging_info_to_trials(
     tdms_path: Path,
+    mouse_name: str,
+    date: int,
     tiff_directory: Path,
     trials: List[TrialInfo],
-    imaging_crashed: bool = False,
-) -> List[TrialInfo]:
+    wheel_blocked: bool = False,
+) -> tuple[List[TrialInfo], WheelFreeze | None]:
+    """Adds imaging info to trials and creates a WheelFreeze object if the wheel was blocked"""
 
     logger.info("Adding imaging info to trials")
     t1 = time.time()
@@ -397,11 +394,42 @@ def add_imaging_info_to_trials(
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
     valid_frame_times = get_valid_frame_times(
-        stack_lengths_tiffs,
-        frame_times_daq,
-        chunk_lengths_daq,
-        loosen_assertions=imaging_crashed,
+        stack_lengths_tiffs=stack_lengths_tiffs,
+        frame_times_daq=frame_times_daq,
+        chunk_lengths_daq=chunk_lengths_daq,
     )
+
+    validate_timestamps_by_chunk(
+        epochs=epochs,
+        all_tiff_timestamps=all_tiff_timestamps,
+        chunk_lens=chunk_lengths_daq,
+        valid_frame_times=valid_frame_times,
+        sampling_rate=sampling_rate,
+        daq_start_time=daq_start_time,
+    )
+
+    check_all_timestamps(
+        epochs=epochs,
+        all_tiff_timestamps=all_tiff_timestamps,
+        chunk_lens=chunk_lengths_daq,
+        valid_frame_times=valid_frame_times,
+        sampling_rate=sampling_rate,
+        daq_start_time=daq_start_time,
+        wheel_blocked=wheel_blocked,
+    )
+
+    if wheel_blocked:
+        if mouse_name == "JB031" and date == "2025-03-31":
+            # TODO better check again did this at 11:30 PM on a Friday
+            # manually give frame indices for start and end of frozen wheel chunks
+            frozen_wheel_chunks = ((0, 27000), (113575, 136882))
+        else:
+            frozen_wheel_chunks = extract_frozen_wheel_chunks(
+                stack_lengths_tiffs=stack_lengths_tiffs,
+                valid_frame_times=valid_frame_times,
+                behaviour_times=behaviour_times,
+                sampling_rate=sampling_rate,
+            )
 
     for idx, trial in enumerate(trials):
         # Works in place, maybe not ideal
@@ -442,7 +470,6 @@ def get_valid_frame_times(
     stack_lengths_tiffs: np.ndarray,
     frame_times_daq: np.ndarray,
     chunk_lengths_daq: np.ndarray,
-    loosen_assertions: bool = False,
 ) -> np.ndarray:
     """
     Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
@@ -454,10 +481,6 @@ def get_valid_frame_times(
     Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
-
-    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 10 but could be more)
-                       that are in the daq but not in the tiff. Only include this flag if the notes say the session was crashed.
-
     """
 
     valid_frame_times = np.array([])
@@ -466,31 +489,21 @@ def get_valid_frame_times(
         stack_lengths_tiffs, chunk_lengths_daq, strict=True
     ):
 
-        assert (
-            chunk_len_daq - stack_len_tiff
-            in {
-                0,
-                2,
-                3,
-            }
-            or loosen_assertions
-            and chunk_len_daq - stack_len_tiff <= 10
-        ), f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
-        This will occur, especially on crashed recordings. Think about a fix."""
+        assert chunk_len_daq - stack_len_tiff in {
+            0,
+            2,
+            3,
+        }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
+        This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
 
         valid_frame_times = np.append(
             valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
         )
         offset += chunk_len_daq
 
-    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and (
-        (
-            0
-            <= len(frame_times_daq) - len(valid_frame_times)
-            <= 3 * len(chunk_lengths_daq)
-        )
-        or loosen_assertions
-    )
+    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
+        frame_times_daq
+    ) - len(valid_frame_times) <= 3 * len(chunk_lengths_daq)
 
     return valid_frame_times
 
@@ -677,8 +690,10 @@ def check_timestamps(
     )
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
-    # Epoch is in uk time, convert to UTC to match the daq
-    chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
+    chunk_start = time_list_to_datetime(epochs[epoch_trial])
+
+    # TODO for debugging, remove eventually
+    # offsets = list()
 
     for frame in range(first_frame_trial, last_frame_trial):
 
@@ -693,19 +708,12 @@ def check_timestamps(
 
         # TODO comment back in!
         # Allow for some drift up to 15ms
-        if trial.trial_start_time / 60 < 30:
-            assert (
-                abs(offset) <= 0.01 if sampling_rate == 10000 else 0.02
-            ), "Tiff timestamp does not match daq timestamp"
         # Take into account that the recording in wheel block is 1.5x longer,
         # i.e. one minute into the behaviour is at least 15 mins into the entire session
         increase_offset_allowance_time = 30 if not wheel_blocked else 50
         if trial.trial_start_time / 60 < increase_offset_allowance_time:
             assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
         else:
-            assert (
-                abs(offset) <= 0.015 if sampling_rate == 10000 else 0.03
-            ), "Tiff timestamp does not match daq timestamp"
             assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
     # plt.figure(figsize=(20, 8))
     # plt.plot(offsets)
@@ -725,18 +733,9 @@ def process_session(
 ) -> None:
 
     print(f"Off we go for {mouse_name} {date} {session_type}")
-    imaging_crashed = get_imaging_crashed(mouse_name, date)
-
-    print(f"Imaging crashed: {imaging_crashed}")
-
     trials, wheel_freeze = add_imaging_info_to_trials(
         tdms_path, mouse_name, date, tiff_directory, trials, wheel_blocked
-        imaging_crashed=imaging_crashed,
     )
-
-    if wheel_blocked:
-        print("Wheel blocked detected")
-        logger.info(f"Wheel blocked detected for {mouse_name} {date}")
 
     if wheel_blocked:
         print("Wheel blocked detected")

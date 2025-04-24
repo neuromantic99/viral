@@ -292,11 +292,3 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
-
-
-def get_imaging_crashed(mouse_name: str, date: str) -> bool:
-    """Manually define if sessions have crashed imaging, based on the metadata"""
-    return (mouse_name, date) in [
-        ("JB011", "2024-10-22"),
-        ("JB011", "2024-10-25"),
-    ]
