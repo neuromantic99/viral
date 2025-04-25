@@ -101,7 +101,7 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
         stack_lengths_tiffs=c.stack_lengths_tiffs,
         chunk_lengths_daq=c.chunk_lengths_daq,
         frame_times_daq=c.frame_times_daq,
-        offset_after_pre_epoch=None,
+        offset_after_pre_epoch=0,
     )
 
 

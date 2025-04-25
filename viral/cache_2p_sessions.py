@@ -196,14 +196,18 @@ def extract_frozen_wheel_chunks(
     # We want to make sure the chunks are >= 15 mins but < 20 mins
     # 15 mins = 27,000 frames
     # 20 mins = 36,000 frames
-    # TODO: would it be 1 or 2 frames off?
     if check_first_chunk:
         assert (
             27000 <= first_chunk_len < 36000
         ), "First chunk length does not match expected length"
         assert (
             15 * 60 * sampling_rate
-            <= (first_chunk_times[-1] - first_chunk_times[0] + 2 / frame_rate)
+            <= (
+                first_chunk_times[-1]
+                - first_chunk_times[0]
+                + sampling_rate
+                / frame_rate  # accounting for the duration of the last frame
+            )
             <= 20 * 60 * sampling_rate
         ), "First chunk length does not match expected length"
 
@@ -212,7 +216,9 @@ def extract_frozen_wheel_chunks(
     ), "Last chunk length does not match expected length"
     assert (
         15 * 60 * sampling_rate
-        <= (last_chunk_times[-1] - last_chunk_times[0] + 2 / frame_rate)
+        <= (
+            last_chunk_times[-1] - last_chunk_times[0] + sampling_rate / frame_rate
+        )  # accounting for the duration of the last frame
         <= 20 * 60 * sampling_rate
     ), "Last chunk length does not match expected length"
 
@@ -531,12 +537,10 @@ def check_timestamps(
         # Take into account that the recording in wheel block is 1.5x longer,
         # i.e. one minute into the behaviour is at least 15 mins into the entire session
         increase_offset_allowance_time = 30 if not wheel_blocked else 50
-        # TODO: change back the offset rules or think about fix
-        print(offset)
         if trial.trial_start_time / 60 < increase_offset_allowance_time:
-            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
         else:
-            assert abs(offset) <= 0.020, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -580,13 +584,10 @@ def main() -> None:
     for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
-
-            # try:
-            print(f"the type is {row['Type']}")
-
-            date = row["Date"]
-            session_type = row["Type"].lower()
-            if date == "2025-04-04":
+            try:
+                print(f"the type is {row['Type']}")
+                date = row["Date"]
+                session_type = row["Type"].lower()
                 try:
                     wheel_blocked = row["Wheel blocked?"].lower() == "yes"
                 except KeyError as e:
@@ -633,12 +634,12 @@ def main() -> None:
                 logger.info(
                     f"Completed processing for {mouse_name} {date} {session_type}"
                 )
-        # except Exception as e:
-        #     tb = traceback.extract_tb(e.__traceback__)
-        #     line_number = tb[-1].lineno  # Get the line number of the exception
-        #     msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
-        #     logger.debug(msg)
-        #     print(msg)
+            except Exception as e:
+                tb = traceback.extract_tb(e.__traceback__)
+                line_number = tb[-1].lineno  # Get the line number of the exception
+                msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
+                logger.debug(msg)
+                print(msg)
 
 
 if __name__ == "__main__":
