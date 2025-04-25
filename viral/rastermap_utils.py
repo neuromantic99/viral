@@ -406,7 +406,8 @@ def filter_speed_position(
     speed: np.ndarray,
     frames_positions: np.ndarray,
     speed_threshold: Optional[float] = None,
-    position_threshold: Optional[float] = None,
+    position_threshold: Optional[tuple[float, float]] = None,
+    use_or: bool = True,
 ) -> np.ndarray:
     """Return a mask of valid frames"""
 
@@ -418,11 +419,18 @@ def filter_speed_position(
     # converting cm/s to cm/frames
     if speed_threshold is not None:
         speed_mask = speed[:, 1] >= (speed_threshold)
-        valid_mask |= speed_mask
+        if use_or:
+            valid_mask |= speed_mask
+        else:
+            valid_mask = speed_mask
     # specified positions that should always be included
     if position_threshold is not None:
-        position_mask = frames_positions[:, 1] >= position_threshold
-        valid_mask |= position_mask  # bitwise OR?
+        position_mask = frames_positions[:, 1] >= position_threshold[0]
+        position_mask &= frames_positions[:, 1] <= position_threshold[1]
+        if use_or:
+            valid_mask |= position_mask
+        else:
+            valid_mask &= position_mask
 
     return valid_mask
 
