@@ -308,24 +308,13 @@ def add_imaging_info_to_trials(
         chunk_lengths_daq=chunk_lengths_daq,
     )
 
-    # for testing and debugging, remove eventually
-    # check_all_timestamps(
-    #     epochs=epochs,
-    #     all_tiff_timestamps=all_tiff_timestamps,
-    #     chunk_lens=chunk_lengths_daq,
-    #     valid_frame_times=valid_frame_times,
-    #     sampling_rate=sampling_rate,
-    #     daq_start_time=daq_start_time,
-    #     wheel_blocked=wheel_blocked,
-    # )
-
     if wheel_blocked:
         frozen_wheel_chunks = extract_frozen_wheel_chunks(
             stack_lengths_tiffs=stack_lengths_tiffs,
             valid_frame_times=valid_frame_times,
             behaviour_times=behaviour_times,
             sampling_rate=sampling_rate,
-            check_first_chunk=False if offset_after_pre_epoch > 0 else True,
+            check_first_chunk=offset_after_pre_epoch == 0,
         )
 
     for idx, trial in enumerate(trials):
@@ -437,8 +426,6 @@ def get_tiff_metadata(
             return stack_lengths, epochs, all_tiff_timestamps
 
     print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
-    print(tiff_paths)
-    print(len(tiff_paths))
     tiffs = [ScanImageTiffReader(str(tiff)) for tiff in tiff_paths]
     stack_lengths = [tiff.shape()[0] for tiff in tiffs]
     epochs = []
@@ -473,7 +460,6 @@ def get_tiff_metadata(
         assert (
             round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
         ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
-    print(len(epochs))
 
     if use_cache:
         for variable, name in zip(
