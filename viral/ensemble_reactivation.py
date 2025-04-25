@@ -22,9 +22,7 @@ from viral.rastermap_utils import (
     filter_speed_position,
     filter_out_ITI,
 )
-from viral.utils import (
-    get_wheel_circumference_from_rig,
-)
+from viral.utils import get_wheel_circumference_from_rig, shuffle_rows
 from viral.imaging_utils import (
     get_preactivation_reactivation,
 )
@@ -40,7 +38,6 @@ def process_behaviour(
     speed_bin_size: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
-    print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
     signal, _, _, trials = load_data(session, s2p_path, "spks")
     aligned_trial_frames, neural_data_trials = align_validate_data(signal, trials)
     imaged_trials_infos = process_trials_data(
@@ -82,9 +79,8 @@ def get_running_bouts(
     frames_positions: np.ndarray,
     ITI_starts_ends: np.ndarray,
     aligned_trial_frames: np.ndarray,
+    config: GrosmarkConfig,
 ) -> np.ndarray:
-    # TODO: do we want to keep the ITI out?
-    # TODO: do we want to have start end and stuff same as in grosmark config??
     # TODO: think about the speed_threshold, arbitrarily set it to 5 cm/s
     trial_activities = list()
     for start, end, _ in aligned_trial_frames:
@@ -94,9 +90,10 @@ def get_running_bouts(
     behaviour_mask = filter_speed_position(
         speed=speed,
         frames_positions=frames_positions,
-        speed_threshold=2,  # cm/s
-        position_threshold=None,
-    ) & filter_out_ITI(ITI_starts_ends=ITI_starts_ends, positions=frames_positions)
+        speed_threshold=5,  # cm/s
+        position_threshold=(config.start, config.end),
+        use_or=False,
+    )
     return place_cells_behaviour[:, behaviour_mask]
 
 
@@ -184,10 +181,11 @@ def offline_reactivation(
     if do_shuffle:
         # """ICA components were shuffled by randomly permuting the weight matrix w across
         # PCs and recalculating the reactivation strength."""
-        # Shuffling columns, i.e. ICA components, like Grosmark?
-        ensemble_matrix = ensemble_matrix[
-            :, np.random.permutation(ensemble_matrix.shape[1])
-        ]
+        # Confusing, should we shuffle rows or columns (i.e. PCs or components)?
+        # ensemble_matrix = ensemble_matrix[
+        #     :, np.random.permutation(ensemble_matrix.shape[1])
+        # ]
+        ensemble_matrix = shuffle_rows(ensemble_matrix)
 
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
     n_components = ensemble_matrix.shape[1]
@@ -214,20 +212,19 @@ def compute_pcc_scores(
     """
     n_cells = reactivation.shape[0]
 
+    # reactivation score R computer from all PCs
+    R_full = offline_reactivation(
+        reactivation=reactivation, ensemble_matrix=ensemble_matrix
+    )
+
     pcc_scores = list()
     for cell_idx in range(n_cells):
-        # reactivation score R computer from all PCs
-        R_full = offline_reactivation(
-            reactivation=reactivation, ensemble_matrix=ensemble_matrix
-        )
-
         # reactivation score Rc\x after excluding xth cell
         reactivation_excluded = np.delete(reactivation, cell_idx, axis=0)
         ensemble_matrix_excluded = np.delete(ensemble_matrix, cell_idx, axis=0)
         R_excluded = offline_reactivation(
             reactivation=reactivation_excluded, ensemble_matrix=ensemble_matrix_excluded
         )
-
         delta_R = R_full - R_excluded
         # mean across all components and timepoints
         pcc_scores.append(np.mean(delta_R))
@@ -275,7 +272,7 @@ def sort_ensembles_by_reactivation_strength(
 
 def classify_and_sort_place_cells(
     ensemble_matrix: np.ndarray, top_ensembles: np.ndarray
-) -> tuple[np.ndarray, int, int]:
+) -> SortedPlaceCells:
     """
     'Panel (iii) shows the ICA component for each PC, with dashed lines separating those cells with large weights
     in ensemble A (top), ensemble B (middle) or neither (bottom; for the purposes of this illustration, large
@@ -308,8 +305,11 @@ def classify_and_sort_place_cells(
     )
 
 
-def plot_ensemble_reactivation(
+def plot_ensemble_reactivation_preactivation(
     reactivation_strength: np.ndarray,
+    reactivation_strength_shuffled: np.ndarray,
+    preactivation_strength: np.ndarray,
+    preactivation_strength_shuffled: np.ndarray,
     top_ensembles: np.ndarray,
     smooth: bool = False,
 ) -> None:
@@ -317,24 +317,37 @@ def plot_ensemble_reactivation(
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
     """
     colours = ["r", "b"]
-    reactivation_strength_z_scored = zscore(reactivation_strength, axis=1)
-    if smooth:
-        reactivation_strength_z_scored = gaussian_filter1d(
-            reactivation_strength_z_scored, 30
-        )
-    plt.figure(figsize=(14, 4))
-    for i, idx in enumerate(top_ensembles):
-        plt.plot(
-            reactivation_strength_z_scored[idx, :],
-            color=colours[i],
-            label=f"ensemble {i}",
-        )
-    plt.ylim(-1.5, 7)
-    plt.xlabel("Time (frames)")
-    plt.ylabel("Reactivation strength (zscored)")
-    plt.tight_layout()
-    # plt.savefig(f"plots/{mouse}_{date}_ensemble_reactivation.svg", dpi=300)
-    plt.show()
+    matrices = {
+        "post": reactivation_strength,
+        "post_shuffled": reactivation_strength_shuffled,
+        "pre": preactivation_strength,
+        "pre_shuffled": preactivation_strength_shuffled,
+    }
+
+    processed_matrices = {}
+    for name, matrix in matrices.items():
+        # processed = zscore(matrix, axis=1)
+        if smooth:
+            # processed = gaussian_filter1d(processed, 30)
+            processed = gaussian_filter1d(matrix, 30)
+        processed_matrices[name] = processed
+
+    for name, matrix in processed_matrices.items():
+        plt.figure(figsize=(14, 4))
+        for i, idx in enumerate(top_ensembles):
+            plt.plot(
+                matrix[idx, :],
+                color=colours[i],
+                label=f"ensemble {i}",
+            )
+        # plt.ylim(-1.5, 7)
+        plt.xlabel("Time (frames)")
+        # plt.ylabel("Reactivation strength (zscored)")
+        plt.ylabel("Reactivation strength")
+        plt.title(name)
+        plt.tight_layout()
+        plt.savefig(f"plots/{name}.svg", dpi=300)
+        # plt.show()
 
 
 def plot_cell_weights(
@@ -370,8 +383,8 @@ def plot_cell_weights(
     plt.xlabel("Place cell ID")
     plt.ylabel("Cell weight in template")
     plt.tight_layout()
-    # plt.savefig(f"plots/{mouse}_{date}_cell_weights.svg", dpi=300)
-    plt.show()
+    plt.savefig(f"plots/cell_weights.svg", dpi=300)
+    # plt.show()
 
 
 def plot_smoothed_offline_firing_rate_raster(
@@ -382,6 +395,7 @@ def plot_smoothed_offline_firing_rate_raster(
     """
     sorted_cells = sorted_pcs.sorted_indices
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
+    plt.figure()
     plt.imshow(
         offline_activity_matrix[sorted_cells, :],
         cmap="gray_r",
@@ -390,120 +404,169 @@ def plot_smoothed_offline_firing_rate_raster(
     plt.ylabel("Place cell ID")
     plt.xlabel("Frames")
     plt.tight_layout()
-    # plt.savefig(
-    #     f"plots/{mouse}_{date}_smoothed_offline_firing_rate_raster.svg", dpi=300
-    # )
-    plt.show()
+    plt.savefig(f"plots/smoothed_offline_firing_rate_raster.svg", dpi=300)
+    # plt.show()
+
+
+def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
+    plt.figure()
+    plt.plot(pcc_scores)
+    plt.xlabel("Place cell ID")
+    plt.ylabel("PCC score (normalised)")
+    plt.tight_layout()
+    plt.savefig(f"plots/pcc_scores.svg", dpi=300)
+    # plt.show()
 
 
 def main():
     mouse = "JB031"
-    date = "2025-04-04"
+    date = "2025-04-02"
 
     verbose = True
     use_cache = True
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
+
+    print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
+
     if not session.wheel_freeze:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
 
-    cache_file = HERE.parent / f"{session.mouse_name}_{session.date}_place_cells.npy"
-    # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
-    positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
-        session,
-        wheel_circumference=get_wheel_circumference_from_rig(
-            "2P",
-        ),
-        speed_bin_size=30,
+    cache_file = (
+        HERE.parent / f"{session.mouse_name}_{session.date}_ensemble_reactivation.npz"
     )
-    config = config = GrosmarkConfig(
-        bin_size=2,
-        start=30,
-        end=160,
-    )
-    spks_raw, _, _, _ = load_data(
-        session,
-        TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
-        "spks",
-    )
-    # """Based on the observed differences in calcium activity waveforms between the online and
-    # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-    # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
-    online_spks = binarise_spikes(
-        spks_raw[
-            :,
-            session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
-        ],
-        mad_threshold=1.5,
-    )
-    offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
-        flu=spks_raw, wheel_freeze=session.wheel_freeze
-    )
-    # TODO: should pre and post be binarised as one?
-    offline_spks_pre = binarise_spikes(
-        offline_spks_pre,
-        mad_threshold=1.25,
-    )
-    offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
-    spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
-    # TODO: shape is off by one frame (pre is one short), do we care?
-    # assert spks_raw.shape == spks.shape
+
     if use_cache and os.path.exists(cache_file):
-        print("Using cached pcs mask")
-        pcs_mask = np.load(cache_file)
+        print("Using cached data")
+        pcs_mask = np.load(cache_file)["pcs_mask"]
+        ensemble_matrix = np.load(cache_file)["ensemble_matrix"]
+        reactivation_strength = np.load(cache_file)["reactivation_strength"]
+        reactivation_strength_shuffled = np.load(cache_file)[
+            "reactivation_strength_shuffled"
+        ]
+        preactivation_strength = np.load(cache_file)["preactivation_strength"]
+        preactivation_strength_shuffled = np.load(cache_file)[
+            "preactivation_strength_shuffled"
+        ]
+        reactivation = np.load(cache_file)["reactivation"]
+        preactivation = np.load(cache_file)["preactivation"]
+        running_bouts = np.load(cache_file)["running_bouts"]
+        pcc_scores = np.load(cache_file)["pcc_scores"]
     else:
+        print("No cached data found, processing data")
+        # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
+        positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
+            session,
+            wheel_circumference=get_wheel_circumference_from_rig(
+                "2P",
+            ),
+            speed_bin_size=30,
+        )
+        config = GrosmarkConfig(
+            bin_size=2,
+            start=30,
+            end=160,
+        )
+        spks_raw, _, _, _ = load_data(
+            session,
+            TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
+            "spks",
+        )
+        # """Based on the observed differences in calcium activity waveforms between the online and
+        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
+        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
+        online_spks = binarise_spikes(
+            spks_raw[
+                :,
+                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
+            ],
+            mad_threshold=1.5,
+        )
+        offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
+            flu=spks_raw, wheel_freeze=session.wheel_freeze
+        )
+        # TODO: should pre and post be binarised as one?
+        offline_spks_pre = binarise_spikes(
+            offline_spks_pre,
+            mad_threshold=1.25,
+        )
+        offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
+        spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
+        # TODO: shape is off by one frame (pre is one short), do we care?
+        # assert spks_raw.shape == spks.shape
         t1 = time.time()
         pcs_mask = grosmark_place_field(
             session=session, spks=spks, rewarded=None, config=config, plot=False
         )
-        np.save(cache_file, pcs_mask)
         print(f"Time to get place cells: {time.time() - t1}")
-    place_cells = spks[pcs_mask, :]
-    reactivation = offline_spks_post[pcs_mask]
-    preactivation = offline_spks_pre[pcs_mask]
-    # ONLINE
-    running_bouts = get_running_bouts(
-        place_cells=place_cells,
-        speed=speed,
-        frames_positions=positions,
-        ITI_starts_ends=ITI_starts_ends,
-        aligned_trial_frames=aligned_trial_frames,
-    )
-    ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
-    ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+        place_cells = spks[pcs_mask, :]
+        reactivation = offline_spks_post[pcs_mask]
+        preactivation = offline_spks_pre[pcs_mask]
+        # ONLINE
+        running_bouts = get_running_bouts(
+            place_cells=place_cells,
+            speed=speed,
+            frames_positions=positions,
+            ITI_starts_ends=ITI_starts_ends,
+            aligned_trial_frames=aligned_trial_frames,
+            config=config,
+        )
+        ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
+        ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+        # OFFLINE
+        reactivation_strength = offline_reactivation(
+            reactivation=reactivation, ensemble_matrix=ensemble_matrix
+        )
+        preactivation_strength = offline_reactivation(
+            reactivation=preactivation, ensemble_matrix=ensemble_matrix
+        )
+        reactivation_strength_shuffled = offline_reactivation(
+            reactivation=reactivation, ensemble_matrix=ensemble_matrix, do_shuffle=True
+        )
+        preactivation_strength_shuffled = offline_reactivation(
+            reactivation=preactivation, ensemble_matrix=ensemble_matrix, do_shuffle=True
+        )
+        t2 = time.time()
+        pcc_scores = get_normalised_pcc_scores(
+            reactivation=reactivation,
+            preactivation=preactivation,
+            ensemble_matrix=ensemble_matrix,
+        )
+        print(f"Time to get pcc scores: {time.time() - t2}")
     if verbose:
         print(f"# frames with running: {running_bouts.shape[1]}")
         print(f"# place cells: {running_bouts.shape[0]}")
         print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
-    # OFFLINE
-    reactivation_strength = offline_reactivation(
-        reactivation=reactivation, ensemble_matrix=ensemble_matrix
-    )
-    preactivation_strength = offline_reactivation(
-        reactivation=preactivation, ensemble_matrix=ensemble_matrix
-    )
-    pcc_scores = get_normalised_pcc_scores(
-        reactivation=reactivation,
-        preactivation=preactivation,
-        ensemble_matrix=ensemble_matrix,
-    )
-    reactivation_strength_shuffled = offline_reactivation(
-        reactivation=reactivation, ensemble_matrix=ensemble_matrix, do_shuffle=True
-    )
+
+    plot_pcc_scores(pcc_scores=pcc_scores)
+    # TODO: should the top ensembles be the same for reactivation and preactivation?
+    # I mean we would look at the reactivation strength of the same ensembles?
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength
     )
     sorted_pcs = classify_and_sort_place_cells(
         ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles
     )
-    plot_ensemble_reactivation(
+    if use_cache and not os.path.exists(cache_file):
+        print("Saving cache")
+        np.savez(
+            cache_file,
+            pcs_mask=pcs_mask,
+            ensemble_matrix=ensemble_matrix,
+            reactivation_strength=reactivation_strength,
+            reactivation_strength_shuffled=reactivation_strength_shuffled,
+            preactivation_strength=preactivation_strength,
+            preactivation_strength_shuffled=preactivation_strength_shuffled,
+            reactivation=reactivation,
+            preactivation=preactivation,
+            running_bouts=running_bouts,
+        )
+    plot_ensemble_reactivation_preactivation(
         reactivation_strength=reactivation_strength,
-        top_ensembles=top_ensembles,
-        smooth=True,
-    )
-    plot_ensemble_reactivation(
-        reactivation_strength=reactivation_strength_shuffled,
+        reactivation_strength_shuffled=reactivation_strength_shuffled,
+        preactivation_strength=preactivation_strength,
+        preactivation_strength_shuffled=preactivation_strength_shuffled,
         top_ensembles=top_ensembles,
         smooth=True,
     )

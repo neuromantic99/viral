@@ -174,7 +174,7 @@ def grosmark_place_field(
     print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
 
     print(
-        f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
+        f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
     peak_indices = np.argmax(smoothed_matrix, axis=1)
