@@ -419,8 +419,8 @@ def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
 
 
 def main():
-    mouse = "JB031"
-    date = "2025-04-02"
+    mouse = "JB032"
+    date = "2025-04-01"
 
     verbose = True
     use_cache = True
@@ -561,6 +561,7 @@ def main():
             reactivation=reactivation,
             preactivation=preactivation,
             running_bouts=running_bouts,
+            pcc_scores=pcc_scores,
         )
     plot_ensemble_reactivation_preactivation(
         reactivation_strength=reactivation_strength,
