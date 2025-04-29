@@ -1,10 +1,10 @@
-# Allow you to run the file directly, remove if exporting as a proper module
 from pathlib import Path
 import sys
 
 import pandas as pd
 from pydantic import ValidationError
 
+# Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
@@ -26,11 +26,12 @@ CACHE_PATH = HERE.parent / "data" / "cached_2p"
 
 
 SESSIONS_KEEP = {
-    "JB011": {
-        "unsupervised": "2024-10-22",
-        "learning": "2024-10-25",
-        "learned": "2024-10-30",
-    },
+    # Imaging of poor quality, dont analyse
+    # "JB011": {
+    #     "unsupervised": "2024-10-22",
+    #     "learning": "2024-10-25",
+    #     "learned": "2024-10-30",
+    # },
     "JB014": {
         "unsupervised": "2024-10-24",
         "learning": "2024-10-30",
@@ -63,7 +64,7 @@ SESSIONS_KEEP = {
     },
     "JB021": {
         "unsupervised": "2024-11-19",
-        "learning": ":2024-12-05",
+        "learning": "2024-12-05",
         "learned": "2024-12-09",
     },
     "JB022": {
@@ -105,7 +106,7 @@ def get_session(
 
 
 def main() -> None:
-    mouse_name = "JB011"
+    mouse_name = "JB014"
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     mouse_sessions = Mouse2pSessions(
         mouse_name=mouse_name,

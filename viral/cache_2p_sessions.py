@@ -249,7 +249,7 @@ def get_valid_frame_times(
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
 
-    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 12 but could be more)
+    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 13 but could be more)
                        that are in the daq but not in the tiff. Only include this flag if the notes say the session was crashed.
 
     """
@@ -268,7 +268,7 @@ def get_valid_frame_times(
                 3,
             }
             or loosen_assertions
-            and chunk_len_daq - stack_len_tiff <= 12
+            and chunk_len_daq - stack_len_tiff <= 13
         ), f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
         This will occur, especially on crashed recordings. Think about a fix."""
 
