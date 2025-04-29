@@ -20,16 +20,12 @@ from viral.rastermap_utils import (
     align_validate_data,
     process_trials_data,
     filter_speed_position,
-    filter_out_ITI,
 )
 from viral.utils import get_wheel_circumference_from_rig, shuffle_rows
 from viral.imaging_utils import (
     get_preactivation_reactivation,
 )
-from viral.grosmark_analysis import (
-    binarise_spikes,
-    grosmark_place_field,
-)
+from viral.grosmark_analysis import binarise_spikes, get_place_cells
 
 
 def process_behaviour(
@@ -419,8 +415,8 @@ def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
 
 
 def main():
-    mouse = "JB032"
-    date = "2025-04-01"
+    mouse = "JB027"
+    date = "2025-02-26"
 
     verbose = True
     use_cache = True
@@ -473,6 +469,7 @@ def main():
             TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
             "spks",
         )
+        # TODO: should this be one function that is called by grosmark_analysis.py and ensemble_reactivation.py?
         # """Based on the observed differences in calcium activity waveforms between the online and
         # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
         # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
@@ -496,7 +493,7 @@ def main():
         # TODO: shape is off by one frame (pre is one short), do we care?
         # assert spks_raw.shape == spks.shape
         t1 = time.time()
-        pcs_mask = grosmark_place_field(
+        pcs_mask, _ = get_place_cells(
             session=session, spks=spks, rewarded=None, config=config, plot=False
         )
         print(f"Time to get place cells: {time.time() - t1}")

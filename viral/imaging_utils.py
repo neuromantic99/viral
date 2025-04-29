@@ -261,7 +261,7 @@ def get_ITI_matrix(
 ) -> np.ndarray:
     """
     In theory will be 600 frames in an ITI (as is always 20 seconds)
-    In practise it's 599 or 598 (or could be something like 597 or 600, fix
+    In practice it's 599 or 598 (or could be something like 597 or 600, fix
     the assertion if so).
     Or could be less if you stop the trial in the ITI.
     So we'll take the first 598 frames of any trial that has 599 or 598
@@ -296,7 +296,8 @@ def get_ITI_matrix(
 
 def get_preactivation_reactivation(
     flu: np.ndarray, wheel_freeze: WheelFreeze
-) -> tuple[np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return sliced flu array: offline epochs before and after behaviour session."""
     return (
         flu[
             :,
