@@ -303,10 +303,10 @@ def offline_correlations(
         )
 
         shuffled_corrs = get_offline_correlation_matrix(
-            offline, do_shuffle=True, plot=True
+            offline, wheel_freeze=False, do_shuffle=True, plot=True
         )
         real_corrs = get_offline_correlation_matrix(
-            offline, do_shuffle=False, plot=True
+            offline, wheel_freeze=False, do_shuffle=False, plot=True
         )
 
         correlations_vs_peak_distance(
