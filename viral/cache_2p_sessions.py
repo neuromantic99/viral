@@ -378,6 +378,7 @@ def get_session_sync(
         chunk_lengths_daq=chunk_lengths_daq,
     )
 
+    # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
         stack_lengths_tiffs=stack_lengths_tiffs,
         epochs=epochs,
@@ -575,7 +576,7 @@ def process_session(
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_blocked)
 
     if wheel_blocked:
-        get_wheel_freeze(session_sync)
+        wheel_freeze = get_wheel_freeze(session_sync)
     else:
         wheel_freeze = None
 
