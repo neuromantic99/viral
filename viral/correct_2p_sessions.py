@@ -64,6 +64,11 @@ def jb031_2025_03_31(c: SessionCorrection) -> SessionCorrection:
     # array([   161,  27000,    294, 113116,    165,  23307])
     # chunk_lengths_daq
     # array([  1325,   3224,    147,    296, 113118,    167,  23309,    657])
+    # extremely troubled recording
+    # I. daq was started after the pre-session epoch, with probably one accidental grab (very first tiff)
+    # II. probably three "focus" without grabbing before the session
+    # III. recording of the post-session epoch crashed
+    # IV. probably one more "focus" without grabbing, which did not result in another grab
     c.stack_lengths_tiffs = np.array([294, 113116, 165, 23307])
     c.chunk_lengths_daq = np.array([296, 113118, 167, 23309])
     bad_tiff_len = sum([161, 27000])
@@ -134,8 +139,10 @@ def jb031_2025_04_03(c: SessionCorrection) -> SessionCorrection:
     c.frame_times_daq = np.concatenate(
         [
             c.frame_times_daq[0:27000],
-            c.frame_times_daq[27000:143773],
-            c.frame_times_daq[143819:170819],
+            c.frame_times_daq[27000 : sum([27000, 116773])],
+            c.frame_times_daq[
+                sum([27000, 116773, 46]) : sum([27000, 116773, 46, 27000])
+            ],
         ]
     )
     assert sum(c.chunk_lengths_daq) == len(c.frame_times_daq)
@@ -174,6 +181,7 @@ def jb032_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     # array([27000,  3500,   132,  3914, 44414, 61165, 27000])
     # chunk_lengths_daq
     # array([27000,  3502,   134,  3916,  2657, 44416, 61167,    11, 27000])
+    # the daq signals without any associated tiffs are due to focussing without grabbing
     c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [4, 7])
     c.frame_times_daq = np.concatenate(
         [

@@ -32,7 +32,7 @@ from viral.constants import (
     TIFF_UMBRELLA,
 )
 from viral.gsheets_importer import gsheet2df
-from viral.models import Cached2pSession, TrialInfo, WheelFreeze
+from viral.models import Cached2pSession, TrialInfo, WheelFreeze, SessionImagingInfo
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
@@ -171,6 +171,10 @@ def extract_frozen_wheel_chunks(
         valid_frame_times (np.ndarray):             A NumPy array with times for valid frames.
         behaviour_times (np.ndarray):               A NumPy array with all times when a Bpod spacer signal occured.
         sampling_rate (int):                        The sampling rate of the DAQ system in Hz.
+        frame_rate (int):                           The frame rate of the 2P in frames per second.
+        check_first_chunk (bool):                   Whether to check the first imaging chunk for behaviour pulses.
+                                                    Defaults to True.
+                                                    Set to False for sessions where the DAQ was started after imaging the pre-session epoch.
 
     Returns:
         tuple[tuple[int, int], tuple[int, int]]:    First chunk and last chunk, with their respective start and end frame.
@@ -232,20 +236,82 @@ def extract_frozen_wheel_chunks(
         (behaviour_times >= last_chunk_times[0])
         & (behaviour_times <= last_chunk_times[-1])
     ), "Behavioral pulses detected in post-training period!"
-    return first_chunk, last_chunk
+
+    return (first_chunk, last_chunk)
+
+
+def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
+    """Get wheel freeze object."""
+    frozen_wheel_chunks = extract_frozen_wheel_chunks(
+        stack_lengths_tiffs=session_sync.stack_lengths_tiffs,
+        valid_frame_times=session_sync.valid_frame_times,
+        behaviour_times=session_sync.behaviour_times,
+        sampling_rate=session_sync.sampling_rate,
+        check_first_chunk=session_sync.offset_after_pre_epoch == 0,
+    )
+    if session_sync.offset_after_pre_epoch > 0:
+        return WheelFreeze(
+            pre_training_start_frame=0,
+            pre_training_end_frame=session_sync.offset_after_pre_epoch,
+            post_training_start_frame=frozen_wheel_chunks[1][0]
+            + session_sync.offset_after_pre_epoch,
+            post_training_end_frame=frozen_wheel_chunks[1][1]
+            + session_sync.offset_after_pre_epoch,
+        )
+    else:
+        assert frozen_wheel_chunks[0] is not None
+        return WheelFreeze(
+            pre_training_start_frame=frozen_wheel_chunks[0][0],
+            pre_training_end_frame=frozen_wheel_chunks[0][1],
+            post_training_start_frame=frozen_wheel_chunks[1][0],
+            post_training_end_frame=frozen_wheel_chunks[1][1],
+        )
 
 
 def add_imaging_info_to_trials(
+    trials: List[TrialInfo],
+    session_sync: SessionImagingInfo,
+    wheel_blocked: bool = False,
+) -> List[TrialInfo]:
+    """Adds imaging info to trials."""
+    logger.info("Adding imaging info to trials")
+
+    for idx, trial in enumerate(trials):
+        # Works in place, maybe not ideal
+        add_daq_times_to_trial(
+            trial,
+            idx,
+            session_sync.valid_frame_times,
+            session_sync.behaviour_times,
+            session_sync.behaviour_chunk_lens,
+            session_sync.sampling_rate,
+            session_sync.offset_after_pre_epoch,
+        )
+
+    for trial in trials:
+        check_timestamps(
+            epochs=session_sync.epochs,
+            trial=trial,
+            all_tiff_timestamps=session_sync.all_tiff_timestamps,
+            chunk_lens=session_sync.chunk_lengths_daq,
+            valid_frame_times=session_sync.valid_frame_times,
+            sampling_rate=session_sync.sampling_rate,
+            daq_start_time=session_sync.daq_start_time,
+            wheel_blocked=wheel_blocked,
+            offset_after_pre_epoch=session_sync.offset_after_pre_epoch,
+        )
+
+    return trials
+
+
+def get_session_sync(
     tdms_path: Path,
     mouse_name: str,
-    date: int,
+    date: str,
     tiff_directory: Path,
     trials: List[TrialInfo],
-    wheel_blocked: bool = False,
-) -> tuple[List[TrialInfo], WheelFreeze | None]:
-    """Adds imaging info to trials and creates a WheelFreeze object if the wheel was blocked"""
-
-    logger.info("Adding imaging info to trials")
+) -> SessionImagingInfo:
+    """Handles all the necessary logics for syncing imaging and behaviour."""
     t1 = time.time()
 
     tiff_paths = sorted(get_tiff_paths_in_directory(tiff_directory))
@@ -298,6 +364,10 @@ def add_imaging_info_to_trials(
     stack_lengths_tiffs = correction.stack_lengths_tiffs
     chunk_lengths_daq = correction.chunk_lengths_daq
     frame_times_daq = correction.frame_times_daq
+    # a bit of a hack
+    # when DAQ was started before the pre-session epoch, this will be 0
+    # when DAQ was started after the pre-session epoch, this will be #frames in the pre-session epoch
+    # (this is necessary so that the valid frames and check tiff timestamps logic works)
     offset_after_pre_epoch = correction.offset_after_pre_epoch
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
@@ -308,59 +378,18 @@ def add_imaging_info_to_trials(
         chunk_lengths_daq=chunk_lengths_daq,
     )
 
-    if wheel_blocked:
-        frozen_wheel_chunks = extract_frozen_wheel_chunks(
-            stack_lengths_tiffs=stack_lengths_tiffs,
-            valid_frame_times=valid_frame_times,
-            behaviour_times=behaviour_times,
-            sampling_rate=sampling_rate,
-            check_first_chunk=offset_after_pre_epoch == 0,
-        )
-
-    for idx, trial in enumerate(trials):
-        # Works in place, maybe not ideal
-        add_daq_times_to_trial(
-            trial,
-            idx,
-            valid_frame_times,
-            behaviour_times,
-            behaviour_chunk_lens,
-            sampling_rate,
-            offset_after_pre_epoch,
-        )
-
-    for trial in trials:
-        check_timestamps(
-            epochs=epochs,
-            trial=trial,
-            all_tiff_timestamps=all_tiff_timestamps,
-            chunk_lens=chunk_lengths_daq,
-            valid_frame_times=valid_frame_times,
-            sampling_rate=sampling_rate,
-            daq_start_time=daq_start_time,
-            wheel_blocked=wheel_blocked,
-            offset_after_pre_epoch=offset_after_pre_epoch,
-        )
-    if wheel_blocked:
-        if offset_after_pre_epoch > 0:
-            wheel_freeze = WheelFreeze(
-                pre_training_start_frame=0,
-                pre_training_end_frame=offset_after_pre_epoch,
-                post_training_start_frame=frozen_wheel_chunks[1][0]
-                + offset_after_pre_epoch,
-                post_training_end_frame=frozen_wheel_chunks[1][1]
-                + offset_after_pre_epoch,
-            )
-        else:
-            wheel_freeze = WheelFreeze(
-                pre_training_start_frame=frozen_wheel_chunks[0][0],
-                pre_training_end_frame=frozen_wheel_chunks[0][1],
-                post_training_start_frame=frozen_wheel_chunks[1][0],
-                post_training_end_frame=frozen_wheel_chunks[1][1],
-            )
-    else:
-        wheel_freeze = None
-    return trials, wheel_freeze
+    return SessionImagingInfo(
+        stack_lengths_tiffs=stack_lengths_tiffs,
+        epochs=epochs,
+        all_tiff_timestamps=all_tiff_timestamps,
+        chunk_lengths_daq=chunk_lengths_daq,
+        daq_start_time=daq_start_time,
+        valid_frame_times=valid_frame_times,
+        behaviour_chunk_lens=behaviour_chunk_lens,
+        behaviour_times=behaviour_times,
+        sampling_rate=sampling_rate,
+        offset_after_pre_epoch=offset_after_pre_epoch,
+    )
 
 
 def get_valid_frame_times(
@@ -542,9 +571,13 @@ def process_session(
     if wheel_blocked:
         print("Wheel blocked")
         logger.info(f"Wheel blocked in session {mouse_name} {date}")
-    trials, wheel_freeze = add_imaging_info_to_trials(
-        tdms_path, mouse_name, date, tiff_directory, trials, wheel_blocked
-    )
+    session_sync = get_session_sync(tdms_path, mouse_name, date, tiff_directory, trials)
+    trials = add_imaging_info_to_trials(trials, session_sync, wheel_blocked)
+
+    if wheel_blocked:
+        get_wheel_freeze(session_sync)
+    else:
+        wheel_freeze = None
 
     with open(
         HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from pydantic import BaseModel, computed_field
+from datetime import datetime
 import numpy as np
 
 
@@ -142,6 +143,23 @@ class GrosmarkConfig:
     bin_size: int
     start: int
     end: int
+
+
+@dataclass
+class SessionImagingInfo:
+    # 2p / ScanImage info
+    stack_lengths_tiffs: np.ndarray
+    epochs: np.ndarray
+    all_tiff_timestamps: np.ndarray
+    # DAQ info
+    chunk_lengths_daq: np.ndarray
+    daq_start_time: datetime
+    # "results"
+    valid_frame_times: np.ndarray
+    behaviour_chunk_lens: np.ndarray
+    behaviour_times: np.ndarray
+    sampling_rate: int
+    offset_after_pre_epoch: int
 
 
 @dataclass
