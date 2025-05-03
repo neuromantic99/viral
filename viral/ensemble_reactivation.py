@@ -20,7 +20,6 @@ from viral.rastermap_utils import (
     align_validate_data,
     process_trials_data,
     filter_speed_position,
-    filter_out_ITI,
 )
 from viral.utils import get_wheel_circumference_from_rig, shuffle_rows
 from viral.imaging_utils import (
@@ -77,7 +76,6 @@ def get_running_bouts(
     place_cells: np.ndarray,
     speed: np.ndarray,
     frames_positions: np.ndarray,
-    ITI_starts_ends: np.ndarray,
     aligned_trial_frames: np.ndarray,
     config: GrosmarkConfig,
 ) -> np.ndarray:
@@ -326,10 +324,13 @@ def plot_ensemble_reactivation_preactivation(
 
     processed_matrices = {}
     for name, matrix in matrices.items():
-        # processed = zscore(matrix, axis=1)
         if smooth:
+            # processed = zscore(matrix, axis=1)
             # processed = gaussian_filter1d(processed, 30)
             processed = gaussian_filter1d(matrix, 30)
+        else:
+            # processed = zscore(matrix, axis=1)
+            processed = matrix
         processed_matrices[name] = processed
 
     for name, matrix in processed_matrices.items():
@@ -419,8 +420,8 @@ def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
 
 
 def main():
-    mouse = "JB032"
-    date = "2025-04-01"
+    mouse = "JB031"
+    date = "2025-03-13"
 
     verbose = True
     use_cache = True
@@ -432,6 +433,7 @@ def main():
 
     if not session.wheel_freeze:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
+        exit()
 
     cache_file = (
         HERE.parent / f"{session.mouse_name}_{session.date}_ensemble_reactivation.npz"
