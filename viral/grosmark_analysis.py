@@ -354,7 +354,6 @@ def get_offline_correlation_matrix(
             ITI_trial = gaussian_filter1d(trial_matrix, sigma=4.5, axis=1)
             all_corrs.append(cross_correlation_pandas(ITI_trial.T))
     else:
-        # TODO: check shape
         # 150-ms kernel convolution
         if do_shuffle:
             offline = shuffle_rows(offline)
@@ -418,7 +417,7 @@ def correlations_vs_peak_distance(
         plt.xlabel("Distance between peaks")
         plt.ylabel("Average pearson correlation")
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
-
+        # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
         plt.show()
 
 
