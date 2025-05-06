@@ -4,7 +4,7 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
-from viral.models import TrialInfo
+from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     array_bin_mean,
     degrees_to_cm,
@@ -261,7 +261,7 @@ def get_ITI_matrix(
 ) -> np.ndarray:
     """
     In theory will be 600 frames in an ITI (as is always 20 seconds)
-    In practise it's 599 or 598 (or could be something like 597 or 600, fix
+    In practice it's 599 or 598 (or could be something like 597 or 600, fix
     the assertion if so).
     Or could be less if you stop the trial in the ITI.
     So we'll take the first 598 frames of any trial that has 599 or 598
@@ -292,3 +292,19 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
+
+
+def get_preactivation_reactivation(
+    flu: np.ndarray, wheel_freeze: WheelFreeze
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return sliced flu array: offline epochs before and after behaviour session."""
+    return (
+        flu[
+            :,
+            wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame,
+        ],
+        flu[
+            :,
+            wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame,
+        ],
+    )
