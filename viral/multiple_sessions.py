@@ -206,9 +206,6 @@ def licking_difference(trials: List[TrialSummary]) -> float:
 def learning_metric(
     trials: List[TrialSummary], config: MultipleSessionsConfig
 ) -> float:
-    print(
-        f"Weights for learning metric: speed = {config.speed}; licking = {config.licking}"
-    )
     return (
         speed_difference(trials) * config.speed
         + licking_difference(trials) * config.licking
@@ -493,7 +490,6 @@ def plot_running_speed_summaries(
     running_speed_dict = create_metric_dict(
         mice,
         speed_function,
-        config=config,
         flat_sessions=True,
         include_reward_status=True,
     )
