@@ -134,3 +134,16 @@ class GrosmarkConfig:
     bin_size: int
     start: int
     end: int
+
+
+@dataclass
+class MultipleSessionsConfig:
+    window: int
+    speed: float
+    licking: float
+
+    def __post_init__(self):
+        if sum([self.speed, self.licking]) != 1:
+            raise ValueError(
+                f"Invalid weights for speed and licking in learning metric! Sum has to equal to 1, instead it is {sum([self.speed, self.licking])}"
+            )
