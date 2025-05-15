@@ -597,7 +597,7 @@ def plot_performance_summaries(
     mice: List[MouseSummary],
     session_type: str,
     group_by: list[str],
-    config=MultipleSessionsConfig,
+    config: MultipleSessionsConfig,
 ):
     rolling_performance_dict = create_metric_dict(
         mice,
