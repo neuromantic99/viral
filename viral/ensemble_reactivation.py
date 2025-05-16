@@ -421,7 +421,7 @@ def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
 
 def main():
     mouse = "JB031"
-    date = "2025-03-13"
+    date = "2025-03-28"
 
     verbose = True
     use_cache = True
@@ -510,7 +510,6 @@ def main():
             place_cells=place_cells,
             speed=speed,
             frames_positions=positions,
-            ITI_starts_ends=ITI_starts_ends,
             aligned_trial_frames=aligned_trial_frames,
             config=config,
         )
