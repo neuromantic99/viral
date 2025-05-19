@@ -63,5 +63,14 @@
       "console": "integratedTerminal",
       "justMyCode": true
     },
+
+    {
+      "name": "learning stages",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/learning_stages.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
   ]
 }
