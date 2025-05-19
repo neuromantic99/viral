@@ -20,10 +20,13 @@ from viral.imaging_utils import subtract_neuropil, compute_dff
 
 
 def get_f(s2p_path: Path) -> np.ndarray:
+    """
+    Returns fluorescence with neuropil signal subtracted.
+    """
     # not using iscell as it will be used in later analysis steps
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
-    print("Loaded fluorescence data and substracted neuropil")
+    print("Loaded fluorescence data and subtracted neuropil")
     return subtract_neuropil(f_raw, f_neu)
 
 
