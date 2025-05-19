@@ -16,7 +16,18 @@ from OASIS.oasis.functions import deconvolve
 from BaselineRemoval import BaselineRemoval
 
 from viral.constants import TIFF_UMBRELLA
-from viral.two_photon import get_dff, subtract_neuropil
+from viral.imaging_utils import subtract_neuropil, compute_dff
+
+
+def get_f(s2p_path: Path) -> np.ndarray:
+    """
+    Returns fluorescence with neuropil signal subtracted.
+    """
+    # not using iscell as it will be used in later analysis steps
+    f_raw = np.load(s2p_path / "F.npy")
+    f_neu = np.load(s2p_path / "Fneu.npy")
+    print("Loaded fluorescence data and subtracted neuropil")
+    return subtract_neuropil(f_raw, f_neu)
 
 
 def modwt_denoise(
@@ -56,15 +67,7 @@ def modwt_denoise(
 def grosmark_preprocess(
     s2p_path: Path, plot: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
-
-    # Probably remove the is cell
-
-    iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    f_raw = np.load(s2p_path / "F.npy")[iscell, :]
-    f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
-    f = subtract_neuropil(f_raw, f_neu)
-
-    print("Loaded fluorescence data and substracted neuropil")
+    f = get_f(s2p_path)
 
     all_spikes = []
     all_denoised = []
@@ -110,7 +113,7 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
         spikes, denoised = grosmark_preprocess(s2p_path, plot)
 
     else:
-        dff = get_dff(mouse, date)
+        dff = compute_dff(get_f(s2p_path))
 
         all_denoised = list()
         all_spikes = list()
@@ -146,5 +149,5 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    # main(mouse="JB027", date="2025-02-26", grosmark=False)
-    main(mouse="JB027", date="2025-02-26", grosmark=True)
+    main(mouse="JB031", date="2025-03-07", grosmark=False)
+    # main(mouse="JB027", date="2025-02-26", grosmark=True)
