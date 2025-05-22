@@ -18,7 +18,12 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.imaging_utils import extract_TTL_chunks, get_sampling_rate, trial_is_imaged
+from viral.imaging_utils import (
+    extract_TTL_chunks,
+    get_sampling_rate,
+    get_imaging_crashed,
+    trial_is_imaged,
+)
 
 
 from viral.constants import (
@@ -36,6 +41,7 @@ from viral.utils import (
     get_tiff_paths_in_directory,
     time_list_to_datetime,
     degrees_to_cm,
+    uk_to_utc,
 )
 
 import logging
@@ -148,7 +154,10 @@ def add_daq_times_to_trial(
 
 
 def add_imaging_info_to_trials(
-    tdms_path: Path, tiff_directory: Path, trials: List[TrialInfo]
+    tdms_path: Path,
+    tiff_directory: Path,
+    trials: List[TrialInfo],
+    imaging_crashed: bool = False,
 ) -> List[TrialInfo]:
 
     logger.info("Adding imaging info to trials")
@@ -193,7 +202,10 @@ def add_imaging_info_to_trials(
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
     valid_frame_times = get_valid_frame_times(
-        stack_lengths_tiffs, frame_times_daq, chunk_lengths_daq
+        stack_lengths_tiffs,
+        frame_times_daq,
+        chunk_lengths_daq,
+        loosen_assertions=imaging_crashed,
     )
 
     for idx, trial in enumerate(trials):
@@ -225,6 +237,7 @@ def get_valid_frame_times(
     stack_lengths_tiffs: np.ndarray,
     frame_times_daq: np.ndarray,
     chunk_lengths_daq: np.ndarray,
+    loosen_assertions: bool = False,
 ) -> np.ndarray:
     """Consistently, the number of triggers recorded is two more than the number of frames recorded.
     This only occurs when the imaging is manually stopped before a grab is complete (confirmed by counting triggers
@@ -236,6 +249,9 @@ def get_valid_frame_times(
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
 
+    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 10 but could be more)
+                       that are in the daq but not in the tiff. Only include this flag if the notes say the session was crashed.
+
     """
 
     valid_frame_times = np.array([])
@@ -244,21 +260,31 @@ def get_valid_frame_times(
         stack_lengths_tiffs, chunk_lengths_daq, strict=True
     ):
 
-        assert chunk_len_daq - stack_len_tiff in {
-            0,
-            2,
-            3,
-        }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
-        This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
+        assert (
+            chunk_len_daq - stack_len_tiff
+            in {
+                0,
+                2,
+                3,
+            }
+            or loosen_assertions
+            and chunk_len_daq - stack_len_tiff <= 10
+        ), f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
+        This will occur, especially on crashed recordings. Think about a fix."""
 
         valid_frame_times = np.append(
             valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
         )
         offset += chunk_len_daq
 
-    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
-        frame_times_daq
-    ) - len(valid_frame_times) <= 3 * len(chunk_lengths_daq)
+    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and (
+        (
+            0
+            <= len(frame_times_daq) - len(valid_frame_times)
+            <= 3 * len(chunk_lengths_daq)
+        )
+        or loosen_assertions
+    )
 
     return valid_frame_times
 
@@ -360,7 +386,8 @@ def check_timestamps(
     assert last_frame_trial is not None
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
-    chunk_start = time_list_to_datetime(epochs[epoch_trial])
+    # Epoch is in uk time, convert to UTC to match the daq
+    chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
 
     for frame in range(first_frame_trial, last_frame_trial):
 
@@ -373,9 +400,13 @@ def check_timestamps(
         offset = (frame_datetime - frame_daq_time).total_seconds()
         # Allow for some drift up to 15ms
         if trial.trial_start_time / 60 < 30:
-            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
+            assert (
+                abs(offset) <= 0.01 if sampling_rate == 10000 else 0.02
+            ), "Tiff timestamp does not match daq timestamp"
         else:
-            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
+            assert (
+                abs(offset) <= 0.015 if sampling_rate == 10000 else 0.03
+            ), "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -388,10 +419,15 @@ def process_session(
 ) -> None:
 
     print(f"Off we go for {mouse_name} {date} {session_type}")
+    imaging_crashed = get_imaging_crashed(mouse_name, date)
+
+    print(f"Imaging crashed: {imaging_crashed}")
+
     trials = add_imaging_info_to_trials(
         tdms_path,
         tiff_directory,
         trials,
+        imaging_crashed=imaging_crashed,
     )
 
     with open(
