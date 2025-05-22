@@ -83,6 +83,7 @@ def grosmark_place_field(
     )
 
     spks = spks[pcs, :]
+    smoothed_matrix = smoothed_matrix[pcs, :]
 
     peak_indices = np.argmax(smoothed_matrix, axis=1)
     peak_position_cm = peak_indices * config.bin_size + config.start
@@ -212,35 +213,32 @@ def get_place_cells(
 
     pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
 
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
-
     print(f"percent place cells before extra check {np.sum(pcs) / n_cells_total}")
 
-    pcs = filter_additional_check(
+    pcs_additional = filter_additional_check(
         all_trials=all_trials[:, pcs, :],
         place_threshold=place_threshold[pcs, :],
-        smoothed_matrix=smoothed_matrix,
+        smoothed_matrix=smoothed_matrix[pcs, :],
     )
 
+    # Cells that pass both the original and additional checks
+    pcs_combined = pcs.copy()
+    pcs_combined[pcs] = pcs[pcs] & pcs_additional
+
+    print(
+        f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"
+    )
     if plot:
         plot_place_cells(
-            smoothed_matrix=smoothed_matrix,
-            shuffled_matrices=shuffled_matrices,
-            shuffled_place_cells=shuffled_place_cells,
+            smoothed_matrix=smoothed_matrix[pcs_combined, :],
             config=config,
         )
-
-    print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
 
     print(
         f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
-    place_cell_mask = np.zeros(n_cells_total, dtype=bool)
-    place_cell_mask[np.flatnonzero(pcs)] = True
-
-    return place_cell_mask, smoothed_matrix[pcs, :]
+    return pcs_combined, smoothed_matrix
 
 
 def plot_speed(
@@ -464,8 +462,6 @@ def plot_circular_distance_matrix(
 
 def plot_place_cells(
     smoothed_matrix: np.ndarray,
-    shuffled_matrices: np.ndarray,
-    shuffled_place_cells: np.ndarray,
     config: GrosmarkConfig,
 ) -> None:
     plt.figure()
@@ -483,25 +479,9 @@ def plot_place_cells(
 
     plt.xticks(
         np.linspace(0, smoothed_matrix.shape[1], 5),
-        np.linspace(config.start, config.end, 5).astype(int),
+        [str(x) for x in np.linspace(config.start, config.end, 5).astype(int)],
     )
 
-    plt.colorbar()
-
-    plt.figure()
-
-    plt.imshow(
-        zscore(
-            sort_matrix_peak(shuffled_matrices[0, shuffled_place_cells[0, :], :]),
-            axis=1,
-        ),
-        aspect="auto",
-        cmap="bwr",
-        vmin=-1,
-        vmax=2,
-    )
-
-    plt.title("shuffled")
     plt.colorbar()
 
 
