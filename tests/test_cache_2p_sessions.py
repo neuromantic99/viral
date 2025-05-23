@@ -91,3 +91,25 @@ def test_extract_frozen_wheel_chunks_unexpected_chunk_len() -> None:
             behaviour_times=behaviour_times,
             sampling_rate=sampling_rate,
         )
+
+
+def test_extract_frozen_wheel_chunks_first_chunk() -> None:
+    """Check the logic for ignoring the first chunk if the DAQ has not been started."""
+    stack_lengths_tiff = np.array([27000, 10000, 27000])
+    sampling_rate = 10000
+    behaviour_times = np.arange(10, 2367) * (sampling_rate / 30)
+
+    # mimick manual correction
+    valid_frame_times = np.arange(0, sum([10000, 27000])) * (sampling_rate / 30)
+    stack_lengths_tiff = np.delete(stack_lengths_tiff, 0)
+
+    expected = (None, (10000, 37000))
+    result = extract_frozen_wheel_chunks(
+        stack_lengths_tiffs=stack_lengths_tiff,
+        valid_frame_times=valid_frame_times,
+        behaviour_times=behaviour_times,
+        sampling_rate=sampling_rate,
+        check_first_chunk=False,
+    )
+
+    assert expected == result

@@ -94,6 +94,7 @@ def add_daq_times_to_trial(
     behaviour_times: np.ndarray,
     behaviour_chunk_lens: np.ndarray,
     daq_sampling_rate: int,
+    wheel_freeze: WheelFreeze | None = None,
     offset_after_pre_epoch: int = 0,
 ) -> None:
     trial_spacer_daq_times = behaviour_times[
@@ -143,6 +144,16 @@ def add_daq_times_to_trial(
             + offset_after_pre_epoch
         )
 
+        if wheel_freeze:
+            assert (
+                state.closest_frame_start >= wheel_freeze.pre_training_end_frame
+                and state.closest_frame_start <= wheel_freeze.post_training_start_frame
+            ), "Behaviour signal detected in frozen wheel period"
+            assert (
+                state.closest_frame_end >= wheel_freeze.pre_training_end_frame
+                and state.closest_frame_end <= wheel_freeze.post_training_start_frame
+            ), "Behaviour signal detected in frozen wheel period"
+
         if state.name == "spacer_high_00":
             trial.trial_start_closest_frame = state.closest_frame_start
 
@@ -155,6 +166,11 @@ def add_daq_times_to_trial(
             int(np.argmin(np.abs(valid_frame_times - event.start_time_daq)))
             + offset_after_pre_epoch
         )
+        if wheel_freeze:
+            assert (
+                event.closest_frame >= wheel_freeze.pre_training_end_frame
+                and event.closest_frame <= wheel_freeze.post_training_start_frame
+            ), "Behaviour signal detected in frozen wheel period"
 
 
 def extract_frozen_wheel_chunks(
@@ -271,7 +287,7 @@ def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
 def add_imaging_info_to_trials(
     trials: List[TrialInfo],
     session_sync: SessionImagingInfo,
-    wheel_blocked: bool = False,
+    wheel_freeze: WheelFreeze | None = None,
 ) -> List[TrialInfo]:
     """Adds imaging info to trials."""
     logger.info("Adding imaging info to trials")
@@ -285,6 +301,7 @@ def add_imaging_info_to_trials(
             session_sync.behaviour_times,
             session_sync.behaviour_chunk_lens,
             session_sync.sampling_rate,
+            wheel_freeze,
             session_sync.offset_after_pre_epoch,
         )
 
@@ -297,7 +314,7 @@ def add_imaging_info_to_trials(
             valid_frame_times=session_sync.valid_frame_times,
             sampling_rate=session_sync.sampling_rate,
             daq_start_time=session_sync.daq_start_time,
-            wheel_blocked=wheel_blocked,
+            wheel_blocked=True if wheel_freeze else False,
             offset_after_pre_epoch=session_sync.offset_after_pre_epoch,
         )
 
@@ -573,12 +590,8 @@ def process_session(
         print("Wheel blocked")
         logger.info(f"Wheel blocked in session {mouse_name} {date}")
     session_sync = get_session_sync(tdms_path, mouse_name, date, tiff_directory, trials)
-    trials = add_imaging_info_to_trials(trials, session_sync, wheel_blocked)
-
-    if wheel_blocked:
-        wheel_freeze = get_wheel_freeze(session_sync)
-    else:
-        wheel_freeze = None
+    wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
+    trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze)
 
     with open(
         HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"
