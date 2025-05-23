@@ -19,10 +19,10 @@ from viral.imaging_utils import (
     load_imaging_data,
     trial_is_imaged,
     activity_trial_position,
-    get_resting_chunks,
+    get_preactivation_reactivation,
 )
 
-from viral.models import Cached2pSession, GrosmarkConfig
+from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 
 from viral.utils import (
     cross_correlation_pandas,
@@ -45,12 +45,79 @@ def grosmark_place_field(
     spks: np.ndarray,
     rewarded: bool | None,
     config: GrosmarkConfig,
+    plot: bool = True,
 ) -> None:
-    """The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
-      2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
+    """
+    Grosmark et al. place field analysis.
+    1. get place cell mask
+    2. get peak indices and peak positions
+    3. do pair-wise correlations
+    """
+    if session.wheel_freeze is None:
+        spks = binarise_spikes(spks)
+    else:
+        # """Based on the observed differences in calcium activity waveforms between the online and
+        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
+        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
+        online_spks = binarise_spikes(
+            spks[
+                :,
+                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
+            ],
+            mad_threshold=1.5,
+        )
+        offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
+            flu=spks, wheel_freeze=session.wheel_freeze
+        )
+        # TODO: should pre and post be binarised as one?
+        offline_spks_pre = binarise_spikes(
+            offline_spks_pre,
+            mad_threshold=1.25,
+        )
+        offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
+        spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
+        # TODO: shape is off by one frame (pre is one short), do we care?
+
+    pcs, smoothed_matrix = get_place_cells(
+        session=session, spks=spks, rewarded=rewarded, config=config, plot=plot
+    )
+
+    spks = spks[pcs, :]
+    smoothed_matrix = smoothed_matrix[pcs, :]
+
+    peak_indices = np.argmax(smoothed_matrix, axis=1)
+    peak_position_cm = peak_indices * config.bin_size + config.start
+    sorted_order = np.argsort(peak_indices)
+    peak_position_cm = peak_position_cm[sorted_order]
+    smoothed_matrix = smoothed_matrix[sorted_order, :]
+    spks = spks[sorted_order, :]
+
+    if plot:
+        plot_circular_distance_matrix(smoothed_matrix)
+
+    offline_correlations(
+        session,
+        spks,
+        peak_position_cm=peak_position_cm,
+        wheel_freeze=session.wheel_freeze,
+        rewarded=rewarded,
+    )
+
+
+def get_place_cells(
+    session: Cached2pSession,
+    spks: np.ndarray,
+    config: GrosmarkConfig,
+    rewarded: bool | None,
+    plot: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    From Grosmark et al.:
+    The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
+    2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
     based on its sparsified spike estimate vector, Ssp. This firing rate by position vector was subsequently
     smoothed with a 7.5-cm Gaussian kernel leading to the smoothed firing rate by position vector.
-    In addition, for each cell, 2,000 shuffled smoothed firing rate by position vectors were computed for each
+    In addition, for each cell, 2,000 shuffled smoothed firing rate by pos0tion vectors were computed for each
     cell following the per-lap randomized circular permutation of estimated activity vector, Ssp. For each cell,
     putative PFs were defined as those in which the observed smoothed firing rate by position vectors exceeded the
     99th percentile of their shuffled smoothed firing rate by position vectors as assessed on a per spatial-bin basis for
@@ -59,8 +126,9 @@ def grosmark_place_field(
     As an additional control, only those putative PFs in which the cell had a greater within-PF than outside-of-PF firing rates
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
 
-    TODO: Looks like there might be some real landmark activity that could be reactivated. Analyse this.
-
+    Returns:
+    - place_cell_mask: boolean mask of shape (n_cells,) where True indicates a place cell
+    - smoothed_matrix: smoothed firing rate by position matrix of shape (n_cells, n_bins)
     """
 
     n_cells_total = spks.shape[0]
@@ -135,7 +203,8 @@ def grosmark_place_field(
 
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
-    plot_speed(session, rewarded, config)
+    if plot:
+        plot_speed(session, rewarded, config)
 
     shuffled_place_cells = np.array(
         [
@@ -146,49 +215,32 @@ def grosmark_place_field(
 
     pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
 
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
-
     print(f"percent place cells before extra check {np.sum(pcs) / n_cells_total}")
 
-    pcs = filter_additional_check(
+    pcs_additional = filter_additional_check(
         all_trials=all_trials[:, pcs, :],
         place_threshold=place_threshold[pcs, :],
-        smoothed_matrix=smoothed_matrix,
+        smoothed_matrix=smoothed_matrix[pcs, :],
     )
 
-    # Don't love this double indexing
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
-
-    plot_place_cells(
-        smoothed_matrix=smoothed_matrix,
-        shuffled_matrices=shuffled_matrices,
-        shuffled_place_cells=shuffled_place_cells,
-        config=config,
-    )
-
-    print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
+    # Cells that pass both the original and additional checks
+    pcs_combined = pcs.copy()
+    pcs_combined[pcs] = pcs[pcs] & pcs_additional
 
     print(
-        f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
+        f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"
+    )
+    if plot:
+        plot_place_cells(
+            smoothed_matrix=smoothed_matrix[pcs_combined, :],
+            config=config,
+        )
+
+    print(
+        f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
-    peak_indices = np.argmax(smoothed_matrix, axis=1)
-    peak_position_cm = peak_indices * config.bin_size + config.start
-    sorted_order = np.argsort(peak_indices)
-    peak_position_cm = peak_position_cm[sorted_order]
-
-    plot_circular_distance_matrix(smoothed_matrix, sorted_order)
-
-    offline_correlations(
-        session,
-        spks[sorted_order, :],
-        peak_position_cm=peak_position_cm,
-        rewarded=rewarded,
-    )
-
-    plt.show()
+    return pcs_combined, smoothed_matrix
 
 
 def plot_speed(
@@ -227,6 +279,7 @@ def offline_correlations(
     session: Cached2pSession,
     spks: np.ndarray,
     peak_position_cm: np.ndarray,
+    wheel_freeze: WheelFreeze | None,
     rewarded: bool | None,
 ) -> None:
     """Correlates offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
@@ -240,37 +293,99 @@ def offline_correlations(
 
     """
 
-    offline = get_ITI_matrix(
-        trials=[
-            trial
-            for trial in session.trials
-            if trial_is_imaged(trial)
-            and (rewarded is None or trial.texture_rewarded == rewarded)
-        ],
-        flu=spks,
-        bin_size=None,
-    )
+    if not wheel_freeze:
+        offline = get_ITI_matrix(
+            trials=[
+                trial
+                for trial in session.trials
+                if trial_is_imaged(trial)
+                and (rewarded is None or trial.texture_rewarded == rewarded)
+            ],
+            flu=spks,
+            bin_size=None,
+        )
 
-    shuffled_corrs = get_offline_correlation_matrix(offline, do_shuffle=True, plot=True)
-    real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=True)
+        shuffled_corrs = get_offline_correlation_matrix(
+            offline, wheel_freeze=False, do_shuffle=True, plot=True
+        )
+        real_corrs = get_offline_correlation_matrix(
+            offline, wheel_freeze=False, do_shuffle=False, plot=True
+        )
+        plt.figure()
 
-    correlations_vs_peak_distance(
-        real_corrs, peak_position_cm=peak_position_cm, plot=True
-    )
+        r, p = correlations_vs_peak_distance(
+            real_corrs, peak_position_cm=peak_position_cm, plot=True
+        )
+
+        plt.xlabel("Distance between peaks")
+        plt.ylabel("Average pearson correlation")
+        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
+        # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
+        plt.show()
+    else:
+        offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
+            flu=spks, wheel_freeze=wheel_freeze
+        )
+        pre_corrs_real = get_offline_correlation_matrix(
+            offline=offline_spks_pre, wheel_freeze=True, do_shuffle=False, plot=True
+        )
+        pre_corrs_shuffled = get_offline_correlation_matrix(
+            offline=offline_spks_pre, wheel_freeze=True, do_shuffle=True, plot=True
+        )
+        post_corrs_real = get_offline_correlation_matrix(
+            offline=offline_spks_post, wheel_freeze=True, do_shuffle=False, plot=True
+        )
+        post_corrs_shuffled = get_offline_correlation_matrix(
+            offline=offline_spks_post, wheel_freeze=True, do_shuffle=True, plot=True
+        )
+        plt.figure()
+        plt.xlabel("Distance between peaks")
+        plt.ylabel("Average pearson correlation")
+        r_pre, p_pre = correlations_vs_peak_distance(
+            pre_corrs_real,
+            peak_position_cm=peak_position_cm,
+            colour="blue",
+            label="pre-epoch",
+            plot=True,
+        )
+        r_post, p_post = correlations_vs_peak_distance(
+            post_corrs_real,
+            peak_position_cm=peak_position_cm,
+            colour="red",
+            label="post-epoch",
+            plot=True,
+        )
+        plt.legend()
+        plt.title(
+            f"pre: r={r_pre:.2f}, p={p_pre:.2f}\npost: r={r_post:.2f}, p={p_post:.2f}"
+        )
+        # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
+        plt.show()
 
 
 def get_offline_correlation_matrix(
-    offline: np.ndarray, do_shuffle: bool = False, plot: bool = False
+    offline: np.ndarray,
+    wheel_freeze: bool,
+    do_shuffle: bool = False,
+    plot: bool = True,
 ) -> np.ndarray:
-    n_trials = offline.shape[0]
-    all_corrs = []
-    for trial in range(n_trials):
-        trial_matrix = offline[trial, :, :]
-        if do_shuffle:
-            trial_matrix = shuffle_rows(trial_matrix)
+    """Reproducing Grosmark et al. figure 4. c/d."""
+    if not wheel_freeze:
+        n_trials = offline.shape[0]
+        all_corrs = []
+        for trial in range(n_trials):
+            trial_matrix = offline[trial, :, :]
+            if do_shuffle:
+                trial_matrix = shuffle_rows(trial_matrix)
+            # 150-ms kernel convolution
+            ITI_trial = gaussian_filter1d(trial_matrix, sigma=4.5, axis=1)
+            all_corrs.append(cross_correlation_pandas(ITI_trial.T))
+    else:
         # 150-ms kernel convolution
-        ITI_trial = gaussian_filter1d(trial_matrix, sigma=4.5, axis=1)
-        all_corrs.append(cross_correlation_pandas(ITI_trial.T))
+        if do_shuffle:
+            offline = shuffle_rows(offline)
+        offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
+        all_corrs = [cross_correlation_pandas(offline.T)]
 
     corrs = np.nanmean(np.array(all_corrs), 0)
 
@@ -283,19 +398,25 @@ def get_offline_correlation_matrix(
             vmax=0.1,
             cmap="bwr",
         )
-
     return corrs
 
 
 def correlations_vs_peak_distance(
-    corrs: np.ndarray, peak_position_cm: np.ndarray, plot: bool = False
-) -> None:
+    corrs: np.ndarray,
+    peak_position_cm: np.ndarray,
+    colour: str = None,
+    label: str = None,
+    plot: bool = True,
+) -> tuple[float, float]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
     distance between their place field peaks.
 
     Args:
     corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
     peak_position_cm: the position of the peak firing rate of each neuron in cm
+    colour: colour for the plot
+    label: label for the plot
+    plot: whether to plot
     """
 
     n_cells = corrs.shape[0]
@@ -323,25 +444,15 @@ def correlations_vs_peak_distance(
         y.append(np.mean(cell_corrs[in_bin]))
 
     if plot:
-        plt.figure()
-        plt.plot(x, y)
-        r, p = pearsonr(x, y)
-
-        plt.xlabel("Distance between peaks")
-        plt.ylabel("Average pearson correlation")
-        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
-
-        plt.show()
+        plt.plot(x, y, color=colour, label=label)
+    r, p = pearsonr(x, y)
+    return r, p
 
 
-def plot_circular_distance_matrix(
-    smoothed_matrix: np.ndarray, sorted_order: np.ndarray
-) -> None:
+def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
 
     plt.figure()
-    plt.imshow(
-        circular_distance_matrix(smoothed_matrix[sorted_order, :]), cmap="RdYlBu"
-    )
+    plt.imshow(circular_distance_matrix(smoothed_matrix), cmap="RdYlBu")
     plt.colorbar()
     plt.ylabel("Cell number")
     plt.xlabel("Cell number")
@@ -349,8 +460,6 @@ def plot_circular_distance_matrix(
 
 def plot_place_cells(
     smoothed_matrix: np.ndarray,
-    shuffled_matrices: np.ndarray,
-    shuffled_place_cells: np.ndarray,
     config: GrosmarkConfig,
 ) -> None:
     plt.figure()
@@ -368,25 +477,9 @@ def plot_place_cells(
 
     plt.xticks(
         np.linspace(0, smoothed_matrix.shape[1], 5),
-        np.linspace(config.start, config.end, 5).astype(int),
+        [str(x) for x in np.linspace(config.start, config.end, 5).astype(int)],
     )
 
-    plt.colorbar()
-
-    plt.figure()
-
-    plt.imshow(
-        zscore(
-            sort_matrix_peak(shuffled_matrices[0, shuffled_place_cells[0, :], :]),
-            axis=1,
-        ),
-        aspect="auto",
-        cmap="bwr",
-        vmin=-1,
-        vmax=2,
-    )
-
-    plt.title("shuffled")
     plt.colorbar()
 
 
@@ -462,7 +555,7 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-def binarise_spikes(spks: np.ndarray) -> np.ndarray:
+def binarise_spikes(spks: np.ndarray, mad_threshold: int = 1.5) -> np.ndarray:
     """Implements the calcium imaging preprocessing stepts here:
     https://www.nature.com/articles/s41593-021-00920-7#Sec12
 
@@ -493,7 +586,7 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     # threshold = mad * 1.5
 
     # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * mad_threshold
     mask = spks - threshold[:, np.newaxis] > 0
     spks[~mask] = 0
     spks[mask] = 1
@@ -502,9 +595,11 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
 
 if __name__ == "__main__":
 
+    # mouse = "JB031"
+    # date = "2025-03-28"
+
     mouse = "JB027"
     date = "2025-02-26"
-    # date = "2024-12-10"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -526,8 +621,6 @@ if __name__ == "__main__":
         )
         < dff.shape[1]
     ), "Tiff is too short"
-
-    spks = binarise_spikes(spks)
 
     is_unsupervised = session_is_unsupervised(session)
 
