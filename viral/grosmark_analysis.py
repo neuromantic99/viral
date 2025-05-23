@@ -89,13 +89,15 @@ def grosmark_place_field(
     peak_position_cm = peak_indices * config.bin_size + config.start
     sorted_order = np.argsort(peak_indices)
     peak_position_cm = peak_position_cm[sorted_order]
+    smoothed_matrix = smoothed_matrix[sorted_order, :]
+    spks = spks[sorted_order, :]
 
     if plot:
-        plot_circular_distance_matrix(smoothed_matrix, sorted_order)
+        plot_circular_distance_matrix(smoothed_matrix)
 
     offline_correlations(
         session,
-        spks[sorted_order, :],
+        spks,
         peak_position_cm=peak_position_cm,
         wheel_freeze=session.wheel_freeze,
         rewarded=rewarded,
@@ -447,14 +449,10 @@ def correlations_vs_peak_distance(
     return r, p
 
 
-def plot_circular_distance_matrix(
-    smoothed_matrix: np.ndarray, sorted_order: np.ndarray
-) -> None:
+def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
 
     plt.figure()
-    plt.imshow(
-        circular_distance_matrix(smoothed_matrix[sorted_order, :]), cmap="RdYlBu"
-    )
+    plt.imshow(circular_distance_matrix(smoothed_matrix), cmap="RdYlBu")
     plt.colorbar()
     plt.ylabel("Cell number")
     plt.xlabel("Cell number")
@@ -597,10 +595,11 @@ def binarise_spikes(spks: np.ndarray, mad_threshold: int = 1.5) -> np.ndarray:
 
 if __name__ == "__main__":
 
-    mouse = "JB031"
-    date = "2025-03-28"
-    # mouse = "JB027"
-    # date = "2025-02-26"
+    # mouse = "JB031"
+    # date = "2025-03-28"
+
+    mouse = "JB027"
+    date = "2025-02-26"
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
