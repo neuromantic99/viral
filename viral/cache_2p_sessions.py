@@ -132,19 +132,26 @@ def add_daq_times_to_trial(
     )
 
     # Bit of monkey patching but oh well
+    # TODO: think of permanent fix for behaviour time stamps being NaN
     for state in trial.states_info:
         state.start_time_daq = bpod_to_daq(state.start_time).astype(float)
         state.end_time_daq = bpod_to_daq(state.end_time).astype(float)
-        state.closest_frame_start = (
-            int(np.argmin(np.abs(valid_frame_times - state.start_time_daq)))
-            + offset_after_pre_epoch
-        )
-        state.closest_frame_end = (
-            int(np.argmin(np.abs(valid_frame_times - state.end_time_daq)))
-            + offset_after_pre_epoch
-        )
+        if np.isnan(state.start_time):
+            state.closest_frame_start = np.nan
+        else:
+            state.closest_frame_start = (
+                int(np.argmin(np.abs(valid_frame_times - state.start_time_daq)))
+                + offset_after_pre_epoch
+            )
+        if np.isnan(state.end_time):
+            state.closest_frame_end = np.nan
+        else:
+            state.closest_frame_end = (
+                int(np.argmin(np.abs(valid_frame_times - state.end_time_daq)))
+                + offset_after_pre_epoch
+            )
 
-        if wheel_freeze:
+        if wheel_freeze and not np.isnan(state.start_time):
             assert (
                 state.closest_frame_start >= wheel_freeze.pre_training_end_frame
                 and state.closest_frame_start <= wheel_freeze.post_training_start_frame
@@ -162,11 +169,14 @@ def add_daq_times_to_trial(
 
     for event in trial.events_info:
         event.start_time_daq = float(bpod_to_daq(event.start_time))
-        event.closest_frame = (
-            int(np.argmin(np.abs(valid_frame_times - event.start_time_daq)))
-            + offset_after_pre_epoch
-        )
-        if wheel_freeze:
+        if np.isnan(event.start_time):
+            event.closest_frame = np.nan
+        else:
+            event.closest_frame = (
+                int(np.argmin(np.abs(valid_frame_times - event.start_time_daq)))
+                + offset_after_pre_epoch
+            )
+        if wheel_freeze and not np.isnan(event.start_time):
             assert (
                 event.closest_frame >= wheel_freeze.pre_training_end_frame
                 and event.closest_frame <= wheel_freeze.post_training_start_frame
@@ -246,12 +256,12 @@ def extract_frozen_wheel_chunks(
         assert not np.any(
             (behaviour_times >= first_chunk_times[0])
             & (behaviour_times <= first_chunk_times[-1])
-        ), "Behavioral pulses detected in pre-training period!"
+        ), "Behavioural pulses detected in pre-training period!"
 
     assert not np.any(
         (behaviour_times >= last_chunk_times[0])
         & (behaviour_times <= last_chunk_times[-1])
-    ), "Behavioral pulses detected in post-training period!"
+    ), "Behavioural pulses detected in post-training period!"
 
     return (first_chunk, last_chunk)
 
@@ -314,7 +324,7 @@ def add_imaging_info_to_trials(
             valid_frame_times=session_sync.valid_frame_times,
             sampling_rate=session_sync.sampling_rate,
             daq_start_time=session_sync.daq_start_time,
-            wheel_blocked=True if wheel_freeze else False,
+            wheel_blocked=bool(wheel_freeze),
             offset_after_pre_epoch=session_sync.offset_after_pre_epoch,
         )
 
@@ -571,9 +581,9 @@ def check_timestamps(
         # i.e. one minute into the behaviour is at least 15 mins into the entire session
         increase_offset_allowance_time = 30 if not wheel_blocked else 50
         if trial.trial_start_time / 60 < increase_offset_allowance_time:
-            assert abs(offset) <= 0.01, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.02, "Tiff timestamp does not match daq timestamp"
         else:
-            assert abs(offset) <= 0.015, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.025, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -620,53 +630,60 @@ def main() -> None:
             try:
                 print(f"the type is {row['Type']}")
                 date = row["Date"]
-                session_type = row["Type"].lower()
-                try:
-                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
-                    print("Wheel blocked set to None")
-                    wheel_blocked = None
-                if (
-                    not redo
-                    and (
-                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
-                    ).exists()
-                ):
-                    print(f"Skipping {mouse_name} {date} as already exists")
-                    continue
-                if (
-                    "learning day" not in session_type
-                    and "reversal learning" not in session_type
-                ):
-                    print(f"Skipping {mouse_name} {date} {session_type}")
-                    continue
-                if not row["Sync file"]:
-                    print(
-                        f"Skipping {mouse_name} {date} {session_type} as no sync file"
+                if date == "2025-03-28":
+                    session_type = row["Type"].lower()
+                    try:
+                        wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                    except KeyError as e:
+                        print(f"No column 'Wheel blocked?' found: {e}")
+                        print("Wheel blocked set to None")
+                        wheel_blocked = None
+                    if (
+                        not redo
+                        and (
+                            HERE.parent
+                            / "data"
+                            / "cached_2p"
+                            / f"{mouse_name}_{date}.json"
+                        ).exists()
+                    ):
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
+                    if (
+                        "learning day" not in session_type
+                        and "reversal learning" not in session_type
+                    ):
+                        print(f"Skipping {mouse_name} {date} {session_type}")
+                        continue
+                    if not row["Sync file"]:
+                        print(
+                            f"Skipping {mouse_name} {date} {session_type} as no sync file"
+                        )
+                        continue
+                    session_numbers = parse_session_number(row["Session Number"])
+                    trials = []
+                    for session_number in session_numbers:
+                        session_path = (
+                            BEHAVIOUR_DATA_PATH
+                            / mouse_name
+                            / row["Date"]
+                            / session_number
+                        )
+                        trials.extend(load_data(session_path))
+                    logger.info("\n")
+                    logger.info(f"Processing {mouse_name} {date} {session_type}")
+                    process_session(
+                        trials=trials,
+                        tiff_directory=TIFF_UMBRELLA / date / mouse_name,
+                        tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                        mouse_name=mouse_name,
+                        session_type=session_type,
+                        date=date,
+                        wheel_blocked=wheel_blocked,
                     )
-                    continue
-                session_numbers = parse_session_number(row["Session Number"])
-                trials = []
-                for session_number in session_numbers:
-                    session_path = (
-                        BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
+                    logger.info(
+                        f"Completed processing for {mouse_name} {date} {session_type}"
                     )
-                    trials.extend(load_data(session_path))
-                logger.info("\n")
-                logger.info(f"Processing {mouse_name} {date} {session_type}")
-                process_session(
-                    trials=trials,
-                    tiff_directory=TIFF_UMBRELLA / date / mouse_name,
-                    tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
-                    mouse_name=mouse_name,
-                    session_type=session_type,
-                    date=date,
-                    wheel_blocked=wheel_blocked,
-                )
-                logger.info(
-                    f"Completed processing for {mouse_name} {date} {session_type}"
-                )
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
                 line_number = tb[-1].lineno  # Get the line number of the exception

@@ -1,6 +1,5 @@
 """Contains functions that act on fluorescence data, either spks or dff, either alone or with behavioural data"""
 
-from datetime import datetime, timedelta
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
@@ -11,7 +10,6 @@ from viral.utils import (
     get_wheel_circumference_from_rig,
     shuffle_rows,
     threshold_detect,
-    time_list_to_datetime,
 )
 
 from viral.constants import TIFF_UMBRELLA
@@ -78,6 +76,15 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
 
     assert start_time_frames[-1] is not None
     assert start_time_frames[0] is not None
+
+    if any(
+        np.isnan(state.start_time) or np.isnan(state.end_time)
+        for state in trial.states_info
+    ):
+        return False
+
+    if any(np.isnan(event.start_time) for event in trial.events_info):
+        return False
 
     length_trial_frames = (start_time_frames[-1] - start_time_frames[0]) / 30
 
