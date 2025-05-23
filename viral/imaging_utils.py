@@ -1,6 +1,5 @@
 """Contains functions that act on fluorescence data, either spks or dff, either alone or with behavioural data"""
 
-from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
@@ -56,9 +55,9 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
     """
-    if 30 < len(frame_clock) / 1000 / 60 < 100:
+    if 30 < len(frame_clock) / 1000 / 60 < 120:
         return 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+    elif 30 < len(frame_clock) / 10000 / 60 < 120:
         return 10000
     raise ValueError("Could not determine sampling rate")
 
@@ -77,6 +76,15 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
 
     assert start_time_frames[-1] is not None
     assert start_time_frames[0] is not None
+
+    if any(
+        np.isnan(state.start_time) or np.isnan(state.end_time)
+        for state in trial.states_info
+    ):
+        return False
+
+    if any(np.isnan(event.start_time) for event in trial.events_info):
+        return False
 
     length_trial_frames = (start_time_frames[-1] - start_time_frames[0]) / 30
 
