@@ -45,7 +45,8 @@ def grosmark_place_field(
     spks: np.ndarray,
     rewarded: bool | None,
     config: GrosmarkConfig,
-) -> None:
+    plot: bool = True,
+) -> np.ndarray:
     """The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
       2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
     based on its sparsified spike estimate vector, Ssp. This firing rate by position vector was subsequently
@@ -135,7 +136,8 @@ def grosmark_place_field(
 
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
-    plot_speed(session, rewarded, config)
+    if plot:
+        plot_speed(session, rewarded, config)
 
     shuffled_place_cells = np.array(
         [
@@ -161,17 +163,18 @@ def grosmark_place_field(
     spks = spks[pcs, :]
     smoothed_matrix = smoothed_matrix[pcs, :]
 
-    plot_place_cells(
-        smoothed_matrix=smoothed_matrix,
-        shuffled_matrices=shuffled_matrices,
-        shuffled_place_cells=shuffled_place_cells,
-        config=config,
-    )
+    if plot:
+        plot_place_cells(
+            smoothed_matrix=smoothed_matrix,
+            shuffled_matrices=shuffled_matrices,
+            shuffled_place_cells=shuffled_place_cells,
+            config=config,
+        )
 
     print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
 
     print(
-        f"percent place cells shuffed {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
+        f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
     peak_indices = np.argmax(smoothed_matrix, axis=1)
@@ -179,7 +182,8 @@ def grosmark_place_field(
     sorted_order = np.argsort(peak_indices)
     peak_position_cm = peak_position_cm[sorted_order]
 
-    plot_circular_distance_matrix(smoothed_matrix, sorted_order)
+    if plot:
+        plot_circular_distance_matrix(smoothed_matrix, sorted_order)
 
     offline_correlations(
         session,
@@ -188,7 +192,12 @@ def grosmark_place_field(
         rewarded=rewarded,
     )
 
-    plt.show()
+    if plot:
+        plt.show()
+
+    place_cell_mask = np.zeros(n_cells_total, dtype=bool)
+    place_cell_mask[np.flatnonzero(pcs)] = True
+    return place_cell_mask
 
 
 def plot_speed(
@@ -462,7 +471,7 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-def binarise_spikes(spks: np.ndarray) -> np.ndarray:
+def binarise_spikes(spks: np.ndarray, mad_threshold: int = 1.5) -> np.ndarray:
     """Implements the calcium imaging preprocessing stepts here:
     https://www.nature.com/articles/s41593-021-00920-7#Sec12
 
@@ -493,7 +502,7 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     # threshold = mad * 1.5
 
     # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * mad_threshold
     mask = spks - threshold[:, np.newaxis] > 0
     spks[~mask] = 0
     spks[mask] = 1
