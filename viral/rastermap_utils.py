@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 from scipy.interpolate import interp1d
 from typing import List, Optional
-from enum import Enum
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -41,12 +40,12 @@ def get_dff_pos(
     return dff, xpos, ypos
 
 
-def align_trial_frames(trials: List[TrialInfo], ITI: bool = True) -> np.ndarray:
+def align_trial_frames(trials: List[TrialInfo], include_ITI: bool = True) -> np.ndarray:
     """Align trial frames and return array with trial frames and reward condition.
 
     Args:
         trials (List[TrialInfo]):       A list of TrialInfo objects.
-        ITI (bool, optional):           Include the frames in the inter-trial interval (ITI). Defaults to True.
+        include_ITI (bool):   Include the frames in the inter-trial interval (ITI). Defaults to True.
                                         If ITI, is False, then trial end is defined as the start of the ITI.
 
     Returns:
@@ -61,7 +60,7 @@ def align_trial_frames(trials: List[TrialInfo], ITI: bool = True) -> np.ndarray:
             for trial in trials
         ]
     )
-    if not ITI:
+    if not include_ITI:
         ITI_start_frames = np.array([get_ITI_start_frame(trial) for trial in trials])
         trial_frames[:, 1] = ITI_start_frames - 1
     assert (
@@ -192,10 +191,7 @@ def get_speed_frame(frame_position: np.ndarray, bin_size: int = 5) -> np.ndarray
         frame_end_idx, position_frame_end = frame_position[end_idx, :]
         frame_diff = frame_end_idx - frame_start_idx
         position_diff = position_frame_end - position_frame_start
-        if frame_diff == 0:
-            speed = 0
-        else:
-            speed = position_diff / frame_diff
+        speed = 0 if frame_diff == 0 else (position_diff / frame_diff)
         if i == len(bins) - 1:
             speeds[start_idx:] = speed
         else:
@@ -318,19 +314,18 @@ def remap_to_continuous_indices(
 
 def load_data(session: Cached2pSession, s2p_path: Path, signal_type: str) -> tuple:
     """Return spks/dff, xpos, ypos and trials loaded from cache."""
-
-    class SignalType(Enum):
-        SPKS = "spks"
-        DFF = "dff"
-
-    if signal_type == SignalType.SPKS.value:
-        spks, xpos, ypos = get_spks_pos(s2p_path)
-    elif signal_type == SignalType.DFF.value:
-        spks, xpos, ypos = get_dff_pos(session, s2p_path)
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
     if not trials:
         print("No trials imaged")
         exit()
+    if signal_type == "spks":
+        spks, xpos, ypos = get_spks_pos(s2p_path)
+        return spks, xpos, ypos, trials
+    elif signal_type == "dff":
+        dff, xpos, ypos = get_dff_pos(session, s2p_path)
+        return dff, xpos, ypos, trials
+    else:
+        raise ValueError(f"Unknown signal type: {signal_type}")
     return spks, xpos, ypos, trials
 
 
@@ -375,7 +370,7 @@ def process_trials_data(
             speed=speed,
             frames_positions=frames_positions,
         )
-        if np.all(valid_mask == False):
+        if not np.any(valid_mask):
             print("No valid frames in the trial")
             continue
         valid_trial_frames = trial_frames[valid_mask]
@@ -638,7 +633,7 @@ def process_session(
             speed_combined=speed,
             ITI_split=False,
         )
-    print(f"Successfully cached 2P session for rastermap!")
+    print("Successfully cached 2P session for rastermap!")
 
 
 if __name__ == "__main__":
