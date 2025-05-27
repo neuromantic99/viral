@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from pydantic import BaseModel, computed_field
+from datetime import datetime
 import numpy as np
 
 
@@ -10,15 +11,15 @@ class StateInfo(BaseModel):
     end_time: float
     start_time_daq: float | None = None  # Possibly redundant
     end_time_daq: float | None = None
-    closest_frame_start: int | None = None
-    closest_frame_end: int | None = None
+    closest_frame_start: float | int | None = None
+    closest_frame_end: float | int | None = None
 
 
 class EventInfo(BaseModel):
     name: str
     start_time: float
     start_time_daq: float | None = None
-    closest_frame: int | None = None
+    closest_frame: float | int | None = None
 
 
 class SpeedPosition(BaseModel):
@@ -71,8 +72,8 @@ class MouseSummary(BaseModel):
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
-    trial_start_closest_frame: float | None = None
-    trial_end_closest_frame: float | None = None
+    trial_start_closest_frame: float | int | None = None
+    trial_end_closest_frame: float | int | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]
@@ -104,11 +105,19 @@ class TrialInfo(BaseModel):
         ]
 
 
+class WheelFreeze(BaseModel):
+    pre_training_start_frame: int
+    pre_training_end_frame: int
+    post_training_start_frame: int
+    post_training_end_frame: int
+
+
 class Cached2pSession(BaseModel):
     trials: List[TrialInfo]
     mouse_name: str
     date: str
     session_type: str
+    wheel_freeze: WheelFreeze | None = None
 
 
 class ImagedTrialInfo(BaseModel):
@@ -134,3 +143,30 @@ class GrosmarkConfig:
     bin_size: int
     start: int
     end: int
+
+
+@dataclass
+class SessionImagingInfo:
+    # 2p / ScanImage info
+    stack_lengths_tiffs: np.ndarray
+    epochs: np.ndarray
+    all_tiff_timestamps: np.ndarray
+    # DAQ info
+    chunk_lengths_daq: np.ndarray
+    daq_start_time: datetime
+    # "results"
+    valid_frame_times: np.ndarray
+    behaviour_chunk_lens: np.ndarray
+    behaviour_times: np.ndarray
+    sampling_rate: int
+    offset_after_pre_epoch: int
+
+
+@dataclass
+class SessionCorrection:
+    epochs: np.ndarray
+    all_tiff_timestamps: np.ndarray
+    stack_lengths_tiffs: np.ndarray
+    chunk_lengths_daq: np.ndarray
+    frame_times_daq: np.ndarray
+    offset_after_pre_epoch: int
