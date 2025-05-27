@@ -627,63 +627,60 @@ def main() -> None:
     for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
+
             try:
                 print(f"the type is {row['Type']}")
+
                 date = row["Date"]
-                if date == "2025-03-28":
-                    session_type = row["Type"].lower()
-                    try:
-                        wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                    except KeyError as e:
-                        print(f"No column 'Wheel blocked?' found: {e}")
-                        print("Wheel blocked set to None")
-                        wheel_blocked = None
-                    if (
-                        not redo
-                        and (
-                            HERE.parent
-                            / "data"
-                            / "cached_2p"
-                            / f"{mouse_name}_{date}.json"
-                        ).exists()
-                    ):
-                        print(f"Skipping {mouse_name} {date} as already exists")
-                        continue
-                    if (
-                        "learning day" not in session_type
-                        and "reversal learning" not in session_type
-                    ):
-                        print(f"Skipping {mouse_name} {date} {session_type}")
-                        continue
-                    if not row["Sync file"]:
-                        print(
-                            f"Skipping {mouse_name} {date} {session_type} as no sync file"
-                        )
-                        continue
-                    session_numbers = parse_session_number(row["Session Number"])
-                    trials = []
-                    for session_number in session_numbers:
-                        session_path = (
-                            BEHAVIOUR_DATA_PATH
-                            / mouse_name
-                            / row["Date"]
-                            / session_number
-                        )
-                        trials.extend(load_data(session_path))
-                    logger.info("\n")
-                    logger.info(f"Processing {mouse_name} {date} {session_type}")
-                    process_session(
-                        trials=trials,
-                        tiff_directory=TIFF_UMBRELLA / date / mouse_name,
-                        tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
-                        mouse_name=mouse_name,
-                        session_type=session_type,
-                        date=date,
-                        wheel_blocked=wheel_blocked,
+                session_type = row["Type"].lower()
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
+                if (
+                    not redo
+                    and (
+                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
+                    ).exists()
+                ):
+                    print(f"Skipping {mouse_name} {date} as already exists")
+                    continue
+
+                if (
+                    "learning day" not in session_type
+                    and "reversal learning" not in session_type
+                ):
+                    print(f"Skipping {mouse_name} {date} {session_type}")
+                    continue
+
+                if not row["Sync file"]:
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} as no sync file"
                     )
-                    logger.info(
-                        f"Completed processing for {mouse_name} {date} {session_type}"
+                    continue
+                session_numbers = parse_session_number(row["Session Number"])
+                trials = []
+                for session_number in session_numbers:
+                    session_path = (
+                        BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
                     )
+                    trials.extend(load_data(session_path))
+                logger.info("\n")
+                logger.info(f"Processing {mouse_name} {date} {session_type}")
+                process_session(
+                    trials=trials,
+                    tiff_directory=TIFF_UMBRELLA / date / mouse_name,
+                    tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                    mouse_name=mouse_name,
+                    session_type=session_type,
+                    date=date,
+                    wheel_blocked=wheel_blocked,
+                )
+                logger.info(
+                    f"Completed processing for {mouse_name} {date} {session_type}"
+                )
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
                 line_number = tb[-1].lineno  # Get the line number of the exception
