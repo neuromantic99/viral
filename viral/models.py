@@ -146,6 +146,13 @@ class GrosmarkConfig:
 
 
 @dataclass
+class SortedPlaceCells:
+    sorted_indices: np.ndarray
+    n_ensemble_a: int
+    n_ensemble_b: int
+
+
+@dataclass
 class SessionImagingInfo:
     # 2p / ScanImage info
     stack_lengths_tiffs: np.ndarray

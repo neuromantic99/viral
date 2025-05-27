@@ -3,7 +3,7 @@
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
-from viral.models import TrialInfo
+from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     array_bin_mean,
     degrees_to_cm,
@@ -300,3 +300,18 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
+
+
+def get_preactivation_reactivation(
+    flu: np.ndarray, wheel_freeze: WheelFreeze
+) -> tuple[np.ndarray]:
+    return (
+        flu[
+            :,
+            wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame,
+        ],
+        flu[
+            :,
+            wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame,
+        ],
+    )
