@@ -11,15 +11,15 @@ class StateInfo(BaseModel):
     end_time: float
     start_time_daq: float | None = None  # Possibly redundant
     end_time_daq: float | None = None
-    closest_frame_start: float | None = None
-    closest_frame_end: float | None = None
+    closest_frame_start: float | int | None = None
+    closest_frame_end: float | int | None = None
 
 
 class EventInfo(BaseModel):
     name: str
     start_time: float
     start_time_daq: float | None = None
-    closest_frame: float | None = None
+    closest_frame: float | int | None = None
 
 
 class SpeedPosition(BaseModel):
@@ -72,8 +72,8 @@ class MouseSummary(BaseModel):
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
-    trial_start_closest_frame: float | None = None
-    trial_end_closest_frame: float | None = None
+    trial_start_closest_frame: float | int | None = None
+    trial_end_closest_frame: float | int | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]
