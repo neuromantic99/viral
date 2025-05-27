@@ -1,6 +1,6 @@
-from viral.multiple_sessions import create_metric_dict, prepare_plot_data
-from viral.models import MouseSummary, SessionSummary, TrialSummary
-import pytest
+from typing import List
+from viral.multiple_sessions import create_metric_dict
+from viral.models import TrialSummary
 from unittest.mock import Mock
 
 
@@ -32,15 +32,17 @@ def create_mock_mouse() -> Mock:
     return mock_mouse
 
 
-def mock_metric_fcn_trials(trials, rewarded=None, window=None):
+def mock_metric_fcn_trials(
+    trials: List[TrialSummary], rewarded: bool | None = None
+) -> int:
     """Count trials"""
-    if rewarded:
+    if rewarded is not None:
         return len([trial for trial in trials if trial.rewarded == rewarded])
     else:
         return len(trials)
 
 
-def mock_metric_fcn_sessions(sessions, window=None):
+def mock_metric_fcn_sessions(sessions):
     """Count trials/sessions"""
     return len(sessions)
 
