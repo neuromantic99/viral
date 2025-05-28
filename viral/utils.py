@@ -226,18 +226,6 @@ def time_list_to_datetime(time_list: List[float]) -> datetime:
     )
 
 
-def uk_to_utc(dt: datetime) -> datetime:
-    """Converts a datetime object in UK time to UTC time and strips the timezone info for further calculations.
-    dt: datetime object in UK time
-
-    """
-    return (
-        dt.replace(tzinfo=ZoneInfo("Europe/London"))
-        .astimezone(ZoneInfo("UTC"))
-        .replace(tzinfo=None)
-    )
-
-
 def find_chunk(chunk_lens: List[int], index: int) -> int:
     """Given a list of chunk lengths and an index, find the chunk that contains the index"""
     cumulative_length = 0
@@ -501,3 +489,14 @@ def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
 
 def session_is_unsupervised(session: Cached2pSession) -> bool:
     return session.session_type.lower().startswith("unsupervised learning")
+
+
+def uk_to_utc(dt: datetime) -> datetime:
+    """Converts a datetime object in UK time to UTC time and strips the timezone info for further calculations.
+    dt: datetime object in UK time
+    """
+    return (
+        dt.replace(tzinfo=ZoneInfo("Europe/London"))
+        .astimezone(ZoneInfo("UTC"))
+        .replace(tzinfo=None)
+    )
