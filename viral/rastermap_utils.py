@@ -372,6 +372,7 @@ def process_trials_data(
         )
         if not np.any(valid_mask):
             print("No valid frames in the trial")
+            continue
         valid_trial_frames = trial_frames[valid_mask]
         valid_trial_start = valid_trial_frames[0]
         if not np.any(licks):
@@ -408,7 +409,11 @@ def filter_speed_position(
 
     if speed_threshold is None and position_threshold is None:
         return np.ones(len(speed), dtype=bool)
-    valid_mask = np.zeros(len(speed), dtype=bool)
+    valid_mask = (
+        np.ones(len(speed), dtype=bool)
+        if not use_or
+        else np.zeros(len(speed), dtype=bool)
+    )
 
     # filter out frames with sub-threshold speeds
     # converting cm/s to cm/frames

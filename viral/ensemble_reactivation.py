@@ -73,7 +73,6 @@ def get_running_bouts(
     place_cells: np.ndarray,
     speed: np.ndarray,
     frames_positions: np.ndarray,
-    ITI_starts_ends: np.ndarray,
     aligned_trial_frames: np.ndarray,
     config: GrosmarkConfig,
 ) -> np.ndarray:
@@ -322,10 +321,13 @@ def plot_ensemble_reactivation_preactivation(
 
     processed_matrices = {}
     for name, matrix in matrices.items():
-        # processed = zscore(matrix, axis=1)
         if smooth:
+            # processed = zscore(matrix, axis=1)
             # processed = gaussian_filter1d(processed, 30)
             processed = gaussian_filter1d(matrix, 30)
+        else:
+            # processed = zscore(matrix, axis=1)
+            processed = matrix
         processed_matrices[name] = processed
 
     for name, matrix in processed_matrices.items():
@@ -414,7 +416,7 @@ def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
     # plt.show()
 
 
-def main():
+def main() -> None:
     mouse = "JB027"
     date = "2025-02-26"
 
@@ -428,6 +430,7 @@ def main():
 
     if not session.wheel_freeze:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
+        exit()
 
     cache_file = (
         HERE.parent / f"{session.mouse_name}_{session.date}_ensemble_reactivation.npz"
@@ -505,7 +508,6 @@ def main():
             place_cells=place_cells,
             speed=speed,
             frames_positions=positions,
-            ITI_starts_ends=ITI_starts_ends,
             aligned_trial_frames=aligned_trial_frames,
             config=config,
         )
