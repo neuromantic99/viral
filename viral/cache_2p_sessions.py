@@ -22,6 +22,7 @@ from viral.imaging_utils import (
     extract_TTL_chunks,
     get_sampling_rate,
     get_imaging_crashed,
+    load_imaging_data,
     trial_is_imaged,
 )
 
@@ -408,6 +409,8 @@ def get_session_sync(
         loosen_assertions=imaging_crashed,
     )
 
+    check_against_suite2p_output(mouse_name, date, valid_frame_times)
+
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
         stack_lengths_tiffs=stack_lengths_tiffs,
@@ -647,6 +650,14 @@ def process_session(
         )
 
     print(f"Done for {mouse_name} {date} {session_type}")
+
+
+def check_against_suite2p_output(
+    mouse: str, date: str, valid_frame_times: np.ndarray
+) -> None:
+    dff, spks, denoised = load_imaging_data(mouse, date)
+    assert dff.shape == spks.shape == denoised.shape
+    assert len(valid_frame_times) == spks.shape[1]
 
 
 def main() -> None:

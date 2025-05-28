@@ -93,7 +93,8 @@ def get_session(
     path = CACHE_PATH / f"{mouse_name}_{date}.json"
     try:
         return Cached2pSession.model_validate_json(path.read_text())
-    except (FileNotFoundError, ValidationError):
+    except (FileNotFoundError, ValidationError) as e:
+        print(f" Got error when loading {mouse_name} {date} from cache. Error is: {e}")
         process_session(
             trials=trials,
             tiff_directory=TIFF_UMBRELLA / date / mouse_name,
