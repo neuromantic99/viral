@@ -28,8 +28,8 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB015"
-DATE = "2025-01-30"
+MOUSE = "JB031"
+DATE = "2025-03-25"
 SESSION_NUMBER = "002"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
@@ -366,6 +366,7 @@ def plot_speed_reward_unrewarded(
 
     first_position = 0
     last_position = 200
+    # last_position = 180
     step_size = 5
     for idx, trial in enumerate(trials):
         position = degrees_to_cm(
@@ -393,8 +394,9 @@ def plot_speed_reward_unrewarded(
 
     # Should be the same for all trials
     # Use the bin_stop so there is no forward look ahead
-    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=0)
+    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=-1)
     plt.xlim(0, 200)
+    # plt.xlim(0, 180)
     x_axis = [bin.position_stop for bin in rewarded[0]]
     shaded_line_plot(
         np.array([[bin.speed for bin in trial] for trial in rewarded]),

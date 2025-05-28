@@ -601,7 +601,7 @@ def plot_performance_summaries(
                 print(f"There is no valid data for {mouse.name} in {session_type}")
                 continue
     plt.figure()
-    plt.ylabel(f"Trials to criterion")
+    plt.ylabel("Trials to criterion")
     plt.title(session_type.replace("_", " ").capitalize())
     sns.boxplot(to_plot, showfliers=False)
     ax = plt.gca()
