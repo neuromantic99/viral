@@ -625,11 +625,11 @@ def process_session(
         print("Wheel blocked")
         logger.info(f"Wheel blocked in session {mouse_name} {date}")
     session_sync = get_session_sync(
-        tdms_path,
-        mouse_name,
-        date,
-        tiff_directory,
-        trials,
+        tdms_path=tdms_path,
+        mouse_name=mouse_name,
+        date=date,
+        tiff_directory=tiff_directory,
+        trials=trials,
         imaging_crashed=imaging_crashed,
     )
     wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
