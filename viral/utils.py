@@ -1,7 +1,7 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import List, Tuple, TypeVar, Any
+from typing import List, Literal, Tuple, TypeVar, Any
 import warnings
 from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
@@ -268,7 +268,7 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
     return np.nanmean(data, axis=0)
 
 
-def get_genotype(mouse_name: str) -> str:
+def get_genotype(mouse_name: str) -> Literal["Oligo-BACE1-KO", "NLGF", "WT"]:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
     elif mouse_name in {
