@@ -380,6 +380,10 @@ def get_session_sync(
 
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
+    # plt.plot(frame_times_daq, np.ones(len(frame_times_daq)), ".", color="blue")
+    # plt.plot(behaviour_times, np.ones(len(behaviour_times)), ".", color="red")
+    # plt.show()
+
     correction = apply_session_correction(
         mouse_name=mouse_name,
         date=date,
@@ -443,7 +447,7 @@ def get_valid_frame_times(
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
 
-    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 13 but could be more)
+    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 16 but could be more)
                        that are in the daq but not in the tiff. Only include this flag if the notes say the session was crashed.
 
     """
@@ -462,7 +466,7 @@ def get_valid_frame_times(
                 3,
             }
             or loosen_assertions
-            and chunk_len_daq - stack_len_tiff <= 13
+            and chunk_len_daq - stack_len_tiff <= 16
         ), f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
         This will occur, especially on crashed recordings. Think about a fix."""
 
@@ -571,9 +575,15 @@ def check_timestamps(
     """
 
     if not trial_is_imaged(trial):
+        print(
+            f"Trial starting at {trial.trial_start_time} is not imaged, skipping timestamp check"
+        )
         return
 
     assert len(all_tiff_timestamps) == len(valid_frame_times)
+
+    assert trial.trial_start_closest_frame is not None
+    assert trial.trial_end_closest_frame is not None
 
     first_frame_trial = trial.trial_start_closest_frame - offset_after_pre_epoch
     last_frame_trial = trial.trial_end_closest_frame - offset_after_pre_epoch
