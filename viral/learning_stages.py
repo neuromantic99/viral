@@ -32,12 +32,12 @@ SESSIONS_KEEP = {
     #     "learning": "2024-10-25",
     #     "learned": "2024-10-30",
     # },
-    "JB014": {
+    "JB014": {  # LOOKS GOOD
         "unsupervised": "2024-10-24",
         "learning": "2024-10-30",
         "learned": "2024-11-04",
     },
-    "JB015": {
+    "JB015": {  #
         "unsupervised": "2024-10-24",
         "learning": "2024-10-31",
         "learned": "2024-11-19",
@@ -107,7 +107,7 @@ def get_session(
 
 
 def main() -> None:
-    mouse_name = "JB014"
+    mouse_name = "JB016"
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     mouse_sessions = Mouse2pSessions(
         mouse_name=mouse_name,
@@ -127,6 +127,7 @@ def main() -> None:
             mouse_name, SESSIONS_KEEP[mouse_name]["learned"], metadata, stage="learned"
         ),
     )
+    1 / 0
 
 
 if __name__ == "__main__":
