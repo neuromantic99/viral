@@ -1,6 +1,7 @@
 import itertools
 from pathlib import Path
 import sys
+from typing import Dict, List
 from matplotlib import pyplot as plt
 from scipy.stats import median_abs_deviation, zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
@@ -28,6 +29,7 @@ from viral.utils import (
     cross_correlation_pandas,
     degrees_to_cm,
     find_five_consecutive_trues_center,
+    get_genotype,
     get_wheel_circumference_from_rig,
     has_five_consecutive_trues,
     remove_consecutive_ones,
@@ -255,7 +257,10 @@ def offline_correlations(
     real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=True)
 
     correlations_vs_peak_distance(
-        real_corrs, peak_position_cm=peak_position_cm, plot=True
+        real_corrs,
+        peak_position_cm=peak_position_cm,
+        file_name=f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_max_peak_{np.max(peak_position_cm)}_min_peak_{np.min(peak_position_cm)}.npy",
+        plot=True,
     )
 
 
@@ -288,7 +293,10 @@ def get_offline_correlation_matrix(
 
 
 def correlations_vs_peak_distance(
-    corrs: np.ndarray, peak_position_cm: np.ndarray, plot: bool = False
+    corrs: np.ndarray,
+    peak_position_cm: np.ndarray,
+    file_name: str = "",
+    plot: bool = False,
 ) -> None:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
     distance between their place field peaks.
@@ -332,6 +340,10 @@ def correlations_vs_peak_distance(
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
 
         plt.show()
+    np.save(
+        HERE.parent / "results" / "pairwise-reactivations-ITI" / file_name,
+        np.array([x, y]),
+    )
 
 
 def plot_circular_distance_matrix(
@@ -500,7 +512,25 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     return remove_consecutive_ones(spks)
 
 
+def multiple_sessions_pairwise_ITI() -> None:
+    data_path = HERE.parent / "results" / "pairwise-reactivations-ITI"
+    files = list(data_path.glob("*.npy"))
+
+    to_plot: Dict[str, List] = {"Oligo-BACE1-KO": [], "NLGF": [], "WT": []}
+
+    seen_mice = set()
+    for file in files:
+        mouse = file.stem.split("_")[0]
+        assert mouse not in seen_mice, f"Mouse {mouse} already seen"
+        seen_mice.add(mouse)
+
+        genotype = get_genotype(mouse)
+        to_plot[genotype].append(np.load(file))
+
+
 if __name__ == "__main__":
+
+    multiple_sessions_pairwise_ITI()
 
     mouse = "JB027"
     date = "2025-02-26"
