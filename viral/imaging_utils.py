@@ -47,7 +47,7 @@ def get_ITI_start_frame(trial: TrialInfo) -> int:
             assert (
                 state.closest_frame_start is not None
             ), "Imaging data not added to trial"
-            return state.closest_frame_start
+            return int(state.closest_frame_start)
     raise ValueError("ITI state not found")
 
 
@@ -63,6 +63,12 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
 
 
 def trial_is_imaged(trial: TrialInfo) -> bool:
+
+    # This is a temporary fix for JB015 "2024-10-24".
+    # The imaging was started during the spacers, which assigns the wrong tiff epoch to the trial.
+    # TODO: come up with a proper fix for this.
+    if trial.trial_start_time == 3502.912709:
+        return False
     trigger_panda_states = [
         state
         for state in trial.states_info
@@ -137,7 +143,7 @@ def activity_trial_position(
 
     frame_position = np.array(
         [
-            state.closest_frame_start
+            int(state.closest_frame_start)
             for state in trial.states_info
             if state.name
             in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
@@ -307,4 +313,6 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
     return (mouse_name, date) in [
         ("JB011", "2024-10-22"),
         ("JB011", "2024-10-25"),
+        ("JB015", "2024-10-24"),
+        ("JB016", "2024-10-24"),
     ]
