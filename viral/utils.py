@@ -226,7 +226,7 @@ def time_list_to_datetime(time_list: List[float]) -> datetime:
     )
 
 
-def find_chunk(chunk_lens: List[int], index: int) -> int:
+def find_chunk(chunk_lens: List[int] | np.ndarray, index: int) -> int:
     """Given a list of chunk lengths and an index, find the chunk that contains the index"""
     cumulative_length = 0
     for i, length in enumerate(chunk_lens):

@@ -29,8 +29,10 @@ from viral.imaging_utils import (
 
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
+    CACHE_PATH,
     SPREADSHEET_ID,
     SYNC_FILE_PATH,
+    TEMP_CACHE_PATH,
     TIFF_UMBRELLA,
 )
 from viral.gsheets_importer import gsheet2df
@@ -322,7 +324,7 @@ def add_imaging_info_to_trials(
             epochs=session_sync.epochs,
             trial=trial,
             all_tiff_timestamps=session_sync.all_tiff_timestamps,
-            chunk_lens=session_sync.chunk_lengths_daq,
+            chunk_lens=session_sync.stack_lengths_tiffs,
             valid_frame_times=session_sync.valid_frame_times,
             sampling_rate=session_sync.sampling_rate,
             daq_start_time=session_sync.daq_start_time,
@@ -495,15 +497,15 @@ def get_tiff_metadata(
     date = tiff_paths[0].parent.parent.name
 
     if use_cache:
-        temp_cache_path = Path(HERE.parent / "data/temp_caches")
-        if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
+        assert TEMP_CACHE_PATH.exists(), "Temp cache path does not exist"
+        if (TEMP_CACHE_PATH / f"{mouse_name}_{date}_stack_lengths.npy").exists():
             print("Using cached tiff metadata")
             stack_lengths = np.load(
-                temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy"
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_stack_lengths.npy"
             )
-            epochs = np.load(temp_cache_path / f"{mouse_name}_{date}_epochs.npy")
+            epochs = np.load(TEMP_CACHE_PATH / f"{mouse_name}_{date}_epochs.npy")
             all_tiff_timestamps = np.load(
-                temp_cache_path / f"{mouse_name}_{date}_all_tiff_timestamps.npy"
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_all_tiff_timestamps.npy"
             )
             return stack_lengths, epochs, all_tiff_timestamps
 
@@ -549,7 +551,7 @@ def get_tiff_metadata(
             ["stack_lengths", "all_tiff_timestamps", "epochs"],
         ):
             np.save(
-                temp_cache_path / f"{mouse_name}_{date}_{name}.npy",
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
                 variable,
             )
 
@@ -645,9 +647,7 @@ def process_session(
     wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze)
 
-    with open(
-        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"
-    ) as f:
+    with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
             Cached2pSession(
                 mouse_name=mouse_name,
