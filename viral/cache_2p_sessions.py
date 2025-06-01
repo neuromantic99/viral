@@ -596,11 +596,15 @@ def check_timestamps(
         valid_frame_times
     )
 
-    epoch_trial = find_chunk(chunk_lens, first_frame_trial)
-    # Epoch is in uk time, convert to UTC to match the daq
-    chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
+    # epoch_trial = find_chunk(chunk_lens, first_frame_trial)
+    # # Epoch is in uk time, convert to UTC to match the daq
+    # chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
 
     for frame in range(first_frame_trial, last_frame_trial):
+
+        # TODO: revisit this
+        epoch_frame = find_chunk(chunk_lens, frame)
+        chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_frame]))
 
         # The time in the tiff. Not sure if this is the end or the start of the tiff
         frame_datetime = chunk_start + timedelta(seconds=all_tiff_timestamps[frame])
