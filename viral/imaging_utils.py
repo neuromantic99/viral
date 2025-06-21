@@ -302,7 +302,7 @@ def get_ITI_matrix(
     return np.array(matrices)
 
 
-def get_preactivation_reactivation(
+def get_frozen_wheel_flu(
     flu: np.ndarray, wheel_freeze: WheelFreeze
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return sliced flu array: offline epochs before and after behaviour session."""

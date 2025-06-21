@@ -6,8 +6,8 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import zscore, rankdata
-from numpy.linalg import eigvalsh
-from sklearn.decomposition import FastICA
+from numpy.linalg import eig
+from sklearn.decomposition import FastICA, PCA
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -22,9 +22,7 @@ from viral.rastermap_utils import (
     filter_speed_position,
 )
 from viral.utils import get_wheel_circumference_from_rig, shuffle_rows
-from viral.imaging_utils import (
-    get_preactivation_reactivation,
-)
+from viral.imaging_utils import get_frozen_wheel_flu
 from viral.grosmark_analysis import binarise_spikes, get_place_cells
 
 
@@ -104,7 +102,33 @@ def get_ssp_vectors(
     )
 
 
-def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
+# def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
+#     """
+#     Use Marcenko-Pastur distribution to detect significant compontents.
+
+#     'Only the subset of components found to be significant under the Marcenko-Pasteur
+#     distribution were considered ICA ensembles and included in the ICA ensemble
+#     matrix w, with rows corresponding to PCs and columns corresponding to
+#     significant ICA components.' (Grosmark et al., 2021)
+
+#     Used description in '2.2. Determination of the number of cell assemblies', Lopes-dos-Santos, Ribeiro and Tort, 2013.
+#     """
+#     n_rows, n_cols = ica_comp.shape
+
+#     ica_comp_z = zscore(ica_comp, axis=1, ddof=1)
+#     assert np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0, rtol=1e-5)
+#     corr_matrix = np.corrcoef(ica_comp_z)
+#     eigvals, _ = eig(corr_matrix)
+
+#     # compute threshold using Marcenko-Pastur distribution (lambda max)
+#     q = n_cols / n_rows  # n_cols / n_rows
+#     lambda_max = (1 + 1 / np.sqrt(q)) ** 2
+#     return np.where(eigvals > lambda_max)[0]
+
+
+def detect_significant_components(
+    ica_comp: np.ndarray, eigenvalues: np.ndarray
+) -> np.ndarray:
     """
     Use Marcenko-Pastur distribution to detect significant compontents.
 
@@ -113,19 +137,25 @@ def detect_significant_components(ica_comp: np.ndarray) -> np.ndarray:
     matrix w, with rows corresponding to PCs and columns corresponding to
     significant ICA components.' (Grosmark et al., 2021)
 
-    Used description in '2.2. Determination of the number of cell assemblies', Lopes-dos-Santos, Ribeiro and Tort, 2013.
-    """
-    n_components, n_timepoints = ica_comp.shape
+    However, we are using PCA.
 
-    ica_comp_z = zscore(ica_comp, axis=1, ddof=1)
-    assert np.allclose(np.var(ica_comp_z, axis=1, ddof=1), 1.0, rtol=1e-5)
-    corr_matrix = np.corrcoef(ica_comp_z)
-    eigenvalues = eigvalsh(corr_matrix)
+    Used description in '2.2. Determination of the number of cell assemblies', Lopes-dos-Santos, Ribeiro and Tort, 2013.
+    www.sciencedirect.com/science/article/pii/S0165027013001489 section 2.2
+    """
+    n_rows, n_cols = ica_comp.shape
+
+    # As per Lopes-dos-Santos, Ribeiro and Tort, 2013:
+    assert np.isclose(np.var(ica_comp), 1)
 
     # compute threshold using Marcenko-Pastur distribution (lambda max)
-    q = n_timepoints / n_components  # n_cols / n_rows
-    lambda_max = (1 + 1 / np.sqrt(q)) ** 2
-    return np.where(eigenvalues > lambda_max)[0]
+    q = n_cols / n_rows
+
+    # As per Lopes-dos-Santos, Ribeiro and Tort, 2013:
+    assert q >= 1
+
+    lambda_max = (1 + np.sqrt(1 / q)) ** 2
+
+    return eigenvalues > lambda_max
 
 
 def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
@@ -138,15 +168,18 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # TODO: keep random state as ICA is non-deterministic to keep results reproducible?
     ica_transfomer = FastICA(random_state=999)
     # expected input: (n_samples, n_features)
-    # independent components (frames, components)
-    ica_transfomer.fit_transform(ssp_vectors.T)
+    # Thijs van der Plas: features = place cells, samples = frames, components = ICA components
+    # ssp vectors (place cells, frames), ssp vectors.T (frames, place cells)
+    ica_components = ica_transfomer.fit_transform(ssp_vectors.T)
+    significant_components = detect_significant_components(ica_components)
     # mixing matrix (n_features, n_components)
+    # mixing matrix (place cells, components)
     mixing_matrix = ica_transfomer.mixing_
     # TODO: there are two ways of retrieving the components
     # 1. ica_transfomer.components_ (n_components, n_features)
     # 2. ica_transfomer.fit_transform(ssp_vectors.T) (n_samples, n_components)
-    # I think number 1 is correct for our use case? it would be components, frames
-    significant_components = detect_significant_components(ica_transfomer.components_)
+    significant_components = detect_significant_components(mixing_matrix)
+    # returning (place cells, significant components)
     return mixing_matrix[:, significant_components]
 
 
@@ -344,7 +377,7 @@ def plot_ensemble_reactivation_preactivation(
         plt.ylabel("Reactivation strength")
         plt.title(name)
         plt.tight_layout()
-        plt.savefig(f"plots/{name}.svg", dpi=300)
+        plt.savefig(f"/plots/{name}.svg", dpi=300)
         # plt.show()
 
 
@@ -381,7 +414,7 @@ def plot_cell_weights(
     plt.xlabel("Place cell ID")
     plt.ylabel("Cell weight in template")
     plt.tight_layout()
-    plt.savefig(f"plots/cell_weights.svg", dpi=300)
+    plt.savefig(f"/plots/cell_weights.svg", dpi=300)
     # plt.show()
 
 
@@ -402,7 +435,7 @@ def plot_smoothed_offline_firing_rate_raster(
     plt.ylabel("Place cell ID")
     plt.xlabel("Frames")
     plt.tight_layout()
-    plt.savefig(f"plots/smoothed_offline_firing_rate_raster.svg", dpi=300)
+    plt.savefig(f"/plots/smoothed_offline_firing_rate_raster.svg", dpi=300)
     # plt.show()
 
 
@@ -412,16 +445,16 @@ def plot_pcc_scores(pcc_scores: np.ndarray) -> None:
     plt.xlabel("Place cell ID")
     plt.ylabel("PCC score (normalised)")
     plt.tight_layout()
-    plt.savefig(f"plots/pcc_scores.svg", dpi=300)
+    plt.savefig(f"/plots/pcc_scores.svg", dpi=300)
     # plt.show()
 
 
 def main() -> None:
-    mouse = "JB027"
-    date = "2025-02-26"
+    mouse = "JB031"
+    date = "2025-04-02"
 
     verbose = True
-    use_cache = True
+    use_cache = False
 
     with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -455,7 +488,7 @@ def main() -> None:
     else:
         print("No cached data found, processing data")
         # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
-        positions, speed, ITI_starts_ends, aligned_trial_frames = process_behaviour(
+        positions, speed, _, aligned_trial_frames = process_behaviour(
             session,
             wheel_circumference=get_wheel_circumference_from_rig(
                 "2P",
@@ -472,10 +505,9 @@ def main() -> None:
             TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
             "spks",
         )
-        # TODO: should this be one function that is called by grosmark_analysis.py and ensemble_reactivation.py?
         # """Based on the observed differences in calcium activity waveforms between the online and
         # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
+        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
         online_spks = binarise_spikes(
             spks_raw[
                 :,
@@ -483,7 +515,7 @@ def main() -> None:
             ],
             mad_threshold=1.5,
         )
-        offline_spks_pre, offline_spks_post = get_preactivation_reactivation(
+        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
             flu=spks_raw, wheel_freeze=session.wheel_freeze
         )
         # TODO: should pre and post be binarised as one?
@@ -493,8 +525,7 @@ def main() -> None:
         )
         offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
-        # TODO: shape is off by one frame (pre is one short), do we care?
-        # assert spks_raw.shape == spks.shape
+        assert spks_raw.shape == spks.shape
         t1 = time.time()
         pcs_mask, _ = get_place_cells(
             session=session, spks=spks, rewarded=None, config=config, plot=False
@@ -512,7 +543,8 @@ def main() -> None:
             config=config,
         )
         ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
-        ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+        # ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+        ensemble_matrix = compute_PCA_components(ssp_vectors=ssp_vectors)
         # OFFLINE
         reactivation_strength = offline_reactivation(
             reactivation=reactivation, ensemble_matrix=ensemble_matrix
