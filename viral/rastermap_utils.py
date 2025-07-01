@@ -21,6 +21,7 @@ from viral.constants import TIFF_UMBRELLA
 def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     spks = np.load(s2p_path / "spks.npy")[iscell, :]
+    # spks = np.load(s2p_path / "oasis_spikes_grosmark_preprocess.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])
     xpos = pos[:, 1]

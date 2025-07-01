@@ -630,7 +630,6 @@ def main() -> None:
 
             try:
                 print(f"the type is {row['Type']}")
-
                 date = row["Date"]
                 session_type = row["Type"].lower()
                 try:
