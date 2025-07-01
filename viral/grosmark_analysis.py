@@ -58,7 +58,7 @@ def grosmark_place_field(
     else:
         # """Based on the observed differences in calcium activity waveforms between the online and
         # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs.""
+        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
         online_spks = binarise_spikes(
             spks_raw[
                 :,
@@ -226,6 +226,8 @@ def get_place_cells(
     # Cells that pass both the original and additional checks
     pcs_combined = pcs.copy()
     pcs_combined[pcs] = pcs[pcs] & pcs_additional
+    # TODO: should it be
+    # pcs_combined[pcs] = pcs_additional???
 
     print(
         f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"

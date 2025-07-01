@@ -6,8 +6,6 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import zscore, rankdata
-from numpy.linalg import eig
-from sklearn.decomposition import FastICA, PCA
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -44,9 +42,6 @@ def process_behaviour(
     corridor_widths = np.array([trial.corridor_width for trial in imaged_trials_infos])
     positions = np.vstack([trial.frames_positions for trial in imaged_trials_infos])
     speed = np.vstack([trial.frames_speed for trial in imaged_trials_infos])
-    ITI_starts_ends = np.array(
-        [[trial.iti_start_frame, trial.iti_end_frame] for trial in imaged_trials_infos]
-    )
     neural_data = np.concatenate(
         [trial.signal for trial in imaged_trials_infos], axis=1
     )
@@ -64,7 +59,7 @@ def process_behaviour(
         valid_frames.update(np.arange(start, end + 1))
     assert np.all(np.isin(positions[:, 0], list(valid_frames)))
     assert np.all(np.isin(speed[:, 0], list(valid_frames)))
-    return positions, speed, ITI_starts_ends, aligned_trial_frames
+    return positions, speed, aligned_trial_frames
 
 
 def get_running_bouts(
@@ -606,7 +601,7 @@ def main() -> None:
     else:
         print("No cached data found, processing data")
         # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
-        positions, speed, _, aligned_trial_frames = process_behaviour(
+        positions, speed, aligned_trial_frames = process_behaviour(
             session,
             wheel_circumference=get_wheel_circumference_from_rig(
                 "2P",
