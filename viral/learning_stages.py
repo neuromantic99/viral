@@ -35,10 +35,10 @@ SESSIONS_KEEP = {
     # },
     "JB014": {  # LOOKS GOOD
         "unsupervised": "2024-10-24",
-        "learning": "2024-10-30",
+        "learning": "2024-10-31",
         "learned": "2024-11-04",
     },
-    "JB015": {  #
+    "JB015": {
         "unsupervised": "2024-10-24",
         "learning": "2024-10-31",
         "learned": "2024-11-19",
@@ -65,7 +65,7 @@ SESSIONS_KEEP = {
     },
     "JB021": {
         "unsupervised": "2024-11-29",
-        "learning": "2024-12-05",
+        "learning": "2024-12-06",
         "learned": "2024-12-09",
     },
     "JB022": {
@@ -137,6 +137,25 @@ def get_session(
     return Cached2pSession.model_validate_json(path.read_text())
 
 
+def get_completed_mouse_sessions(mouse_name: str) -> list[Mouse2pSessions]:
+
+    results = [None, None, None]
+    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
+        path = CACHE_PATH / f"{mouse_name}_{SESSIONS_KEEP[mouse_name][stage]}.json"
+        try:
+            results[idx] = Cached2pSession.model_validate_json(path.read_text())
+            print(f"Loaded cached session for {mouse_name} {stage} from {path}")
+        except (ValidationError, FileNotFoundError) as e:
+            print(f"Error retrieving unsupervised session for {mouse_name}: {e}")
+
+    return Mouse2pSessions(
+        mouse_name=mouse_name,
+        unsupervised=results[0],
+        learning=results[1],
+        learned=results[2],
+    )
+
+
 def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     try:
@@ -146,7 +165,6 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
             metadata,
             stage="unsupervised",
         )
-
     except Exception as e:
         print(f"Error retrieving unsupervised session for {mouse_name}: {e}")
         unsupervised = None

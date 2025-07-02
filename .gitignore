@@ -1,5 +1,6 @@
 *.json
 *.npy
+*.pkl
 
 constants.py
 

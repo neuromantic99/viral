@@ -41,6 +41,20 @@ def load_imaging_data(
     return dff, spks, denoised
 
 
+def load_only_spks(mouse: str, date: str) -> np.ndarray:
+    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    print(f"Suite 2p path is {s2p_path}")
+
+    iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+    spks = np.load(s2p_path / "oasis_spikes.npy")
+    if spks.shape[0] == np.sum(iscell):
+        print(f"Already filtered for iscell for {mouse} on {date}")
+        return spks
+    else:
+        print(f"Filtering for iscell for {mouse} on {date}")
+        return spks[iscell, :]
+
+
 def get_ITI_start_frame(trial: TrialInfo) -> int:
     for state in trial.states_info:
         if state.name in {"ITI", "trigger_ITI"}:
@@ -284,13 +298,19 @@ def get_ITI_matrix(
     matrices = []
 
     for trial in trials:
-        assert trial.trial_end_closest_frame is not None
+        end_ITI = (
+            trial.trial_end_closest_frame
+            if trial.trial_end_closest_frame is not None
+            else [state for state in trial.states_info if state.name == "ITI"][
+                0
+            ].closest_frame_end
+        )
 
         # This would be good, but in practise it rarely occurs
         # if running_during_ITI(trial):
         #     continue
 
-        chunk = flu[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
+        chunk = flu[:, get_ITI_start_frame(trial) : end_ITI]
 
         n_frames = chunk.shape[1]
 

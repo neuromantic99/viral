@@ -3,6 +3,10 @@ from pathlib import Path
 import sys
 from typing import Dict, List
 from matplotlib import pyplot as plt
+
+import matplotlib
+
+matplotlib.rcParams["pdf.fonttype"] = 42
 from scipy.stats import median_abs_deviation, zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
@@ -14,10 +18,11 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import HERE
+from viral.constants import CACHE_PATH, HERE
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
+    load_only_spks,
     trial_is_imaged,
     activity_trial_position,
     get_resting_chunks,
@@ -64,6 +69,16 @@ def grosmark_place_field(
     TODO: Looks like there might be some real landmark activity that could be reactivated. Analyse this.
 
     """
+
+    results_path = HERE.parent / "results" / "pairwise-reactivations-ITI"
+
+    for file in results_path.glob(f"*.npy"):
+        # This won't work if you change the config
+        if file.stem.startswith(
+            f"{session.mouse_name}_{session.date}_rewarded_{rewarded}"
+        ):
+            print(f"File {file} already exists, skipping Grosmark analysis")
+            return
 
     n_cells_total = spks.shape[0]
 
@@ -137,7 +152,7 @@ def grosmark_place_field(
 
     place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
 
-    plot_speed(session, rewarded, config)
+    # plot_speed(session, rewarded, config)
 
     shuffled_place_cells = np.array(
         [
@@ -168,6 +183,7 @@ def grosmark_place_field(
         shuffled_matrices=shuffled_matrices,
         shuffled_place_cells=shuffled_place_cells,
         config=config,
+        name=f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_bin_size_{config.bin_size}_cm.pdf",
     )
 
     print(f"percent place cells after extra check {np.sum(pcs) / n_cells_total}")
@@ -189,8 +205,6 @@ def grosmark_place_field(
         peak_position_cm=peak_position_cm,
         rewarded=rewarded,
     )
-
-    plt.show()
 
 
 def plot_speed(
@@ -253,8 +267,10 @@ def offline_correlations(
         bin_size=None,
     )
 
-    shuffled_corrs = get_offline_correlation_matrix(offline, do_shuffle=True, plot=True)
-    real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=True)
+    shuffled_corrs = get_offline_correlation_matrix(
+        offline, do_shuffle=True, plot=False
+    )
+    real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=False)
 
     correlations_vs_peak_distance(
         real_corrs,
@@ -339,7 +355,6 @@ def correlations_vs_peak_distance(
         plt.ylabel("Average pearson correlation")
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
 
-        plt.show()
     np.save(
         HERE.parent / "results" / "pairwise-reactivations-ITI" / file_name,
         np.array([x, y]),
@@ -364,6 +379,7 @@ def plot_place_cells(
     shuffled_matrices: np.ndarray,
     shuffled_place_cells: np.ndarray,
     config: GrosmarkConfig,
+    name: str,
 ) -> None:
     plt.figure()
     plt.imshow(
@@ -384,6 +400,8 @@ def plot_place_cells(
     )
 
     plt.colorbar()
+    plt.tight_layout()
+    plt.savefig(HERE.parent / "plots" / "replay-meeting" / name)
 
     plt.figure()
 
@@ -512,31 +530,12 @@ def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     return remove_consecutive_ones(spks)
 
 
-def multiple_sessions_pairwise_ITI() -> None:
-    data_path = HERE.parent / "results" / "pairwise-reactivations-ITI"
-    files = list(data_path.glob("*.npy"))
-
-    to_plot: Dict[str, List] = {"Oligo-BACE1-KO": [], "NLGF": [], "WT": []}
-
-    seen_mice = set()
-    for file in files:
-        mouse = file.stem.split("_")[0]
-        assert mouse not in seen_mice, f"Mouse {mouse} already seen"
-        seen_mice.add(mouse)
-
-        genotype = get_genotype(mouse)
-        to_plot[genotype].append(np.load(file))
-
-
 if __name__ == "__main__":
 
-    multiple_sessions_pairwise_ITI()
+    mouse = "JB016"
+    date = "2024-10-24"
 
-    mouse = "JB027"
-    date = "2025-02-26"
-    # date = "2024-12-10"
-
-    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
+    with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
     print(f"Total number of trials: {len(session.trials)}")
@@ -544,18 +543,9 @@ if __name__ == "__main__":
         f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
     )
 
-    dff, spks, denoised = load_imaging_data(mouse, date)
+    spks = load_only_spks(mouse, date)
 
     print("Got dff")
-
-    assert (
-        max(
-            trial.states_info[-1].closest_frame_start
-            for trial in session.trials
-            if trial.states_info[-1].closest_frame_start is not None
-        )
-        < dff.shape[1]
-    ), "Tiff is too short"
 
     spks = binarise_spikes(spks)
 
