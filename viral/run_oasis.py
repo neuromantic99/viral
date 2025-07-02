@@ -113,6 +113,11 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
         spikes, denoised = grosmark_preprocess(s2p_path, plot)
 
     else:
+        if (s2p_path / "oasis_spikes.npy").exists():
+            print(
+                f"OASIS spikes already computed for {mouse} {date} continuing to next step"
+            )
+            return
         dff = compute_dff(get_f(s2p_path))
 
         all_denoised = list()
@@ -149,5 +154,7 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    main(mouse="JB031", date="2025-03-07", grosmark=False)
+
+    main(mouse="JB016", date="2024-10-31", grosmark=False)
+
     # main(mouse="JB027", date="2025-02-26", grosmark=True)

@@ -1,7 +1,7 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import List, Tuple, TypeVar, Any
+from typing import List, Literal, Tuple, TypeVar, Any
 import warnings
 from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
@@ -18,6 +18,10 @@ from viral.models import (
 )
 
 
+def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
+    return np.convolve(arr, np.ones(window), "valid") / window
+
+
 def shaded_line_plot(
     arr: np.ndarray,
     x_axis: np.ndarray | List[float],
@@ -25,8 +29,12 @@ def shaded_line_plot(
     label: str,
 ) -> None:
 
-    mean = np.mean(arr, 0)
-    sem = np.std(arr, 0) / np.sqrt(arr.shape[1])
+    mean = moving_average(np.nanmean(arr, 0), 5)
+    sem = moving_average(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), 5)
+    x_axis = x_axis[1 : len(mean) + 1]  # Adjust x_axis to match the mean length
+
+    # mean = np.nanmean(arr, 0)
+    # sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[1])
     plt.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
     plt.fill_between(
         x_axis,
@@ -226,7 +234,7 @@ def time_list_to_datetime(time_list: List[float]) -> datetime:
     )
 
 
-def find_chunk(chunk_lens: List[int], index: int) -> int:
+def find_chunk(chunk_lens: List[int] | np.ndarray, index: int) -> int:
     """Given a list of chunk lengths and an index, find the chunk that contains the index"""
     cumulative_length = 0
     for i, length in enumerate(chunk_lens):
@@ -268,7 +276,7 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
     return np.nanmean(data, axis=0)
 
 
-def get_genotype(mouse_name: str) -> str:
+def get_genotype(mouse_name: str) -> Literal["Oligo-BACE1-KO", "NLGF", "WT"]:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
     elif mouse_name in {

@@ -6,6 +6,7 @@ import re
 import sys
 import inspect
 from pydantic import ValidationError
+from scipy import stats
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
@@ -14,6 +15,9 @@ sys.path.append(str(HERE.parent))
 from typing import List, Tuple, Dict, Callable, Optional
 
 from matplotlib import pyplot as plt
+import matplotlib
+
+matplotlib.rcParams["pdf.fonttype"] = 42
 import numpy as np
 from viral.gsheets_importer import gsheet2df
 from viral.single_session import (
@@ -36,6 +40,7 @@ from viral.utils import (
 )
 
 import seaborn as sns
+import pandas as pd
 
 sns.set_theme(context="talk", style="ticks")
 
@@ -613,12 +618,41 @@ def plot_performance_summaries(
     ]
     ax.set_xticklabels(new_labels, fontsize=12)
     sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+
+    nlgf_vs_wt = stats.ttest_ind(
+        to_plot["NLGF"],
+        to_plot["WT"],
+    )
+    wt_vs_oligo = stats.ttest_ind(
+        to_plot["WT"],
+        to_plot["Oligo-BACE1-KO"],
+    )
+    print(f"NLGF vs WT: {nlgf_vs_wt.pvalue:.3f}")
+    print(f"WT vs Oligo-BACE1-KO: {wt_vs_oligo.pvalue:.3f}")
+
+    # Add statistical significance annotations
+    plt.text(
+        0.5,
+        max(max(to_plot["NLGF"]), max(to_plot["WT"])) + 1,
+        f"p={nlgf_vs_wt.pvalue:.3f}",
+        ha="center",
+        fontsize=12,
+    )
+    plt.text(
+        1.5,
+        max(max(to_plot["WT"]), max(to_plot["Oligo-BACE1-KO"])) + 1,
+        f"p={wt_vs_oligo.pvalue:.3f}",
+        ha="center",
+        fontsize=12,
+    )
+
+    sns.despine()
     plt.tight_layout()
     group_suffix = "-".join(group_by)
     plt.savefig(
         HERE.parent
         / "plots"
-        / f"behaviour-summaries-{group_suffix}-{session_type}.svg",
+        / f"behaviour-summaries-{group_suffix}-{session_type}.pdf",
         dpi=300,
     )
     plt.show()
@@ -697,27 +731,27 @@ if __name__ == "__main__":
     redo = False
 
     for mouse_name in {
-        "JB011",
-        "JB012",
-        "JB013",
-        "JB014",
-        "JB015",
-        "JB016",
-        "JB017",
-        "JB018",
-        "JB019",
-        "JB020",
-        "JB021",
-        "JB022",
-        "JB023",
-        "JB024",
-        "JB025",
-        "JB026",
-        "JB027",
-        "JB030",
+        # "JB011",
+        # "JB012",
+        # "JB013",
+        # "JB014",
+        # "JB015",
+        # "JB016",
+        # "JB017",
+        # "JB018",
+        # "JB019",
+        # "JB020",
+        # "JB021",
+        # "JB022",
+        # "JB023",
+        # "JB024",
+        # "JB025",
+        # "JB026",
+        # "JB027",
+        # "JB030",
         "JB031",
-        "JB032",
-        "JB033",
+        # "JB032",
+        # "JB033",
     }:
 
         print(f"\nProcessing {mouse_name}...")
@@ -735,8 +769,8 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    plot_performance_summaries(mice, "learning", ["genotype"], window=50)
-    # plot_mouse_performance(mice[0])
+    # plot_performance_summaries(mice, "learning", ["genotype"], window=50)
+    plot_mouse_performance(mice[0])
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # plot_running_speed_summaries(mice, "recall_reversal", running_speed_AZ)
     # plot_running_speed_summaries(mice, "learning", running_speed_nonAZ)
