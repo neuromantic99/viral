@@ -25,7 +25,6 @@ from viral.rastermap_utils import (
 )
 from viral.utils import (
     degrees_to_cm,
-    get_speed_positions,
     get_wheel_circumference_from_rig,
     shuffle_rows,
     trial_is_imaged,
@@ -409,7 +408,8 @@ def plot_ensemble_reactivation_preactivation(
     for name, matrix in processed_matrices.items():
         plt.figure(figsize=(14, 4))
         for i, idx in enumerate(top_ensembles):
-            if matrix.shape[0] <= idx:
+            # Sometimes the shuffled don't have enough components
+            if matrix.shape[0] <= idx and "shuffled" in name:
                 continue
             plt.plot(
                 matrix[idx, :],
@@ -647,11 +647,11 @@ def main() -> None:
             spks_raw[:, : session.wheel_freeze.pre_training_end_frame],
             mad_threshold=1.25,
         )
+
         offline_spks_post = binarise_spikes(
             spks_raw[:, session.wheel_freeze.post_training_start_frame :],
             mad_threshold=1.25,
         )
-
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
 
         assert spks_raw.shape == spks.shape
@@ -693,7 +693,6 @@ def main() -> None:
         )
 
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
-
         ensemble_matrix = compute_PCA_components(ssp_vectors=ssp_vectors)
         ensemble_matrix_shuffled_data = compute_PCA_components(
             ssp_vectors=ssp_vectors_shuffled
