@@ -20,8 +20,7 @@ from viral.constants import TIFF_UMBRELLA
 
 def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    spks = np.load(s2p_path / "spks.npy")[iscell, :]
-    # spks = np.load(s2p_path / "oasis_spikes_grosmark_preprocess.npy")[iscell, :]
+    spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])
     xpos = pos[:, 1]
@@ -551,7 +550,6 @@ def process_session(
 ) -> None:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
-    # TODO: it is actually dff and not spks but I will still call it that
     spks, xpos, ypos, trials = load_data(session, s2p_path, "spks")
     aligned_trial_frames, spikes_trials = align_validate_data(spks, trials)
     imaged_trials_infos = process_trials_data(

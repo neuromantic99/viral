@@ -63,5 +63,13 @@
       "console": "integratedTerminal",
       "justMyCode": true
     },
+    {
+      "name": "Ensemble reactivation",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/ensemble_reactivation.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
   ]
 }

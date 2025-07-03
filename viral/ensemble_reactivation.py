@@ -1,3 +1,4 @@
+from typing import List
 import numpy as np
 import sys
 import os
@@ -5,33 +6,43 @@ import time
 from pathlib import Path
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
-from scipy.stats import zscore, rankdata
+from scipy.stats import zscore, rankdata, ttest_ind
+import seaborn as sns
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.constants import TIFF_UMBRELLA
-from viral.models import Cached2pSession, GrosmarkConfig, SortedPlaceCells
+from viral.constants import CACHE_PATH, TIFF_UMBRELLA
+from viral.models import Cached2pSession, GrosmarkConfig, SortedPlaceCells, TrialInfo
 from viral.rastermap_utils import (
+    get_frame_position,
+    get_speed_frame,
     load_data,
     align_validate_data,
     process_trials_data,
     filter_speed_position,
 )
-from viral.utils import get_wheel_circumference_from_rig, shuffle_rows
-from viral.imaging_utils import get_frozen_wheel_flu
+from viral.utils import (
+    degrees_to_cm,
+    get_speed_positions,
+    get_wheel_circumference_from_rig,
+    shuffle_rows,
+    trial_is_imaged,
+)
+from viral.imaging_utils import get_ITI_start_frame, get_frozen_wheel_flu
 from viral.grosmark_analysis import binarise_spikes, get_place_cells
 
 
 def process_behaviour(
     session: Cached2pSession,
     wheel_circumference: float,
+    spks: np.ndarray,
     speed_bin_size: int = 10,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
-    signal, _, _, trials = load_data(session, s2p_path, "spks")
-    aligned_trial_frames, neural_data_trials = align_validate_data(signal, trials)
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+    trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+    aligned_trial_frames, neural_data_trials = align_validate_data(spks, trials)
     imaged_trials_infos = process_trials_data(
         trials,
         aligned_trial_frames,
@@ -78,7 +89,7 @@ def get_running_bouts(
     behaviour_mask = filter_speed_position(
         speed=speed,
         frames_positions=frames_positions,
-        speed_threshold=5,  # cm/s
+        speed_threshold=-100,  # cm/s
         position_threshold=(config.start, config.end),
         use_or=False,
     )
@@ -120,7 +131,7 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
 
     # 'Next, the spike count of each neuron (i.e., each row of the matrix) is normalized by z-score transformation'
     # TODO: it should be axis = 0 right?? (z-scoring time bins for each neuron??)
-    ssp_vectors_z = zscore(ssp_vectors, axis=0)
+    ssp_vectors_z = zscore(ssp_vectors, axis=1)
 
     # 'in our case the covariance matrix is equal to the correlation matrix, and can be calculated as:
     # C = Z*Z.T / Ncolumns
@@ -398,6 +409,8 @@ def plot_ensemble_reactivation_preactivation(
     for name, matrix in processed_matrices.items():
         plt.figure(figsize=(14, 4))
         for i, idx in enumerate(top_ensembles):
+            if matrix.shape[0] <= idx:
+                continue
             plt.plot(
                 matrix[idx, :],
                 color=colours[i],
@@ -488,7 +501,7 @@ def plot_grosmark_panel(
     top_ensembles: np.ndarray,
     sorted_pcs: SortedPlaceCells,
     reactivation: np.ndarray,
-    smooth=True,
+    smooth: bool = False,
 ) -> None:
     """
     Producing Fig. 4j
@@ -497,6 +510,7 @@ def plot_grosmark_panel(
     gs = fig.add_gridspec(2, 2, width_ratios=[1, 4], height_ratios=[3, 3])
 
     xmin = 0
+
     xmax = 27000
 
     # 1) reactivation strength (top)
@@ -546,16 +560,25 @@ def plot_grosmark_panel(
     sorted_cells = sorted_pcs.sorted_indices
     # offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
     offline_activity_matrix = reactivation.copy()
+
+    raster = offline_activity_matrix[sorted_cells, xmin:xmax]
+
     im = ax3.imshow(
-        offline_activity_matrix[sorted_cells, xmin:xmax],
+        raster,
         cmap="gray_r",
-        # aspect="auto",
+        aspect="auto",
+        interpolation="none",
     )
+    # desired_ratio = raster.shape[1] / raster.shape[0]
+    # ax3.set_aspect(desired_ratio / 5)  # Reduce the stretching
+
     ax3.set_ylabel("Place cell ID")
     ax3.set_xlabel("Frames")
+
     # ax3.set_title("Smoothed offline firing rate raster")
 
     plt.savefig("plots/grosmark_panel.svg", dpi=300)
+    1 / 0
     # plt.show()
 
 
@@ -566,48 +589,36 @@ def main() -> None:
     verbose = True
     use_cache = False
 
-    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
+    with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
 
     if not session.wheel_freeze:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
-        exit()
+        return
 
     cache_file = (
         HERE.parent / f"{session.mouse_name}_{session.date}_ensemble_reactivation.npz"
     )
 
-    if use_cache and os.path.exists(cache_file):
-        print("Using cached data")
-        pcs_mask = np.load(cache_file)["pcs_mask"]
-        ensemble_matrix = np.load(cache_file)["ensemble_matrix"]
-        ensemble_matrix_shuffled_data = np.load(cache_file)[
-            "ensemble_matrix_shuffled_data"
-        ]
-        reactivation_strength = np.load(cache_file)["reactivation_strength"]
-        reactivation_strength_shuffled = np.load(cache_file)[
-            "reactivation_strength_shuffled"
-        ]
-        preactivation_strength = np.load(cache_file)["preactivation_strength"]
-        preactivation_strength_shuffled = np.load(cache_file)[
-            "preactivation_strength_shuffled"
-        ]
-        reactivation = np.load(cache_file)["reactivation"]
-        preactivation = np.load(cache_file)["preactivation"]
-        running_bouts = np.load(cache_file)["running_bouts"]
-        pcc_scores = np.load(cache_file)["pcc_scores"]
+    if use_cache and cache_file.exists():
+        (
+            pcs_mask,
+            ensemble_matrix,
+            ensemble_matrix_shuffled_data,
+            reactivation_strength,
+            reactivation_strength_shuffled,
+            preactivation_strength,
+            preactivation_strength_shuffled,
+            reactivation,
+            preactivation,
+            running_bouts,
+            pcc_scores,
+        ) = load_data_from_cache(cache_file)
     else:
         print("No cached data found, processing data")
         # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
-        positions, speed, aligned_trial_frames = process_behaviour(
-            session,
-            wheel_circumference=get_wheel_circumference_from_rig(
-                "2P",
-            ),
-            speed_bin_size=30,
-        )
         config = GrosmarkConfig(
             bin_size=2,
             start=30,
@@ -615,12 +626,16 @@ def main() -> None:
         )
         spks_raw, _, _, _ = load_data(
             session,
-            TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
+            # AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+            Path("/Volumes/hard_drive/VR-2p/2025-03-25/JB031/suite2p/plane0"),
+            # TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
             "spks",
         )
+
         # """Based on the observed differences in calcium activity waveforms between the online and
         # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
         # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
+
         online_spks = binarise_spikes(
             spks_raw[
                 :,
@@ -628,16 +643,17 @@ def main() -> None:
             ],
             mad_threshold=1.5,
         )
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
-            flu=spks_raw, wheel_freeze=session.wheel_freeze
-        )
-        # TODO: should pre and post be binarised as one?
         offline_spks_pre = binarise_spikes(
-            offline_spks_pre,
+            spks_raw[:, : session.wheel_freeze.pre_training_end_frame],
             mad_threshold=1.25,
         )
-        offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
+        offline_spks_post = binarise_spikes(
+            spks_raw[:, session.wheel_freeze.post_training_start_frame :],
+            mad_threshold=1.25,
+        )
+
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
+
         assert spks_raw.shape == spks.shape
         t1 = time.time()
         pcs_mask, _ = get_place_cells(
@@ -647,18 +663,37 @@ def main() -> None:
         place_cells = spks[pcs_mask, :]
         reactivation = offline_spks_post[pcs_mask]
         preactivation = offline_spks_pre[pcs_mask]
-        # ONLINE
-        running_bouts = get_running_bouts(
-            place_cells=place_cells,
-            speed=speed,
-            frames_positions=positions,
-            aligned_trial_frames=aligned_trial_frames,
-            config=config,
+
+        ## Taken out while we figure out how best to do this
+        # running_bouts = get_running_bouts(
+        #     place_cells=place_cells,
+        #     speed=speed,
+        #     frames_positions=positions,
+        #     aligned_trial_frames=aligned_trial_frames,
+        #     config=config,
+        # )
+
+        trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+
+        sigma = 30
+        # Doing the gaussian filter on a trial by trial basis to prevent edge effects
+        # Pretty stupid doing this in a oneliner
+        ssp_vectors = np.hstack(
+            [
+                np.apply_along_axis(
+                    gaussian_filter1d,
+                    axis=1,
+                    arr=place_cells[
+                        :, trial.trial_start_closest_frame : get_ITI_start_frame(trial)
+                    ],
+                    sigma=sigma,
+                )
+                for trial in trials
+            ]
         )
-        ssp_vectors = get_ssp_vectors(place_cells_running=running_bouts)
-        ssp_vectors_shuffled = get_ssp_vectors(
-            place_cells_running=shuffle_rows(running_bouts)
-        )
+
+        ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
+
         ensemble_matrix = compute_PCA_components(ssp_vectors=ssp_vectors)
         ensemble_matrix_shuffled_data = compute_PCA_components(
             ssp_vectors=ssp_vectors_shuffled
@@ -672,9 +707,30 @@ def main() -> None:
         preactivation_strength = offline_reactivation(
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
-        # TODO: get rid of the "do_shuffle" argument?
-        reactivation_shuffled = shuffle_rows(reactivation)
+
+        total_reactivation = np.sum(reactivation_strength, axis=1)
+        total_preactivation = np.sum(preactivation_strength, axis=1)
+
+        # Plot the component changes
+        plt.axhline(
+            y=0,
+            color="black",
+            linestyle="dotted",
+        )
+        plt.plot(
+            [0] * len(total_reactivation),
+            total_reactivation - total_preactivation,
+            ".",
+            label="reactivation",
+        )
+
+        plt.ylabel("Reactivation strength (sum across time)")
+        plt.title(
+            f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f}"
+        )
+        # TODO: get rid of the "do_shuffle" argument        reactivation_shuffled = shuffle_rows(reactivation)
         preactivation_shuffled = shuffle_rows(preactivation)
+        reactivation_shuffled = shuffle_rows(reactivation)
         reactivation_strength_shuffled = offline_reactivation(
             reactivation=reactivation_shuffled,
             ensemble_matrix=ensemble_matrix_shuffled_data,
@@ -691,6 +747,7 @@ def main() -> None:
             ensemble_matrix=ensemble_matrix,
         )
         print(f"Time to get PCC scores: {time.time() - t3}")
+
         # TODO: should the top ensembles be the same for reactivation and preactivation?
         # I mean we would look at the reactivation strength of the same ensembles?
 
@@ -706,12 +763,12 @@ def main() -> None:
             preactivation_strength_shuffled=preactivation_strength_shuffled,
             reactivation=reactivation,
             preactivation=preactivation,
-            running_bouts=running_bouts,
+            # running_bouts=,
             pcc_scores=pcc_scores,
         )
     if verbose:
-        print(f"# frames with running: {running_bouts.shape[1]}")
-        print(f"# place cells: {running_bouts.shape[0]}")
+        # print(f"# frames with running: {running_bouts.shape[1]}")
+        # print(f"# place cells: {running_bouts.shape[0]}")
         print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
         # TODO: remove eventually?
         print(
@@ -746,8 +803,58 @@ def main() -> None:
         ensemble_matrix=ensemble_matrix,
         sorted_pcs=sorted_pcs,
         reactivation=reactivation,
-        smooth=True,
+        smooth=False,
     )
+
+
+def load_data_from_cache(cache_file: Path) -> tuple:
+    print("Using cached data")
+    cache = np.load(cache_file, allow_pickle=True)
+    return (
+        cache["pcs_mask"],
+        cache["ensemble_matrix"],
+        cache["ensemble_matrix_shuffled_data"],
+        cache["reactivation_strength"],
+        cache["reactivation_strength_shuffled"],
+        cache["preactivation_strength"],
+        cache["preactivation_strength_shuffled"],
+        cache["reactivation"],
+        cache["preactivation"],
+        cache["running_bouts"],
+        cache["pcc_scores"],
+    )
+
+
+def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
+    """Checking logic of get_speed_frame and get_frame_position. Delete this later."""
+    for trial in trials:
+        trial_frames = np.arange(
+            trial.trial_start_closest_frame, trial.trial_end_closest_frame + 1, 1
+        )
+        fig, ax1 = plt.subplots(figsize=(10, 5))
+        position = get_frame_position(
+            trial, trial_frames, get_wheel_circumference_from_rig("2P")
+        )
+        possy = degrees_to_cm(
+            np.array(trial.rotary_encoder_position),
+            get_wheel_circumference_from_rig("2P"),
+        )
+        (p1,) = ax1.plot(
+            possy,
+            color="black",
+            label="rotary encoder position",
+        )
+
+        (p2,) = ax1.plot(position[:, 1], color="blue", label="frame position")
+
+        speed = get_speed_frame(position, 30)[:, 1]
+        ax2 = ax1.twinx()
+        (p3,) = ax2.plot(speed, color="orange", label="speed")
+        lines = [p1, p2, p3]
+        labels = [line.get_label() for line in lines]
+        ax1.legend(lines, labels, loc="upper left")
+
+        plt.show()
 
 
 if __name__ == "__main__":
