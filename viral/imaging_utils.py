@@ -30,9 +30,9 @@ def load_imaging_data(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
-    if not os.path.exists(s2p_path):
+    if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
-    if not os.path.exists(s2p_path / "oasis_spikes.npy"):
+    if not (s2p_path / "oasis_spikes.npy").exists():
         from viral.run_oasis import main as run_oasis
 
         run_oasis(mouse=mouse, date=date, grosmark=True)
