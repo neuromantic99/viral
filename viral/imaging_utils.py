@@ -2,7 +2,6 @@
 
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
-import os
 import numpy as np
 from viral.models import TrialInfo
 from viral.utils import (
@@ -35,7 +34,7 @@ def load_imaging_data(
     if not (s2p_path / "oasis_spikes.npy").exists():
         from viral.run_oasis import main as run_oasis
 
-        run_oasis(mouse=mouse, date=date, grosmark=True)
+        run_oasis(mouse=mouse, date=date, grosmark=False)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
 
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
