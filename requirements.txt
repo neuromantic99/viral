@@ -30,6 +30,7 @@ npTDMS==1.10.0
 numpy==2.2.3
 oauthlib==3.2.2
 osqp==1.0.4
+opt_einsum==3.4.0
 packaging==24.2
 pandas==2.2.3
 pillow==11.1.0
@@ -63,3 +64,4 @@ typing_extensions==4.12.2
 tzdata==2025.1
 uritemplate==4.1.1
 urllib3==2.3.0
+

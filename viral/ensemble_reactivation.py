@@ -7,6 +7,7 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import zscore, rankdata, ttest_ind
+from opt_einsum import contract
 import seaborn as sns
 
 HERE = Path(__file__).parent
@@ -218,7 +219,7 @@ def offline_reactivation(
 
     # outer product for each component b with itself
     # shape (components, cells, cells)
-    projection_matrices = np.einsum("kb,jb->bkj", ensemble_matrix, ensemble_matrix)
+    projection_matrices = contract("kb,jb->bkj", ensemble_matrix, ensemble_matrix)
     assert projection_matrices.shape == (
         n_components,
         n_cells,
@@ -229,7 +230,7 @@ def offline_reactivation(
     for b in range(projection_matrices.shape[0]):
         np.fill_diagonal(projection_matrices[b], 0)
 
-    reactivation_strength = np.einsum(
+    reactivation_strength = contract(
         "ik,bkj,ji->bi",
         offline_activity_matrix.T,  # Zi.T
         projection_matrices,  # Pb
@@ -266,7 +267,7 @@ def compute_pcc_scores(
     w = ensemble_matrix  # (n_cells, n_components)
 
     # for each component b compute w_b @ Z
-    wZ = np.einsum("kb,ki->bi", w, Z)  # (n_components, n_timepoints)
+    wZ = contract("kb,ki->bi", w, Z)  # (n_components, n_timepoints)
     assert wZ.shape == (n_components, n_timepoints)
 
     # for each cell k and component b: compute contribution
@@ -583,8 +584,8 @@ def plot_grosmark_panel(
 
 
 def main() -> None:
-    mouse = "JB031"
-    date = "2025-03-25"
+    mouse = "JB036"
+    date = "2025-07-05"
 
     verbose = True
     use_cache = False
@@ -599,7 +600,8 @@ def main() -> None:
         return
 
     cache_file = (
-        HERE.parent / f"{session.mouse_name}_{session.date}_ensemble_reactivation.npz"
+        HERE.parent
+        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation.npz"
     )
 
     if use_cache and cache_file.exists():
@@ -620,9 +622,9 @@ def main() -> None:
         print("No cached data found, processing data")
         # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
         config = GrosmarkConfig(
-            bin_size=2,
-            start=30,
-            end=160,
+            bin_size=5,
+            start=0,
+            end=170,
         )
         spks_raw, _, _, _ = load_data(
             session,
@@ -657,7 +659,7 @@ def main() -> None:
         assert spks_raw.shape == spks.shape
         t1 = time.time()
         pcs_mask, _ = get_place_cells(
-            session=session, spks=spks, rewarded=None, config=config, plot=False
+            session=session, spks=spks, rewarded=None, config=config, plot=True
         )
         print(f"Time to get place cells: {time.time() - t1}")
         place_cells = spks[pcs_mask, :]
@@ -711,23 +713,8 @@ def main() -> None:
         total_preactivation = np.sum(preactivation_strength, axis=1)
 
         # Plot the component changes
-        plt.axhline(
-            y=0,
-            color="black",
-            linestyle="dotted",
-        )
-        plt.plot(
-            [0] * len(total_reactivation),
-            total_reactivation - total_preactivation,
-            ".",
-            label="reactivation",
-        )
 
-        plt.ylabel("Reactivation strength (sum across time)")
-        plt.title(
-            f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f}"
-        )
-        # TODO: get rid of the "do_shuffle" argument        reactivation_shuffled = shuffle_rows(reactivation)
+        # TODO: get rid of the "do_shuffle" argument
         preactivation_shuffled = shuffle_rows(preactivation)
         reactivation_shuffled = shuffle_rows(reactivation)
         reactivation_strength_shuffled = offline_reactivation(
@@ -773,6 +760,7 @@ def main() -> None:
         print(
             f"# significant components (Marcenko-Pastur), shuffled data: {ensemble_matrix_shuffled_data.shape[1]}"
         )
+
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength
     )
@@ -805,6 +793,25 @@ def main() -> None:
         smooth=False,
     )
 
+    total_reactivation = np.sum(reactivation_strength, axis=1)
+    total_preactivation = np.sum(preactivation_strength, axis=1)
+    plt.figure()
+    plt.axhline(
+        y=0,
+        color="black",
+        linestyle="dotted",
+    )
+    plt.plot(
+        [0] * len(total_reactivation),
+        total_reactivation - total_preactivation,
+        ".",
+        label="reactivation",
+    )
+
+    plt.ylabel("Reactivation strength (sum across time)")
+    plt.title(f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f}")
+    plt.show()
+
 
 def load_data_from_cache(cache_file: Path) -> tuple:
     print("Using cached data")
@@ -819,7 +826,8 @@ def load_data_from_cache(cache_file: Path) -> tuple:
         cache["preactivation_strength_shuffled"],
         cache["reactivation"],
         cache["preactivation"],
-        cache["running_bouts"],
+        None,
+        # cache["running_bouts"],
         cache["pcc_scores"],
     )
 
@@ -852,8 +860,6 @@ def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
         lines = [p1, p2, p3]
         labels = [line.get_label() for line in lines]
         ax1.legend(lines, labels, loc="upper left")
-
-        plt.show()
 
 
 if __name__ == "__main__":
