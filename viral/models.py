@@ -144,6 +144,9 @@ class GrosmarkConfig:
     start: int
     end: int
 
+    def __repr__(self) -> str:
+        return f"GrosmarkConfig(bin_size={self.bin_size}, start={self.start}, end={self.end})"
+
 
 @dataclass
 class SortedPlaceCells:
