@@ -224,7 +224,9 @@ def jb032_2025_03_27(c: SessionCorrection) -> SessionCorrection:
     # Deleting last tiff after post epoch, getting rid of focus w/o grabbing before post epoch
     c.stack_lengths_tiffs = np.delete(c.stack_lengths_tiffs, [5])
     c.epochs = np.delete(c.epochs, [5], axis=0)
-    c.all_tiff_timestamps = np.delete(c.all_tiff_timestamps, [5])
+    c.all_tiff_timestamps = c.all_tiff_timestamps[
+        : sum([27000, 6319, 104990, 12172, 27000])
+    ]
     c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [4, 6])
     c.frame_times_daq = np.concatenate(
         [
@@ -245,14 +247,6 @@ def jb032_2025_03_27(c: SessionCorrection) -> SessionCorrection:
         offset_after_pre_epoch=0,
     )
 
-# @register_correction("JB032", "2025-03-31")
-# def jb032_2025_03_31(c: SessionCorrection) -> SessionCorrection:
-    # stack_lengths_tiffs
-    # array([27000, 30111,  8106, 71221])
-    # chunk_lengths_daq
-    # array([30113,  8108, 71223])
-    # TODO: keep this session at all, or superceed as wheel_blocked false??
-    # Super messy session! DAQ started after the pre epoch, no post epoch ("Didn't bother with the post freeze as no active behaviour")
 
 @register_correction("JB032", "2025-04-01")
 def jb032_2025_04_01(c: SessionCorrection) -> SessionCorrection:
