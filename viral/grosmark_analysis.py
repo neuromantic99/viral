@@ -1,4 +1,5 @@
 import itertools
+import math
 from pathlib import Path
 import sys
 from matplotlib import pyplot as plt
@@ -27,9 +28,9 @@ from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 from viral.utils import (
     cross_correlation_pandas,
     degrees_to_cm,
-    find_five_consecutive_trues_center,
+    find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
-    has_five_consecutive_trues,
+    has_n_consecutive_trues,
     remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
@@ -157,13 +158,13 @@ def get_place_cells(
         ]
     )
 
-    smoothed_matrix = np.mean(all_trials, 0)
+    smoothed_matrix = np.nanmean(all_trials, 0)
 
     # Probably delete cache logic once we're all sorted
-    use_cache = True
+    use_cache = False
     cache_file = (
         HERE
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_shuffled_matrices.npy"
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
     )
     if use_cache and cache_file.exists():
         shuffled_matrices = np.load(cache_file)
@@ -173,7 +174,7 @@ def get_place_cells(
         # You can then apply percentiles along the first dimension to find "real" place cells
         shuffled_matrices = np.array(
             [
-                np.mean(
+                np.nanmean(
                     np.array(
                         [
                             activity_trial_position(
@@ -201,19 +202,31 @@ def get_place_cells(
         )
         np.save(cache_file, shuffled_matrices)
 
-    place_threshold = np.percentile(shuffled_matrices, 99, axis=0)
+    place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
     if plot:
         plot_speed(session, rewarded, config)
 
+    # 5 if the bin size matches grosmark, otherwise adjust
+    n_consecutive_trues = int((2 / config.bin_size) * 5)
+
+    # Got a load of logic downstream that only works with odd numbers, as even numbers
+    # don't have a center. Probably fine to do this but not ideal
+    if n_consecutive_trues % 2 == 0:
+        n_consecutive_trues += 1
+
     shuffled_place_cells = np.array(
         [
-            has_five_consecutive_trues(shuffled_matrices[idx, :, :] > place_threshold)
+            has_n_consecutive_trues(
+                shuffled_matrices[idx, :, :] > place_threshold, n_consecutive_trues
+            )
             for idx in range(shuffled_matrices.shape[0])
         ]
     )
 
-    pcs = has_five_consecutive_trues(smoothed_matrix > place_threshold)
+    pcs = has_n_consecutive_trues(
+        smoothed_matrix > place_threshold, n_consecutive_trues
+    )
 
     print(f"percent place cells before extra check {np.sum(pcs) / n_cells_total}")
 
@@ -221,6 +234,7 @@ def get_place_cells(
         all_trials=all_trials[:, pcs, :],
         place_threshold=place_threshold[pcs, :],
         smoothed_matrix=smoothed_matrix[pcs, :],
+        n_consecutive_trues=n_consecutive_trues,
     )
 
     # Cells that pass both the original and additional checks
@@ -323,7 +337,6 @@ def offline_correlations(
         plt.ylabel("Average pearson correlation")
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
         # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
-        plt.show()
     else:
         offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
             flu=spks, wheel_freeze=wheel_freeze
@@ -362,7 +375,6 @@ def offline_correlations(
             f"pre: r={r_pre:.2f}, p={p_pre:.2f}\npost: r={r_post:.2f}, p={p_post:.2f}"
         )
         # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
-        plt.show()
 
 
 def get_offline_correlation_matrix(
@@ -486,7 +498,10 @@ def plot_place_cells(
 
 
 def filter_additional_check(
-    all_trials: np.ndarray, place_threshold: np.ndarray, smoothed_matrix: np.ndarray
+    all_trials: np.ndarray,
+    place_threshold: np.ndarray,
+    smoothed_matrix: np.ndarray,
+    n_consecutive_trues: int,
 ) -> np.ndarray:
     """Runs the following check from the Grosmark paper:
     As an additional control, only those putative PFs in which the cell had a greater within-PF than outside-of-PF firing rates
@@ -495,18 +510,24 @@ def filter_additional_check(
     Currently have made the threshold more conservative (40%) as 15% does not filter any cells out, but review.
     """
 
-    centers = find_five_consecutive_trues_center(smoothed_matrix > place_threshold)
+    centers = find_n_consecutive_trues_center(
+        smoothed_matrix > place_threshold, n_consecutive_trues
+    )
 
     n_trials, n_cells, n_bins = all_trials.shape
 
     valid_pcs = np.array([False] * n_cells)
     for cell in range(n_cells):
         center = centers[cell]
-        assert center + 3 <= n_bins
-        assert center - 2 >= 0
+        assert center + math.ceil(n_consecutive_trues / 2) <= n_bins
+        assert center - math.floor(n_consecutive_trues / 2) >= 0
 
         cell_place_field = np.array([False] * n_bins)
-        cell_place_field[center - 2 : center + 3] = True
+        cell_place_field[
+            center
+            - math.floor(n_consecutive_trues) : center
+            + math.ceil(n_consecutive_trues)
+        ] = True
         cell_out_of_place_field = np.logical_not(cell_place_field)
 
         cell_place_activity = all_trials[:, cell, cell_place_field]
