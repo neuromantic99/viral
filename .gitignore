@@ -1,3 +1,6 @@
+OASIS/  
+*.pkl
+*.npz
 *.npy
 constants.py
 

@@ -95,9 +95,8 @@ def preprocess_and_run(
         spikes = np.array([])
         denoised = np.array([])
 
-        # Run the wheel freezes separately to prevent baselining and param estimation issues
-        # TODO: This is not true of all sessions
-        for chunk in [cell[:27000], cell[27000:-27000], cell[-27000:]]:
+        # Define chunks: offline (pre), online (middle), offline (post)
+        for idx, chunk in enumerate([cell[:27000], cell[27000:-27000], cell[-27000:]]):
 
             # This is necessary as sometimes the baseline is very close to zero, thus inflating
             chunk = chunk - np.min(chunk)
@@ -114,11 +113,19 @@ def preprocess_and_run(
                 b_nonneg=False,
             )
 
-            # TODO: test whether we should do this
-            # residual = np.abs(chunk_baselined - oasis_denoised)
-            # chunk_spikes = chunk_spikes / median_abs_deviation(residual)
+            # Normalize spike estimates by MAD of the residual (abs(T - Test))
+            residual = np.abs(chunk_baselined - chunk_denoised)
+            mad_residual = median_abs_deviation(residual)
+            # Could be division by zero, but then we'd be doing something wrong
+            chunk_spikes_norm = chunk_spikes / mad_residual
 
-            spikes = np.append(spikes, chunk_spikes)
+            threshold = 1.5 * mad_residual if idx == 1 else 1.25 * mad_residual
+
+            chunk_spikes_norm[chunk_spikes_norm < threshold] = 0
+            chunk_spikes_norm[chunk_spikes_norm >= threshold] = 1
+
+            # Store normalized spikes for later binarization
+            spikes = np.append(spikes, chunk_spikes_norm)
             baselined = np.append(baselined, chunk_baselined)
             baseline = np.append(baseline, chunk_baseline)
             denoised = np.append(denoised, chunk_denoised)
@@ -174,7 +181,7 @@ def plot_result(
 
 def main() -> None:
 
-    s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
+    s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
     all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=False)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
