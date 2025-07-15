@@ -92,18 +92,19 @@ def process_cell(
     ):
 
         # This is necessary as sometimes the baseline is very close to zero, thus inflating
-        chunk = chunk - np.min(chunk)
+        # chunk = chunk - np.min(chunk)
         raw = np.append(raw, chunk)
         chunk_baselined, chunk_baseline = compute_dff_percentile_filter(
-            chunk, percentile=10, window_size_seconds=90
+            chunk, percentile=5, window_size_seconds=90
         )
+
         # Grosmark does this, but I've found it makes the spike inference worse
         # wavelet_denoised = modwt_denoise(cell_baselined, wavelet="sym4", level=3)
         # wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
         # chunk_baselined = chunk_baselined - np.median(chunk_baselined)
 
         # Lol
-        chunk_baselined = chunk_baselined - np.min(chunk_baselined)
+        # chunk_baselined = chunk_baselined - np.min(chunk_baselined)
 
         chunk_denoised, chunk_spikes, b, g, lam = deconvolve(
             chunk_baselined,
@@ -136,6 +137,7 @@ def process_cell(
     )
     if plot:
         plot_result(raw, baselined, baseline, denoised, spikes)
+        plt.title(f"baseline {b}")
 
     return spikes, denoised, baselined, baseline
 
@@ -165,8 +167,8 @@ def preprocess_and_run(
 ) -> Tuple[np.ndarray, np.ndarray]:
 
     # Delete me
-    cell = np.load("cell.npy")
-    process_cell(cell, plot=True)
+    # cell = np.load("cell.npy")
+    # process_cell(cell, plot=True)
 
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
@@ -178,10 +180,14 @@ def preprocess_and_run(
     all_spikes = []
     all_denoised = []
 
-    for cell in tqdm(f):
+    for idx, cell in tqdm(enumerate(f)):
         spikes, denoised, baselined, baseline = process_cell(cell, plot=plot)
+
         all_spikes.append(spikes)
         all_denoised.append(denoised)
+
+        if idx == 10:
+            plt.show()
 
     all_spikes = np.array(all_spikes)
     all_denoised = np.array(all_denoised)
@@ -204,13 +210,13 @@ def plot_result(
         spikes,
         color="red",
         label=f"spikes",
-        alpha=0.5,
+        alpha=1,
     )
     # ax.hlines(1.25, color="red", linestyle="--", xmin=0, xmax=27000)
     # ax.hlines(1.5, color="red", linestyle="--", xmin=27000, xmax=len(cell) - 27000)
     # ax.hlines(1.25, color="red", linestyle="--", xmin=len(cell) - 27000, xmax=len(cell))
 
-    (p2,) = ax2.plot(moving_average(cell_baselined, 5), color="blue", label="baselined")
+    (p2,) = ax2.plot(cell_baselined, color="blue", label="baselined")
     (p5,) = ax2.plot(oasis_denoised, color="green", label="denoised")
     # (p6,) = ax.plot(wavelet_denoised, color="orange", label="wavelet denoised")
     (p3,) = ax2.plot(cell, color="black", label="raw", alpha=0.01)
@@ -220,12 +226,12 @@ def plot_result(
     ax.set_ylabel("spikes")
     ax2.set_ylabel("flu")
     ax.legend(lines, labels, loc="upper right")
-    plt.show()
 
 
 def main() -> None:
 
-    s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
+    # s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
+    s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
     all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
