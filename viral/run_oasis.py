@@ -69,7 +69,8 @@ def compute_dff_percentile_filter(
 ) -> Tuple[np.ndarray, np.ndarray]:
     window_size = int(window_size_seconds * 30)
     baseline = percentile_filter(f, percentile, size=window_size)
-    return (f - baseline) / baseline, baseline
+    # return (f - baseline) / baseline, baseline
+    return f - baseline, baseline
 
 
 def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
@@ -77,72 +78,108 @@ def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(arr, np.ones(window), "same") / window
 
 
+def process_cell(
+    cell: np.ndarray, plot: bool = False
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    raw = np.array([])
+    baselined = np.array([])
+    baseline = np.array([])
+    spikes = np.array([])
+    denoised = np.array([])
+
+    for chunk_name, chunk in zip(
+        ["pre", "online", "post"], [cell[:27000], cell[27000:-27000], cell[-27000:]]
+    ):
+
+        # This is necessary as sometimes the baseline is very close to zero, thus inflating
+        chunk = chunk - np.min(chunk)
+        raw = np.append(raw, chunk)
+        chunk_baselined, chunk_baseline = compute_dff_percentile_filter(
+            chunk, percentile=10, window_size_seconds=90
+        )
+        # Grosmark does this, but I've found it makes the spike inference worse
+        # wavelet_denoised = modwt_denoise(cell_baselined, wavelet="sym4", level=3)
+        # wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
+        # chunk_baselined = chunk_baselined - np.median(chunk_baselined)
+
+        # Lol
+        chunk_baselined = chunk_baselined - np.min(chunk_baselined)
+
+        chunk_denoised, chunk_spikes, b, g, lam = deconvolve(
+            chunk_baselined,
+            penalty=1,
+            b_nonneg=False,
+        )
+
+        # Normalize spike estimates by MAD of the residual (abs(T - Test))
+        residual = np.abs(chunk_baselined - (chunk_denoised + b))
+        mad_residual = median_abs_deviation(residual)
+
+        chunk_spikes_norm = chunk_spikes / mad_residual
+
+        threshold = 1.5 if chunk_name == "online" else 1.25
+
+        chunk_spikes_norm[chunk_spikes_norm < threshold] = 0
+        chunk_spikes_norm[chunk_spikes_norm >= threshold] = 1
+
+        spikes = np.append(spikes, chunk_spikes_norm)
+        baselined = np.append(baselined, chunk_baselined)
+        baseline = np.append(baseline, chunk_baseline)
+        denoised = np.append(denoised, chunk_denoised + b)
+
+    assert (
+        baselined.shape
+        == spikes.shape
+        == baseline.shape
+        == denoised.shape
+        == cell.shape
+    )
+    if plot:
+        plot_result(raw, baselined, baseline, denoised, spikes)
+
+    return spikes, denoised, baselined, baseline
+
+
+def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
+
+    if "JB036" in str(s2p_path) and "2025-07-05" in str(s2p_path):
+        # Two small grabs with the PMT off
+        # Hack: replace them with a duplicate of a neighbouring chunk
+        bad_frames = (27000, 27060)
+        n_bad_frames = bad_frames[1] - bad_frames[0]
+        f[:, bad_frames[0] : bad_frames[1]] = f[
+            :, bad_frames[0] - n_bad_frames : bad_frames[0]
+        ]
+
+        bad_frames_end = (137940, 138020)
+        n_bad_frames_end = bad_frames_end[1] - bad_frames_end[0]
+        f[:, bad_frames_end[0] : bad_frames_end[1]] = f[
+            :, bad_frames_end[1] : bad_frames_end[1] + n_bad_frames_end
+        ]
+
+    return f
+
+
 def preprocess_and_run(
     s2p_path: Path, plot: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
 
+    # Delete me
+    cell = np.load("cell.npy")
+    process_cell(cell, plot=True)
+
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
     f = subtract_neuropil(f_raw, f_neu)
+    f = correct_f(f, s2p_path)
+
+    np.save("cell.npy", f[0, :])
 
     all_spikes = []
     all_denoised = []
 
-    for idx, cell in enumerate(tqdm(f)):
-
-        baselined = np.array([])
-        baseline = np.array([])
-        spikes = np.array([])
-        denoised = np.array([])
-
-        # Define chunks: offline (pre), online (middle), offline (post)
-        for idx, chunk in enumerate([cell[:27000], cell[27000:-27000], cell[-27000:]]):
-
-            # This is necessary as sometimes the baseline is very close to zero, thus inflating
-            chunk = chunk - np.min(chunk)
-            chunk_baselined, chunk_baseline = compute_dff_percentile_filter(
-                chunk, percentile=10, window_size_seconds=90
-            )
-            # Grosmark does this, but I've found it makes the spike inference worse
-            # wavelet_denoised = modwt_denoise(cell_baselined, wavelet="sym4", level=3)
-            # wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
-
-            chunk_denoised, chunk_spikes, b, g, lam = deconvolve(
-                chunk_baselined,
-                penalty=1,
-                b_nonneg=False,
-            )
-
-            # Normalize spike estimates by MAD of the residual (abs(T - Test))
-            residual = np.abs(chunk_baselined - chunk_denoised)
-            mad_residual = median_abs_deviation(residual)
-            # Could be division by zero, but then we'd be doing something wrong
-            chunk_spikes_norm = chunk_spikes / mad_residual
-
-            threshold = 1.5 * mad_residual if idx == 1 else 1.25 * mad_residual
-
-            chunk_spikes_norm[chunk_spikes_norm < threshold] = 0
-            chunk_spikes_norm[chunk_spikes_norm >= threshold] = 1
-
-            # Store normalized spikes for later binarization
-            spikes = np.append(spikes, chunk_spikes_norm)
-            baselined = np.append(baselined, chunk_baselined)
-            baseline = np.append(baseline, chunk_baseline)
-            denoised = np.append(denoised, chunk_denoised)
-
-        assert (
-            baselined.shape
-            == spikes.shape
-            == baseline.shape
-            == denoised.shape
-            == cell.shape
-        )
-        if plot and idx < 10:
-            plot_result(cell, baselined, baseline, denoised, spikes)
-
-        if idx == 10 and plot:
-            plt.show()
-
+    for cell in tqdm(f):
+        spikes, denoised, baselined, baseline = process_cell(cell, plot=plot)
         all_spikes.append(spikes)
         all_denoised.append(denoised)
 
@@ -169,20 +206,27 @@ def plot_result(
         label=f"spikes",
         alpha=0.5,
     )
-    (p2,) = ax.plot(moving_average(cell_baselined, 10), color="blue", label="baselined")
-    (p5,) = ax.plot(oasis_denoised, color="green", label="denoised")
+    # ax.hlines(1.25, color="red", linestyle="--", xmin=0, xmax=27000)
+    # ax.hlines(1.5, color="red", linestyle="--", xmin=27000, xmax=len(cell) - 27000)
+    # ax.hlines(1.25, color="red", linestyle="--", xmin=len(cell) - 27000, xmax=len(cell))
+
+    (p2,) = ax2.plot(moving_average(cell_baselined, 5), color="blue", label="baselined")
+    (p5,) = ax2.plot(oasis_denoised, color="green", label="denoised")
     # (p6,) = ax.plot(wavelet_denoised, color="orange", label="wavelet denoised")
-    (p3,) = ax2.plot(moving_average(cell, 10), color="black", label="raw")
-    (p4,) = ax2.plot(baseline, color="pink", label="baseline")
+    (p3,) = ax2.plot(cell, color="black", label="raw", alpha=0.01)
+    (p4,) = ax2.plot(baseline, color="pink", label="baseline", alpha=0.01)
     lines = [p1, p2, p3, p4, p5]
     labels = [line.get_label() for line in lines]
+    ax.set_ylabel("spikes")
+    ax2.set_ylabel("flu")
     ax.legend(lines, labels, loc="upper right")
+    plt.show()
 
 
 def main() -> None:
 
     s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
-    all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=False)
+    all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
     np.save(s2p_path / "oasis_denoised.npy", all_denoised)
