@@ -11,6 +11,8 @@ import pywt
 from tqdm import tqdm
 import concurrent.futures
 
+from viral.utils import remove_consecutive_ones
+
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
@@ -19,13 +21,13 @@ from oasis.functions import (
     deconvolve,
 )
 
-from oasis.plotting import simpleaxis
-from oasis.oasis_methods import oasisAR1, oasisAR2
-from BaselineRemoval import BaselineRemoval
-
 from scipy.stats import median_abs_deviation
-
 from scipy.ndimage import percentile_filter
+
+""" 
+This now does every step in the Calcium activity detection section in Grosmark.
+Though i've found the deconvolution to be better without the wavelet denoising.
+"""
 
 
 def modwt_denoise(
@@ -43,6 +45,8 @@ def modwt_denoise(
         array: Denoised signal.
 
     N.B Have checked with real data that this matches matlab and it does.
+
+    This is not currently used as I've found the deconvolution to be better without it.
     """
     # Perform MODWT (Maximal Overlap Discrete Wavelet Transform)
     coeffs = pywt.wavedec(signal, wavelet, level=level, mode="periodization")
@@ -180,6 +184,7 @@ def _process_cell_no_plot(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def preprocess_and_run(
     s2p_path: Path, plot: bool = False, parallel: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """Set parallel to True to run across all cores available. On your system (no plotting)"""
 
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
@@ -282,6 +287,7 @@ def main() -> None:
     # s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
 
     all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True, parallel=False)
+    all_spikes = remove_consecutive_ones(all_spikes)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
     np.save(s2p_path / "oasis_denoised.npy", all_denoised)

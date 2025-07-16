@@ -30,7 +30,6 @@ from viral.utils import (
     find_five_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_five_consecutive_trues,
-    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -462,19 +461,6 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-def binarise_spikes(spks: np.ndarray, threshold: float) -> np.ndarray:
-    """
-    Binarize normalized spike estimates using a fixed threshold.
-    Args:
-        spks: np.ndarray, normalized spike estimates (already divided by MAD of residual)
-        threshold: float, threshold to apply (1.5 for online, 1.25 for offline)
-    Returns:
-        np.ndarray, binarized spike matrix (0/1)
-    """
-    spks_bin = (spks > threshold).astype(float)
-    return remove_consecutive_ones(spks_bin)
-
-
 if __name__ == "__main__":
 
     mouse = "JB027"
@@ -501,8 +487,6 @@ if __name__ == "__main__":
         )
         < dff.shape[1]
     ), "Tiff is too short"
-
-    spks = binarise_spikes(spks, threshold=1.5)
 
     is_unsupervised = session_is_unsupervised(session)
 
