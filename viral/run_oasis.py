@@ -1,4 +1,5 @@
 import pickle
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -8,6 +9,7 @@ from typing import Tuple
 
 import pywt
 from tqdm import tqdm
+import concurrent.futures
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -169,8 +171,14 @@ def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
     return f
 
 
+def _process_cell_no_plot(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    from pathlib import Path  # Needed for process_cell signature in subprocesses
+
+    return process_cell(cell, plot=False, figure_path=None)
+
+
 def preprocess_and_run(
-    s2p_path: Path, plot: bool = False
+    s2p_path: Path, plot: bool = False, parallel: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
 
     f_raw = np.load(s2p_path / "F.npy")
@@ -178,9 +186,20 @@ def preprocess_and_run(
     f = subtract_neuropil(f_raw, f_neu)
     f = correct_f(f, s2p_path)
 
+    t1 = time.time()
+
+    if parallel:
+        # Parallel processing, ignore plotting
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            results = list(executor.map(_process_cell_no_plot, f))
+        all_spikes, all_denoised = zip(*results)
+        all_spikes, all_denoised = np.stack(all_spikes), np.stack(all_denoised)
+        assert all_spikes.shape == all_denoised.shape == f.shape
+        print(f"Time taken: {time.time() - t1} seconds")
+        return all_spikes, all_denoised
+
     all_spikes = []
     all_denoised = []
-
     for idx, cell in tqdm(enumerate(f)):
         mouse, date = get_mouse_and_date_from_path(s2p_path)
         (
@@ -200,10 +219,11 @@ def preprocess_and_run(
 
         if idx == 10:
             plt.show()
-
     all_spikes = np.array(all_spikes)
     all_denoised = np.array(all_denoised)
+
     assert all_spikes.shape == all_denoised.shape == f.shape
+    print(f"Time taken: {time.time() - t1} seconds")
 
     return all_spikes, all_denoised
 
@@ -261,7 +281,7 @@ def main() -> None:
     s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
     # s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
 
-    all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True)
+    all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True, parallel=False)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
     np.save(s2p_path / "oasis_denoised.npy", all_denoised)
