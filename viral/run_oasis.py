@@ -1,5 +1,7 @@
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import sys
 from pathlib import Path
 from typing import Tuple
@@ -79,8 +81,8 @@ def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
 
 
 def process_cell(
-    cell: np.ndarray, plot: bool = False
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    cell: np.ndarray, plot: bool = False, figure_path: Path | None = None
+) -> Tuple[np.ndarray, np.ndarray]:
     raw = np.array([])
     baselined = np.array([])
     baseline = np.array([])
@@ -91,20 +93,15 @@ def process_cell(
         ["pre", "online", "post"], [cell[:27000], cell[27000:-27000], cell[-27000:]]
     ):
 
-        # This is necessary as sometimes the baseline is very close to zero, thus inflating
-        # chunk = chunk - np.min(chunk)
         raw = np.append(raw, chunk)
         chunk_baselined, chunk_baseline = compute_dff_percentile_filter(
             chunk, percentile=5, window_size_seconds=90
         )
+        # Grosmark does this but I don't think it changes anything
+        chunk_baselined = chunk_baselined - np.median(chunk_baselined)
 
         # Grosmark does this, but I've found it makes the spike inference worse
-        # wavelet_denoised = modwt_denoise(cell_baselined, wavelet="sym4", level=3)
         # wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
-        # chunk_baselined = chunk_baselined - np.median(chunk_baselined)
-
-        # Lol
-        # chunk_baselined = chunk_baselined - np.min(chunk_baselined)
 
         chunk_denoised, chunk_spikes, b, g, lam = deconvolve(
             chunk_baselined,
@@ -136,10 +133,20 @@ def process_cell(
         == cell.shape
     )
     if plot:
-        plot_result(raw, baselined, baseline, denoised, spikes)
-        plt.title(f"baseline {b}")
+        fig = plot_result(raw, baselined, baseline, denoised, spikes)
+        plt.title(
+            f"baseline {round(b, 2)} Firing rate {round(np.sum(spikes) / (len(spikes) / 30), 2)}, mad residual {round(mad_residual, 2)}"
+        )
+        assert figure_path is not None
+        pickle.dump(
+            fig,
+            open(
+                figure_path,
+                "wb",
+            ),
+        )
 
-    return spikes, denoised, baselined, baseline
+    return spikes, denoised
 
 
 def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
@@ -166,22 +173,27 @@ def preprocess_and_run(
     s2p_path: Path, plot: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
 
-    # Delete me
-    # cell = np.load("cell.npy")
-    # process_cell(cell, plot=True)
-
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
     f = subtract_neuropil(f_raw, f_neu)
     f = correct_f(f, s2p_path)
 
-    np.save("cell.npy", f[0, :])
-
     all_spikes = []
     all_denoised = []
 
     for idx, cell in tqdm(enumerate(f)):
-        spikes, denoised, baselined, baseline = process_cell(cell, plot=plot)
+        mouse, date = get_mouse_and_date_from_path(s2p_path)
+        (
+            spikes,
+            denoised,
+        ) = process_cell(
+            cell,
+            plot=plot if idx < 10 else False,
+            figure_path=HERE.parent
+            / "data"
+            / "oasis_examples"
+            / f"{mouse}_{date}_{idx}.pkl",
+        )
 
         all_spikes.append(spikes)
         all_denoised.append(denoised)
@@ -196,13 +208,28 @@ def preprocess_and_run(
     return all_spikes, all_denoised
 
 
+def get_mouse_and_date_from_path(s2p_path: Path) -> Tuple[str, str]:
+    return s2p_path.parts[-3], s2p_path.parts[-4]
+
+
+def plot_from_cache(s2p_path: Path) -> None:
+
+    mouse, date = get_mouse_and_date_from_path(s2p_path)
+    for file in (HERE.parent / "data" / "oasis_examples").glob("*.pkl"):
+        with open(file, "rb") as f:
+            fig = pickle.load(f)
+            plt.figure(fig.number)
+
+    plt.show()
+
+
 def plot_result(
-    cell: np.ndarray,
+    raw: np.ndarray,
     cell_baselined: np.ndarray,
     baseline: np.ndarray,
     oasis_denoised: np.ndarray,
     spikes: np.ndarray,
-) -> None:
+) -> Figure:
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax2 = ax.twinx()
@@ -219,19 +246,21 @@ def plot_result(
     (p2,) = ax2.plot(cell_baselined, color="blue", label="baselined")
     (p5,) = ax2.plot(oasis_denoised, color="green", label="denoised")
     # (p6,) = ax.plot(wavelet_denoised, color="orange", label="wavelet denoised")
-    (p3,) = ax2.plot(cell, color="black", label="raw", alpha=0.01)
+    (p3,) = ax2.plot(raw, color="black", label="raw", alpha=0.01)
     (p4,) = ax2.plot(baseline, color="pink", label="baseline", alpha=0.01)
     lines = [p1, p2, p3, p4, p5]
     labels = [line.get_label() for line in lines]
     ax.set_ylabel("spikes")
     ax2.set_ylabel("flu")
     ax.legend(lines, labels, loc="upper right")
+    return fig
 
 
 def main() -> None:
 
-    # s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
     s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
+    # s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
+
     all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
