@@ -11,11 +11,12 @@ import pywt
 from tqdm import tqdm
 import concurrent.futures
 
-from viral.utils import remove_consecutive_ones
-
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
+
+from viral.utils import remove_consecutive_ones
+
 
 from oasis.functions import (
     deconvolve,
@@ -285,8 +286,7 @@ def plot_result(
 
 def main() -> None:
 
-    s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
-    # s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
+    s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
 
     all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True, parallel=False)
     all_spikes = remove_consecutive_ones(all_spikes)
@@ -296,4 +296,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+
     main()
