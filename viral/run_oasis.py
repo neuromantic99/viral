@@ -240,10 +240,12 @@ def get_mouse_and_date_from_path(s2p_path: Path) -> Tuple[str, str]:
 def plot_from_cache(s2p_path: Path) -> None:
 
     mouse, date = get_mouse_and_date_from_path(s2p_path)
+
     for file in (HERE.parent / "data" / "oasis_examples").glob("*.pkl"):
-        with open(file, "rb") as f:
-            fig = pickle.load(f)
-            plt.figure(fig.number)
+        if mouse in str(file) and date in str(file):
+            with open(file, "rb") as f:
+                fig = pickle.load(f)
+                plt.figure(fig.number)
 
     plt.show()
 
