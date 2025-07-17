@@ -255,7 +255,7 @@ def preprocess_and_run(
         all_spikes.append(spikes)
         all_denoised.append(denoised)
 
-        if idx == 10:
+        if idx == 10 and plot:
             plt.show()
     all_spikes = np.array(all_spikes)
     all_denoised = np.array(all_denoised)
