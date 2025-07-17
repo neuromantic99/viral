@@ -176,10 +176,16 @@ def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
     return f
 
 
-def _process_cell_no_plot(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _process_cell_no_plot_with_index(
+    args: tuple[int, np.ndarray],
+) -> tuple[int, np.ndarray, np.ndarray]:
+    """Driver for parallel processing, ensure cells are returned in the correct order"""
+    idx, cell = args
     from pathlib import Path  # Needed for process_cell signature in subprocesses
+    import numpy as np
 
-    return process_cell(cell, plot=False, figure_path=None)
+    spikes, denoised = process_cell(cell, plot=False, figure_path=None)
+    return idx, spikes, denoised
 
 
 def preprocess_and_run(
@@ -197,9 +203,11 @@ def preprocess_and_run(
     if parallel:
         # Parallel processing, ignore plotting
         with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = list(executor.map(_process_cell_no_plot, f))
-        all_spikes, all_denoised = zip(*results)
-        all_spikes, all_denoised = np.stack(all_spikes), np.stack(all_denoised)
+            results = list(executor.map(_process_cell_no_plot_with_index, enumerate(f)))
+        # Sort results by index to preserve order
+        results.sort(key=lambda x: x[0])
+        all_spikes = np.stack([r[1] for r in results])
+        all_denoised = np.stack([r[2] for r in results])
         assert all_spikes.shape == all_denoised.shape == f.shape
         print(f"Time taken: {time.time() - t1} seconds")
         return all_spikes, all_denoised
@@ -285,10 +293,12 @@ def plot_result(
 
 
 def main() -> None:
+    s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
 
-    s2p_path = Path("/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0")
-
-    all_spikes, all_denoised = preprocess_and_run(s2p_path, plot=True, parallel=False)
+    parallel = True
+    all_spikes, all_denoised = preprocess_and_run(
+        s2p_path, plot=False, parallel=parallel
+    )
     all_spikes = remove_consecutive_ones(all_spikes)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
@@ -296,5 +306,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-
     main()
