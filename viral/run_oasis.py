@@ -144,14 +144,12 @@ def process_cell(
         plt.title(
             f"baseline {round(b, 2)} Firing rate {round(np.sum(spikes) / (len(spikes) / 30), 2)}, mad residual {round(mad_residual, 2)}"
         )
-        assert figure_path is not None
-        pickle.dump(
-            fig,
-            open(
-                figure_path,
-                "wb",
-            ),
-        )
+        assert figure_path is not None, "Need to provide a figure path if plot = True"
+        with open(
+            figure_path,
+            "wb",
+        ) as f:
+            pickle.dump(fig, f)
 
     return spikes, denoised
 
