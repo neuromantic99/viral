@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Tuple
 
 import pywt
+from tqdm import tqdm
+from scipy.stats import median_abs_deviation
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -66,39 +68,54 @@ def modwt_denoise(
 
 def grosmark_preprocess(
     s2p_path: Path, plot: bool = False
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """To reduce calcium white 'scatter' noise and to improve signal detection, a wavelet-based denoising algorithm (Matlab 2019a, wden function,
+    using the parameters modwtsqtwolog, s, mln, 5 and sym4) was applied to the calcium activity traces resulting in the denoised activity trace vector Tdn.
+    This algorithm was adopted as, when compared to other algorithms such as Savitsky-Golay filtering,
+    it resulted in robust white noise reduction while minimally altering the underlying waveforms of observable calcium transient events.
+    Subsequently, the per-trace median was subtracted from each of the smoothed traces and they were deconvolved using a
+    first-order autoregressive model as implemented in the OASIS software package.
+    This algorithm outputs the deconvolved (spike estimate) of the trace Csp, and a denoised trace reconstruction Test based on the re-convolution of the spike estimates.
+    The deconvolution noise was taken as the m.a.d. of the residual of the observed trace T and the reconstructed trace Test.
+    Spike estimates, Csp, were normalized by the deconvolution noise [...]"""
     f = get_f(s2p_path)
 
     all_spikes = []
+    all_spikes_norm = []
     all_denoised = []
-    for idx, cell in enumerate(f):
+
+    for idx, cell in enumerate(tqdm(f)):
         wavelet_denoised = modwt_denoise(cell, wavelet="sym4", level=5)
         wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
-        denoised, spikes, b, g, lam = deconvolve(
+        oasis_denoised, spikes, b, g, lam = deconvolve(
             wavelet_denoised, penalty=1, b_nonneg=False
         )
-        if plot and idx < 30:
-            _, ax1 = plt.subplots()
-            baseobj = BaselineRemoval(cell)
-            cell_baselined = baseobj.ZhangFit()
 
-            residual = np.sum(np.abs(cell - cell_baselined))
+        residual = np.abs(cell - oasis_denoised)
 
-            print(f"residual is {residual}")
+        # if plot and idx < 30:
+        #     baseobj = BaselineRemoval(cell)
+        #     cell_baselined = baseobj.ZhangFit()
+        #     print(f"residual is {residual}")
 
-            # ax1.plot(cell, color="pink")
-            ax1.plot(cell_baselined, color="blue")
-            ax1.plot(spikes, color="black")
-            # ax2 = ax1.twinx()
-            # ax2.plot(wavelet_denoised, color="pink")
+        #     _, ax1 = plt.subplots()
+        #     # ax1.plot(cell, color="pink")
+        #     ax1.plot(cell_baselined, color="blue")
+        #     ax1.plot(spikes, color="black")
+        #     # ax2 = ax1.twinx()
+        #     # ax2.plot(wavelet_denoised, color="pink")
 
+        """The deconvolution noise was taken as the m.a.d. of the residual of the observed trace T and the reconstructed trace Test.
+        Spike estimates, Csp, were normalized by the deconvolution noise [...]"""
+        spikes_norm = spikes / median_abs_deviation(residual)
         all_spikes.append(spikes)
-        all_denoised.append(denoised)
+        all_spikes_norm.append(spikes_norm)
+        all_denoised.append(oasis_denoised)
 
     if plot:
         plt.show()
 
-    return np.array(all_spikes), np.array(all_denoised)
+    return np.array(all_spikes), np.array(all_spikes_norm), np.array(all_denoised)
 
 
 def main(mouse: str, date: str, grosmark: bool = False) -> None:
@@ -110,7 +127,7 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
     if grosmark:
         print("Using grosmark preprocessing")
-        spikes, denoised = grosmark_preprocess(s2p_path, plot)
+        spikes, spikes_norm, denoised = grosmark_preprocess(s2p_path, plot)
 
     else:
         dff = compute_dff(get_f(s2p_path))
@@ -143,11 +160,13 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
     np.save(s2p_path / "oasis_spikes.npy", spikes)
     np.save(s2p_path / "oasis_denoised.npy", denoised)
+    if grosmark:
+        np.save(s2p_path / "oasis_spikes_norm.npy", spikes_norm)
     print("Saved oasis spikes and denoised data")
     if plot:
         plt.show()
 
 
 if __name__ == "__main__":
-    main(mouse="JB031", date="2025-03-07", grosmark=False)
+    main(mouse="JB031", date="2025-03-25", grosmark=True)
     # main(mouse="JB027", date="2025-02-26", grosmark=True)

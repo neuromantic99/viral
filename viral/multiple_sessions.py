@@ -7,12 +7,13 @@ import re
 import sys
 import inspect
 from pydantic import ValidationError
+import pandas as pd
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
 sys.path.append(str(HERE.parent))
 
-from typing import List, Tuple, Dict, Callable, Optional
+from typing import List, Tuple, Dict, Callable, Optional, Literal
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -93,6 +94,7 @@ def cache_mouse(mouse_name: str) -> None:
                 or "take bottle out" in type_check
                 or "water in dish" in type_check
                 or "unsupervised" in type_check
+                or "do not analyse" in type_check
             ), f"type {type_check} not understood"
             continue
 
@@ -591,10 +593,10 @@ def plot_num_trials_summaries(mice: List[MouseSummary], session_type: str = "lea
 
 def plot_performance_summaries(
     mice: List[MouseSummary],
-    session_type: str,
+    session_type: Literal["learning", "reversal", "recall", "recall_reversal"],
     group_by: list[str],
     config: MultipleSessionsConfig,
-):
+) -> None:
     rolling_performance_dict = create_metric_dict(
         mice,
         rolling_performance,
@@ -747,6 +749,9 @@ if __name__ == "__main__":
         "JB031",
         "JB032",
         "JB033",
+        "JB034",
+        "JB035",
+        "JB036",
     }:
 
         print(f"\nProcessing {mouse_name}...")

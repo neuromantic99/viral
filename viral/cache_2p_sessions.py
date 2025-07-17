@@ -29,8 +29,10 @@ from viral.imaging_utils import (
 
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
+    CACHE_PATH,
     SPREADSHEET_ID,
     SYNC_FILE_PATH,
+    TEMP_CACHE_PATH,
     TIFF_UMBRELLA,
 )
 from viral.gsheets_importer import gsheet2df
@@ -491,20 +493,25 @@ def get_tiff_metadata(
     date = tiff_paths[0].parent.parent.name
 
     if use_cache:
-        temp_cache_path = Path(HERE.parent / "data/temp_caches")
-        if (temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy").exists():
+        if (TEMP_CACHE_PATH / f"{mouse_name}_{date}_stack_lengths.npy").exists():
             print("Using cached tiff metadata")
             stack_lengths = np.load(
-                temp_cache_path / f"{mouse_name}_{date}_stack_lengths.npy"
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_stack_lengths.npy"
             )
-            epochs = np.load(temp_cache_path / f"{mouse_name}_{date}_epochs.npy")
+            epochs = np.load(TEMP_CACHE_PATH / f"{mouse_name}_{date}_epochs.npy")
             all_tiff_timestamps = np.load(
-                temp_cache_path / f"{mouse_name}_{date}_all_tiff_timestamps.npy"
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_all_tiff_timestamps.npy"
             )
             return stack_lengths, epochs, all_tiff_timestamps
 
     print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
-    tiffs = [ScanImageTiffReader(str(tiff)) for tiff in tiff_paths]
+    tiffs = []
+    for tiff in tiff_paths:
+        try:
+            tiffs.append(ScanImageTiffReader(str(tiff)))
+        except Exception as e:
+            raise Exception(f"Error reading tiff file: {tiff}") from e
+
     stack_lengths = [tiff.shape()[0] for tiff in tiffs]
     epochs = []
     all_tiff_timestamps = []
@@ -545,7 +552,7 @@ def get_tiff_metadata(
             ["stack_lengths", "all_tiff_timestamps", "epochs"],
         ):
             np.save(
-                temp_cache_path / f"{mouse_name}_{date}_{name}.npy",
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
                 variable,
             )
 
@@ -635,9 +642,7 @@ def process_session(
     wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze)
 
-    with open(
-        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json", "w"
-    ) as f:
+    with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
             Cached2pSession(
                 mouse_name=mouse_name,
@@ -663,20 +668,22 @@ def check_against_suite2p_output(
 def main() -> None:
     """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
 
-    redo = False
-    for mouse_name in ["JB030", "JB031", "JB032", "JB033", "JB034", "JB035"]:
+    # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
+    redo = True
+    for mouse_name in ["JB034"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
                 print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
-                if (
-                    not redo
-                    and (
-                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
-                    ).exists()
-                ):
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
+                if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue
 
@@ -717,10 +724,17 @@ def main() -> None:
                 )
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
-                line_number = tb[-1].lineno  # Get the line number of the exception
-                msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
+                last_trace = tb[
+                    -1
+                ]  # Get the last traceback entry (where the exception occurred)
+                filename = last_trace.filename
+                line_number = last_trace.lineno
+                msg = f"Error processing {mouse_name} {date} {session_type} in {filename} on line {line_number}: {e}"
                 logger.debug(msg)
                 print(msg)
+                full_tb = traceback.format_exc()  # Get full traceback as a string
+                logger.debug(full_tb)
+                print(full_tb)
 
 
 if __name__ == "__main__":

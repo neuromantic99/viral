@@ -8,7 +8,7 @@ from viral.models import SpeedPosition
 from viral.utils import (
     array_bin_mean,
     get_speed_positions,
-    has_five_consecutive_trues,
+    has_n_consecutive_trues,
     remove_consecutive_ones,
     shuffle_rows,
     threshold_detect_edges,
@@ -274,29 +274,29 @@ def test_remove_consecutive_ones() -> None:
     assert np.array_equal(result, np.array([[0, 1, 0, 0, 0], [1, 0, 0, 1, 0]]))
 
 
-def test_has_five_consecutive_trues_basic() -> None:
+def test_has_n_consecutive_trues_basic() -> None:
     matrix = np.array(
         [[True, True, True, True, True, False], [True, True, True, True, False, False]]
     )
-    result = has_five_consecutive_trues(matrix)
+    result = has_n_consecutive_trues(matrix)
     assert np.array_equal(result, np.array([True, False]))
 
 
-def test_has_five_consecutive_trues_none_have() -> None:
+def test_has_n_consecutive_trues_none_have() -> None:
     matrix = np.array(
         [[False, True, True, True, True, False], [True, True, True, True, False, False]]
     )
-    result = has_five_consecutive_trues(matrix)
+    result = has_n_consecutive_trues(matrix)
     assert np.array_equal(result, np.array([False, False]))
 
 
-def test_has_five_consecutive_trues_loads_have() -> None:
+def test_has_n_consecutive_trues_loads_have() -> None:
     matrix = np.array([[True, True, True, True, True, False]] * 100)
-    result = has_five_consecutive_trues(matrix)
+    result = has_n_consecutive_trues(matrix)
     assert np.array_equal(result, np.array([True] * 100))
 
 
-def test_has_five_consecutive_trues_another_random_one() -> None:
+def test_has_n_consecutive_trues_another_random_one() -> None:
     matrix = np.array(
         [
             [True, True, False, True, True, False, False, False, True, True],
@@ -305,7 +305,7 @@ def test_has_five_consecutive_trues_another_random_one() -> None:
             [False, False, False, True, True, True, True, True, False, True],
         ]
     )
-    result = has_five_consecutive_trues(matrix)
+    result = has_n_consecutive_trues(matrix)
     assert np.array_equal(result, np.array([False, True, False, True]))
 
 

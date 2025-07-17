@@ -27,7 +27,9 @@
 * You will need to set your local path to the server. To do this, make a copy of constants_TEMPLATE.py and rename it to constants.py. Then fill out appropriate values.
 
 
-
-
-
+## Install OASIS submodule
+* You will need to install the OASIS submodule from its repo to perform custom OASIS deconvolution:
+1. `git submodule add <https://github.com/j-friedrich/OASIS.git> OASIS`
+2. `cd OASIS`
+3. `python setup.py build_ext -i`
 
