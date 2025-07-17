@@ -4,12 +4,6 @@ performing a series of checks before appending this information.
 However, a range of user-dependent or experimental circumstances can occasionally cause the caching process to fail.
 In these cases, manual correction is required."""
 
-"""cache_2p_sessions.py is responsible for adding frame stamps and time stamps to behavioural event data.
-It processes imaging files (.tiff), behavioural events (trial.json), and the corresponding synchronisation file (DAQami) as inputs,
-performing a series of checks before appending this information.
-However, a range of user-dependent or experimental circumstances can occasionally cause the caching process to fail.
-In these cases, manual correction is required."""
-
 import sys
 import numpy as np
 from pathlib import Path
@@ -110,24 +104,6 @@ def apply_session_correction(
 # Session corrections ordered by mouse name and date.
 
 
-# epochs:               (n_tiffs, 6);   start time of each tiff file (they are in a matlab format, hence each epoch has 6 values)
-# all_tiff_timestamps:  (n_frames);     timestamps of each frame in all tiff files (in seconds since start of the DAQ)
-# stack_lengths_tiffs:  (n_tiffs,);     length of each tiff stack (in frames)
-# chunk_lengths_daq:    (n_chunks,);    length of each daq chunk (in frames), i.e. all frame pulses emitted by the frame clock and recorded by the DAQ
-# frame_times_daq:      (n_frames,);    timestamps of each frame in the DAQ (in time units of the DAQ, usually 10000 Hz, but depending on the DAQ sampling rate)
-
-# In principle, the following rules apply to all sessions and are either checked by assertions directly or will cause other assertions to fail:
-# 1. sum(chunk_lengths_daq) == len(frame_times_daq), i.e. total number of frames in the DAQ must match total number of frame timestamps
-# 2. epochs.shape[0] == len(stack_lengths_tiffs), i.e. there must be one epoch per tiff stack
-# 3. for each chunk of imaging, the chunk_length_daq can be 0-3 frames short of stack_length_tiff (see get_valid_frame_times())
-
-# So, if applying certain corrections, it must be ensured that the above rules are still satisfied.
-# See explanations in the individual corrections below.
-
-
-# Session corrections ordered by mouse name and date.
-
-
 @register_correction("JB031", "2025-03-31")
 def jb031_2025_03_31(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
@@ -161,8 +137,6 @@ def jb031_2025_03_31(c: SessionCorrection) -> SessionCorrection:
 
 # Ex.: classic case of manual 'focus' without grabbing, resulting in a tiff stack with no associated DAQ chunk.
 # The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
-# Ex.: classic case of manual 'focus' without grabbing, resulting in a tiff stack with no associated DAQ chunk.
-# The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
 @register_correction("JB031", "2025-04-01")
 def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
@@ -183,10 +157,6 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-# Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
-# The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
-# The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
-# so that the DAQ signals keep on being aligned while the pre_session_epoch will be skipped.
 # Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
 # The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
 # The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
@@ -236,8 +206,6 @@ def jb031_2025_04_03(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-# Ex.: Classic case of hitting 'focus' without grabbing before the session.
-# Again, the signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
 # Ex.: Classic case of hitting 'focus' without grabbing before the session.
 # Again, the signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
 @register_correction("JB031", "2025-04-04")
