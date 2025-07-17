@@ -1,6 +1,3 @@
-[submodule "external/OASIS"]
-	path = external/OASIS
-	url = https://github.com/j-friedrich/OASIS.git
 [submodule "OASIS"]
 	path = OASIS
 	url = https://github.com/j-friedrich/OASIS.git
