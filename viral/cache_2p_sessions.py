@@ -674,24 +674,15 @@ def check_against_suite2p_output(
 
 def main() -> None:
     """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
-    # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
 
     redo = True
     for mouse_name in ["JB031"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
-
             try:
-                print(f"the type is {row['Type']}")
-
+                print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
-                try:
-                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
-                    print("Wheel blocked set to None")
-                    wheel_blocked = None
                 if (
                     not redo
                     and (
@@ -701,13 +692,15 @@ def main() -> None:
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue
 
-                if (
-                    "learning day" not in session_type
-                    and "reversal learning" not in session_type
-                ):
+                if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")
                     continue
-
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
                 if not row["Sync file"]:
                     print(
                         f"Skipping {mouse_name} {date} {session_type} as no sync file"
