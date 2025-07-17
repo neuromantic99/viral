@@ -723,7 +723,7 @@ if __name__ == "__main__":
 
     redo = False
 
-    config = MultipleSessionsConfig(speed=0, licking=1, window=40)
+    config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
     for mouse_name in {
         "JB011",
@@ -765,10 +765,10 @@ if __name__ == "__main__":
                 print(f"mouse_name {mouse_name} cached now")
 
     plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    plot_mouse_performance(mice[0], config=config)
-    plot_running_speed_summaries(mice, "recall", running_speed_AZ)
-    ## Probably not interesting as related to speed
-    plot_trial_time_summaries(mice, "learning")
-    plot_num_trials_summaries(mice, "reversal")
-    plot_num_trials_summaries(mice, "recall")
-    plot_num_trials_summaries(mice, "recall_reversal")
+    # plot_mouse_performance(mice[0], config=config)
+    # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
+    # ## Probably not interesting as related to speed
+    # plot_trial_time_summaries(mice, "learning")
+    # plot_num_trials_summaries(mice, "reversal")
+    # plot_num_trials_summaries(mice, "recall")
+    # plot_num_trials_summaries(mice, "recall_reversal")
