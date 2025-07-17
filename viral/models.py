@@ -177,3 +177,16 @@ class SessionCorrection:
     chunk_lengths_daq: np.ndarray
     frame_times_daq: np.ndarray
     offset_after_pre_epoch: int
+
+
+@dataclass
+class MultipleSessionsConfig:
+    window: int
+    speed: float
+    licking: float
+
+    def __post_init__(self):
+        if sum([self.speed, self.licking]) != 1:
+            raise ValueError(
+                f"Invalid weights for speed and licking in learning metric! Sum has to equal to 1, instead it is {sum([self.speed, self.licking])}"
+            )
