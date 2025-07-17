@@ -2,6 +2,7 @@ import copy
 import json
 from pathlib import Path
 import random
+import pandas as pd
 import re
 import sys
 import inspect
@@ -24,7 +25,12 @@ from viral.single_session import (
     summarise_trial,
 )
 from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
-from viral.models import MouseSummary, SessionSummary, TrialSummary
+from viral.models import (
+    MouseSummary,
+    SessionSummary,
+    TrialSummary,
+    MultipleSessionsConfig,
+)
 from viral.utils import (
     d_prime,
     get_genotype,
@@ -199,8 +205,13 @@ def licking_difference(trials: List[TrialSummary]) -> float:
     return d_prime(sum(rewarded) / len(rewarded), sum(not_rewarded) / len(not_rewarded))
 
 
-def learning_metric(trials: List[TrialSummary]) -> float:
-    return (speed_difference(trials) + licking_difference(trials)) / 2
+def learning_metric(
+    trials: List[TrialSummary], config: MultipleSessionsConfig
+) -> float:
+    return (
+        speed_difference(trials) * config.speed
+        + licking_difference(trials) * config.licking
+    )
 
 
 def plot_binned_licking(sessions: List[SessionSummary]) -> None:
@@ -222,11 +233,13 @@ def plot_binned_licking(sessions: List[SessionSummary]) -> None:
     plt.legend()
 
 
-def plot_performance_across_days(sessions: List[SessionSummary]) -> None:
+def plot_performance_across_days(
+    sessions: List[SessionSummary], config: MultipleSessionsConfig
+) -> None:
 
     plt.plot(
         range(len(sessions)),
-        [learning_metric(session.trials) for session in sessions],
+        [learning_metric(session.trials, config) for session in sessions],
     )
 
     plt.xticks(
@@ -243,10 +256,12 @@ def flatten_sessions(sessions: List[SessionSummary]) -> List[TrialSummary]:
     return [trial for session in sessions for trial in session.trials]
 
 
-def rolling_performance(trials: List[TrialSummary], window: int) -> List[float]:
+def rolling_performance(
+    trials: List[TrialSummary], config: MultipleSessionsConfig
+) -> List[float]:
     return [
-        learning_metric(trials[idx - window : idx])
-        for idx in range(window, len(trials))
+        learning_metric(trials[idx - config.window : idx], config)
+        for idx in range(config.window, len(trials))
     ]
 
 
@@ -279,13 +294,13 @@ def trials_run(sessions: List[SessionSummary]) -> float:
 
 def plot_rolling_performance(
     sessions: List[SessionSummary],
-    window: int,
+    config: MultipleSessionsConfig,
     chance_level: Tuple[float, float],
     add_text_to_chance: bool = True,
 ) -> None:
 
     trials = flatten_sessions(sessions)
-    rolling = rolling_performance(trials, window)
+    rolling = rolling_performance(trials, config)
 
     plt.plot(rolling)
     plt.axhspan(chance_level[0], chance_level[1], color="gray", alpha=0.5)
@@ -305,7 +320,9 @@ def plot_rolling_performance(
     plt.ylabel("Learning metric")
 
 
-def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
+def get_chance_level(
+    mice: List[MouseSummary], config: MultipleSessionsConfig
+) -> List[float]:
     """Rough permutation test / bootstrap for chance level. Needs to be formalised further."""
 
     # TODO: Maybe should compute this on a per mouse basis
@@ -317,10 +334,10 @@ def get_chance_level(mice: List[MouseSummary], window: int) -> List[float]:
 
     result = []
     for _ in range(1000):
-        sample = random.sample(all_trials, window)
+        sample = random.sample(all_trials, config.window)
         for trial in sample:
             trial.rewarded = random.choice([True, False])
-        result.append(learning_metric(sample))
+        result.append(learning_metric(sample, config))
 
     return result
 
@@ -361,18 +378,18 @@ def filter_sessions_by_session_type(
 def create_metric_dict(
     mice: List[MouseSummary],
     metric_fn: Callable,
+    config: Optional[MultipleSessionsConfig] = None,
     flat_sessions: bool = True,
     include_reward_status: bool = True,
-    window: Optional[int] = None,
 ) -> dict:
     """Create a dictionary for metric data to be plotted.
 
     Args:
-        mice (List[MouseSummary]):      A list of MouseSummary objects.
-        metric_fn (Callable):           A function which takes raw data and processes it for a metric, e.g. extracting speed.
-        flat_sessions (bool):           Whether to flatten sessions. Is needed for metrices which are computed on a trial-by-trial basis. Defaults to true.
-        include_reward_status (bool):   Whether to distinguish between rewarded and unrewarded trials. Defaults to true.
-        window (Optional[int]):         The window size for analyses (if needed). Defaults to None.
+        mice (List[MouseSummary]):                  A list of MouseSummary objects.
+        metric_fn (Callable):                       A function which takes raw data and processes it for a metric, e.g. extracting speed.
+        config (MultipleSessionsConfig):            A MultipleSessionsConfig object including window size, and weights for learning metric computation.
+        flat_sessions (bool):                       Whether to flatten sessions. Is needed for metrices which are computed on a trial-by-trial basis. Defaults to true.
+        include_reward_status (bool):               Whether to distinguish between rewarded and unrewarded trials. Defaults to True.
     Returns:
         dict:                           The dictionary of metric data to be plotted.
     """
@@ -387,8 +404,8 @@ def create_metric_dict(
 
     # Checks whether the given metric function takes 'window' as an argument to decide whether to use the 'window' input
     metric_fn_params = inspect.signature(metric_fn).parameters
-    has_window_param = "window" in metric_fn_params
-    use_window = has_window_param and (window is not None)
+    has_config_param = "config" in metric_fn_params
+    use_config_param = has_config_param and config
 
     # Iterating through the list of MouseSummary objects
     for mouse in mice:
@@ -430,8 +447,8 @@ def create_metric_dict(
                     kwargs["trials"] = processed_sessions
                 if not flat_sessions:
                     kwargs["sessions"] = processed_sessions
-                if use_window:
-                    kwargs["window"] = window
+                if use_config_param:
+                    kwargs["config"] = config
                 mouse_metrics[key] = metric_fn(**kwargs)
         # Adding the mouse_metrics dictionary as the value for the mouse_name in the overall metric_dict dictionary
         metric_dict[mouse.name] = mouse_metrics
@@ -473,7 +490,10 @@ def plot_running_speed_summaries(
     speed_function: Callable = running_speed_overall,
 ) -> None:
     running_speed_dict = create_metric_dict(
-        mice, speed_function, flat_sessions=True, include_reward_status=True
+        mice,
+        speed_function,
+        flat_sessions=True,
+        include_reward_status=True,
     )
 
     to_plot = prepare_plot_data(
@@ -575,10 +595,14 @@ def plot_performance_summaries(
     mice: List[MouseSummary],
     session_type: Literal["learning", "reversal", "recall", "recall_reversal"],
     group_by: list[str],
-    window: int = 50,
+    config: MultipleSessionsConfig,
 ) -> None:
     rolling_performance_dict = create_metric_dict(
-        mice, rolling_performance, True, False, window
+        mice,
+        rolling_performance,
+        config,
+        True,
+        False,
     )
     to_plot: Dict[str, list] = dict()
 
@@ -600,7 +624,7 @@ def plot_performance_summaries(
         if session_type in data:
             try:
                 session_data = np.array(data[session_type])
-                first_threshold_idx = np.where(session_data > 1)[0][0] + window
+                first_threshold_idx = np.where(session_data > 1)[0][0] + config.window
                 to_plot[group_label].append(first_threshold_idx)
             except IndexError:
                 print(f"There is no valid data for {mouse.name} in {session_type}")
@@ -639,12 +663,12 @@ def get_num_to_x(
     )
 
 
-def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
-    chance = get_chance_level([mouse], window=window)
+def plot_mouse_performance(mouse: MouseSummary, config: MultipleSessionsConfig) -> None:
+    chance = get_chance_level([mouse], config)
     plt.figure(figsize=(12, 8))
     plot_rolling_performance(
         mouse.sessions,
-        window,
+        config,
         (
             np.percentile(chance, 1).astype(float),
             np.percentile(chance, 99).astype(float),
@@ -677,12 +701,12 @@ def plot_mouse_performance(mouse: MouseSummary, window: int = 50) -> None:
             excluded_session_types=phase["excluded_session_types"],
         )
         plt.axvline(
-            num_to_x - window,
+            num_to_x - config.window,
             color=phase["colour"],
             linestyle="--" if phase["name"] != "recall" else "solid",
         )
         plt.text(
-            num_to_x - window + 10,
+            num_to_x - config.window + 10,
             2,
             phase["label"],
             color=phase["colour"],
@@ -700,6 +724,8 @@ if __name__ == "__main__":
     mice: List[MouseSummary] = []
 
     redo = False
+
+    config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
     for mouse_name in {
         "JB011",
@@ -743,32 +769,11 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    plot_performance_summaries(mice, "learning", ["genotype"], window=50)
-    # plot_mouse_performance(mice[0])
+    plot_performance_summaries(mice, "learning", ["genotype"], config=config)
+    # plot_mouse_performance(mice[0], config=config)
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
-    # plot_running_speed_summaries(mice, "recall_reversal", running_speed_AZ)
-    # plot_running_speed_summaries(mice, "learning", running_speed_nonAZ)
-    # plot_running_speed_summaries(mice, "reversal", running_speed_nonAZ)
-    # plot_running_speed_summaries(mice, "recall", running_speed_nonAZ)
-    # plot_running_speed_summaries(mice, "recall_reversal", running_speed_nonAZ)
-    ## Probably not interesting as related to speed
+    # ## Probably not interesting as related to speed
     # plot_trial_time_summaries(mice, "learning")
-    # plot_trial_time_summaries(mice, "reversal")
-    # plot_trial_time_summaries(mice, "recall")
-    # plot_trial_time_summaries(mice, "recall_reversal")
-    # plot_num_trials_summaries(mice, "learning")
     # plot_num_trials_summaries(mice, "reversal")
     # plot_num_trials_summaries(mice, "recall")
     # plot_num_trials_summaries(mice, "recall_reversal")
-    # plot_performance_summaries(
-    #     mice, "learning", ["genotype", "sex", "setup"], window=window
-    # )
-    # plot_performance_summaries(
-    #     mice, "reversal", ["genotype", "sex", "setup"], window=window
-    # )
-    # plot_performance_summaries(
-    #     mice, "recall", ["genotype", "sex", "setup"], window=window
-    # )
-    # plot_performance_summaries(
-    #     mice, "recall_reversal", ["genotype", "sex", "setup"], window=window
-    # )

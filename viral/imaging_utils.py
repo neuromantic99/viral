@@ -29,6 +29,12 @@ def load_imaging_data(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
+    if not s2p_path.exists():
+        raise FileNotFoundError("This session likely was not suite2p'ed yet")
+    if not (s2p_path / "oasis_spikes.npy").exists():
+        from viral.run_oasis import main as run_oasis
+
+        run_oasis(mouse=mouse, date=date, grosmark=False)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
 
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
@@ -362,3 +368,12 @@ def get_frozen_wheel_flu(
             wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame,
         ],
     )
+
+
+def get_imaging_crashed(mouse_name: str, date: str) -> bool:
+    """Manually define if sessions have crashed imaging, based on the metadata"""
+    return (mouse_name, date) in [
+        ("JB011", "2024-10-22"),
+        ("JB011", "2024-10-25"),
+        ("JB034", "2025-07-04"),
+    ]

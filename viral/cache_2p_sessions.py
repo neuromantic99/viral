@@ -21,6 +21,8 @@ sys.path.append(str(HERE.parent.parent))
 from viral.imaging_utils import (
     extract_TTL_chunks,
     get_sampling_rate,
+    get_imaging_crashed,
+    load_imaging_data,
     trial_is_imaged,
 )
 
@@ -339,6 +341,7 @@ def get_session_sync(
     date: str,
     tiff_directory: Path,
     trials: List[TrialInfo],
+    imaging_crashed: bool = False,
 ) -> SessionImagingInfo:
     """Handles all the necessary logics for syncing imaging and behaviour."""
     t1 = time.time()
@@ -405,7 +408,10 @@ def get_session_sync(
         stack_lengths_tiffs=stack_lengths_tiffs,
         frame_times_daq=frame_times_daq,
         chunk_lengths_daq=chunk_lengths_daq,
+        loosen_assertions=imaging_crashed,
     )
+
+    check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
@@ -426,6 +432,7 @@ def get_valid_frame_times(
     stack_lengths_tiffs: np.ndarray,
     frame_times_daq: np.ndarray,
     chunk_lengths_daq: np.ndarray,
+    loosen_assertions: bool = False,
 ) -> np.ndarray:
     """
     Consistently, the number of triggers recorded is two more than the number of frames recorded (for the imaged behaviour chunks).
@@ -437,6 +444,10 @@ def get_valid_frame_times(
     Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
+
+    loosen_assertions: fudge flag to deal with crashed sessions. If e.g. the grab crashes you'll see lots of frames (currently 13 but could be more)
+                       that are in the daq but not in the tiff. Only include this flag if the notes say the session was crashed.
+
     """
 
     valid_frame_times = np.array([])
@@ -445,21 +456,31 @@ def get_valid_frame_times(
         stack_lengths_tiffs, chunk_lengths_daq, strict=True
     ):
 
-        assert chunk_len_daq - stack_len_tiff in {
-            0,
-            2,
-            3,
-        }, f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
-        This will occur, especially on crashed recordings. Think about a fix. I've also seen 3 before which needs dealing with"""
+        assert (
+            chunk_len_daq - stack_len_tiff
+            in {
+                0,
+                2,
+                3,
+            }
+            or loosen_assertions
+            and chunk_len_daq - stack_len_tiff <= 13
+        ), f"""The difference between daq chunk length and tiff length is not 0 or 2. Rather it is {chunk_len_daq - stack_len_tiff}./n
+        This will occur, especially on crashed recordings. Think about a fix."""
 
         valid_frame_times = np.append(
             valid_frame_times, frame_times_daq[offset : offset + stack_len_tiff]
         )
         offset += chunk_len_daq
 
-    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and 0 <= len(
-        frame_times_daq
-    ) - len(valid_frame_times) <= 3 * len(chunk_lengths_daq)
+    assert len(valid_frame_times) == sum(stack_lengths_tiffs) and (
+        (
+            0
+            <= len(frame_times_daq) - len(valid_frame_times)
+            <= 3 * len(chunk_lengths_daq)
+        )
+        or loosen_assertions
+    )
 
     return valid_frame_times
 
@@ -571,6 +592,7 @@ def check_timestamps(
     )
 
     epoch_trial = find_chunk(chunk_lens, first_frame_trial)
+    # Epoch is in uk time, convert to UTC to match the daq
     chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
 
     for frame in range(first_frame_trial, last_frame_trial):
@@ -603,10 +625,20 @@ def process_session(
     wheel_blocked: bool = False,
 ) -> None:
     print(f"Off we go for {mouse_name} {date} {session_type}")
+    imaging_crashed = get_imaging_crashed(mouse_name, date)
+    print(f"Imaging crashed: {imaging_crashed}")
+
     if wheel_blocked:
         print("Wheel blocked")
         logger.info(f"Wheel blocked in session {mouse_name} {date}")
-    session_sync = get_session_sync(tdms_path, mouse_name, date, tiff_directory, trials)
+    session_sync = get_session_sync(
+        tdms_path=tdms_path,
+        mouse_name=mouse_name,
+        date=date,
+        tiff_directory=tiff_directory,
+        trials=trials,
+        imaging_crashed=imaging_crashed,
+    )
     wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze)
 
@@ -625,16 +657,24 @@ def process_session(
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
+def check_against_suite2p_output(
+    mouse: str, date: str, valid_frame_times: np.ndarray
+) -> None:
+    dff, spks, denoised = load_imaging_data(mouse, date)
+    assert dff.shape == spks.shape == denoised.shape
+    assert len(valid_frame_times) == spks.shape[1]
+
+
 def main() -> None:
+    """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
     for mouse_name in ["JB034"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
-
             try:
-                print(f"the type is {row['Type']}")
+                print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
                 try:
@@ -647,14 +687,15 @@ def main() -> None:
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue
 
-                if (
-                    "learning day" not in session_type
-                    and "reversal learning" not in session_type
-                    and "unsupervised" not in session_type
-                ):
+                if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")
                     continue
-
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
                 if not row["Sync file"]:
                     print(
                         f"Skipping {mouse_name} {date} {session_type} as no sync file"
