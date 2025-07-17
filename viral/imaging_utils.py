@@ -1,6 +1,5 @@
 """Contains functions that act on fluorescence data, either spks or dff, either alone or with behavioural data"""
 
-from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
@@ -30,6 +29,12 @@ def load_imaging_data(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
+    if not s2p_path.exists():
+        raise FileNotFoundError("This session likely was not suite2p'ed yet")
+    if not (s2p_path / "oasis_spikes.npy").exists():
+        from viral.run_oasis import main as run_oasis
+
+        run_oasis(mouse=mouse, date=date, grosmark=False)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
 
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
@@ -56,9 +61,9 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
     """
-    if 30 < len(frame_clock) / 1000 / 60 < 100:
+    if 30 < len(frame_clock) / 1000 / 60 < 120:
         return 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 100:
+    elif 30 < len(frame_clock) / 10000 / 60 < 120:
         return 10000
     raise ValueError("Could not determine sampling rate")
 
@@ -77,6 +82,15 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
 
     assert start_time_frames[-1] is not None
     assert start_time_frames[0] is not None
+
+    if any(
+        np.isnan(state.start_time) or np.isnan(state.end_time)
+        for state in trial.states_info
+    ):
+        return False
+
+    if any(np.isnan(event.start_time) for event in trial.events_info):
+        return False
 
     length_trial_frames = (start_time_frames[-1] - start_time_frames[0]) / 30
 
@@ -292,3 +306,12 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
+
+
+def get_imaging_crashed(mouse_name: str, date: str) -> bool:
+    """Manually define if sessions have crashed imaging, based on the metadata"""
+    return (mouse_name, date) in [
+        ("JB011", "2024-10-22"),
+        ("JB011", "2024-10-25"),
+        ("JB034", "2025-07-04"),
+    ]
