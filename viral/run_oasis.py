@@ -7,14 +7,18 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
-import pywt
-from tqdm import tqdm
-import concurrent.futures
-
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+import pywt
+from tqdm import tqdm
+import concurrent.futures
+
+from viral.constants import CACHE_PATH, TIFF_UMBRELLA
+
+
+from viral.models import Cached2pSession, WheelFreeze
 from viral.utils import remove_consecutive_ones
 
 
@@ -88,7 +92,10 @@ def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
 
 
 def process_cell(
-    cell: np.ndarray, plot: bool = False, figure_path: Path | None = None
+    cell: np.ndarray,
+    wheel_freeze: WheelFreeze,
+    plot: bool = False,
+    figure_path: Path | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     raw = np.array([])
     baselined = np.array([])
@@ -97,9 +104,19 @@ def process_cell(
     denoised = np.array([])
 
     for chunk_name, chunk in zip(
-        ["pre", "online", "post"], [cell[:27000], cell[27000:-27000], cell[-27000:]]
+        ["pre", "online", "post"],
+        [
+            cell[
+                wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame
+            ],
+            cell[
+                wheel_freeze.pre_training_end_frame : wheel_freeze.post_training_start_frame
+            ],
+            cell[
+                wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame
+            ],
+        ],
     ):
-
         raw = np.append(raw, chunk)
         chunk_baselined, chunk_baseline = compute_dff_percentile_filter(
             chunk, percentile=5, window_size_seconds=90
@@ -175,21 +192,24 @@ def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
 
 
 def _process_cell_no_plot_with_index(
-    args: tuple[int, np.ndarray],
+    args: tuple[int, np.ndarray, WheelFreeze],
 ) -> tuple[int, np.ndarray, np.ndarray]:
     """Driver for parallel processing, ensure cells are returned in the correct order"""
-    idx, cell = args
+    idx, cell, wheel_freeze = args
     from pathlib import Path  # Needed for process_cell signature in subprocesses
     import numpy as np
 
-    spikes, denoised = process_cell(cell, plot=False, figure_path=None)
+    spikes, denoised = process_cell(cell, wheel_freeze, plot=False, figure_path=None)
     return idx, spikes, denoised
 
 
 def preprocess_and_run(
-    s2p_path: Path, plot: bool = False, parallel: bool = False
+    s2p_path: Path,
+    wheel_freeze: WheelFreeze,
+    plot: bool = False,
+    parallel: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Set parallel to True to run across all cores available. On your system (no plotting)"""
+    """Set parallel to True to run across all cores available on your system (no plotting)"""
 
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
@@ -201,7 +221,12 @@ def preprocess_and_run(
     if parallel:
         # Parallel processing, ignore plotting
         with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = list(executor.map(_process_cell_no_plot_with_index, enumerate(f)))
+            results = list(
+                executor.map(
+                    _process_cell_no_plot_with_index,
+                    ((idx, cell, wheel_freeze) for idx, cell in enumerate(f)),
+                )
+            )
         # Sort results by index to preserve order
         results.sort(key=lambda x: x[0])
         all_spikes = np.stack([r[1] for r in results])
@@ -219,6 +244,7 @@ def preprocess_and_run(
             denoised,
         ) = process_cell(
             cell,
+            wheel_freeze,
             plot=plot if idx < 10 else False,
             figure_path=HERE.parent
             / "data"
@@ -247,8 +273,10 @@ def get_mouse_and_date_from_path(s2p_path: Path) -> Tuple[str, str]:
 def plot_from_cache(s2p_path: Path) -> None:
 
     mouse, date = get_mouse_and_date_from_path(s2p_path)
+    files = (HERE.parent / "data" / "oasis_examples").glob("*.pkl")
+    files = sorted(list(files))
 
-    for file in (HERE.parent / "data" / "oasis_examples").glob("*.pkl"):
+    for idx, file in enumerate(files):
         if mouse in str(file) and date in str(file):
             with open(file, "rb") as f:
                 fig = pickle.load(f)
@@ -290,13 +318,17 @@ def plot_result(
     return fig
 
 
-def main() -> None:
-    s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-05/JB036/suite2p/plane0")
+def main(
+    s2p_path: Path, wheel_freeze: WheelFreeze, parallel: bool = True, plot: bool = False
+) -> None:
 
-    parallel = True
     all_spikes, all_denoised = preprocess_and_run(
-        s2p_path, plot=False, parallel=parallel
+        s2p_path,
+        wheel_freeze=wheel_freeze,
+        plot=plot,
+        parallel=parallel,
     )
+
     all_spikes = remove_consecutive_ones(all_spikes)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
@@ -304,4 +336,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    mouse_name = "JB036"
+    date = "2025-07-05"
+    cache_path = CACHE_PATH / f"{mouse_name}_{date}.json"
+    s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
+    cached_session = Cached2pSession.model_validate_json(cache_path.read_text())
+    assert cached_session.wheel_freeze is not None
+    main(s2p_path, cached_session.wheel_freeze, parallel=True, plot=False)
