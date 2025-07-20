@@ -5,10 +5,12 @@ import os
 import time
 from pathlib import Path
 from matplotlib import pyplot as plt
+from scipy.linalg import fractional_matrix_power, subspace_angles
 from scipy.ndimage import gaussian_filter1d
-from scipy.stats import zscore, rankdata, ttest_ind
+from scipy.stats import zscore, rankdata
 from opt_einsum import contract
 import seaborn as sns
+from tqdm import tqdm
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -108,20 +110,68 @@ def get_ssp_vectors(
     )
 
 
-def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
+def fast_ica_significant_components(X: np.ndarray, n_components: int) -> np.ndarray:
     """
-    'Subsequently, the ICA components of these smoothed run
-    activity estimates were calculated across time using the fastICA algorithm. Only
-    the subset of components found to be significant under the Marcenko-Pasteur
-    distribution were considered ICA ensembles and included in the ICA ensemble
-    matrix w, with rows corresponding to PCs and columns corresponding to
-    significant ICA components.' (Grosmark et al., 2021)
+    Port of github.com/tortlab/Cell-Assembly-Detection/blob/master/fast_ica.m to python
 
-    Using Lopes-dos-Santos, Ribeiro and Tort, 2013 method to detect significant components.
-    '2.2. Determination of the number of cell assemblies'
-    www.sciencedirect.com/science/article/pii/S0165027013001489
-    Finding PCA components found to be significant under the Marcenko-Pastur distribution.).
+    X: (n_cells, n_timepoints) z-scored
+    n_components: int
+
+    Returns:
+    Significant components (n_cells, n_components)
     """
+    # demean X, (does this make sense for the z-scored data?)
+    X = X - np.mean(X, axis=1, keepdims=True)
+    X1 = X.copy()
+
+    # covariance matrix
+    C = X @ X.T / X.shape[1]
+
+    # eigenvalues are sorted from largest to smallest
+    # but in the documentation it says they are not necessarily sorted
+    # so make sure
+    eigenvalues, eigenvectors = np.linalg.eig(C)
+    sorted_order = np.argsort(eigenvalues)[::-1]
+    # Take only siginificant eigenvectors / values
+    eigenvectors = eigenvectors[:, sorted_order[:n_components]]
+    eigenvalues = eigenvalues[sorted_order[:n_components]]
+    D = np.diag(eigenvalues ** (-1 / 2))
+
+    X = D @ eigenvectors.T @ X
+    whitening_matrix = D @ eigenvectors.T
+    dewhitening_matrix = eigenvectors @ np.linalg.inv(D)
+
+    # Correct up to here by checksum
+
+    ## ICA ##
+    # X.shape 0 and n_components are the same so bit weird
+
+    B = np.random.normal(size=(X.shape[0], n_components))
+    # np.save("B_seed.npy", B)
+
+    ortho = lambda x: x @ fractional_matrix_power(x.T @ x, -0.5)
+    B = ortho(B)
+
+    W = np.random.uniform(size=(B.T @ whitening_matrix).shape)
+    # np.save("W_seed.npy", W)
+
+    N = X.shape[1]
+
+    for _ in tqdm(range(500)):
+        hyp_tan = np.tanh(X.T @ B)
+        B = (
+            X @ hyp_tan / N
+            - np.ones((B.shape[0], 1))
+            @ np.expand_dims(np.mean(1 - hyp_tan**2, axis=0), axis=0)
+            * B
+        )
+        B = ortho(B)
+        W = B.T @ whitening_matrix
+
+    return W.T
+
+
+def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # 'the elements of M (in our case σ2 = 1 due to z-score normalization), Ncolumns is the number of columns and Nrows the number of rows.'
     n_rows, n_cols = ssp_vectors.shape
 
@@ -130,7 +180,6 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # ssp_vectors is (n_place_cells, n_frames)
 
     # 'Next, the spike count of each neuron (i.e., each row of the matrix) is normalized by z-score transformation'
-    # TODO: it should be axis = 0 right?? (z-scoring time bins for each neuron??)
     ssp_vectors_z = zscore(ssp_vectors, axis=1)
 
     # 'in our case the covariance matrix is equal to the correlation matrix, and can be calculated as:
@@ -142,8 +191,6 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # 'Since C is necessarily real and symmetric, it follows from the spectral theorem that it can be decomposed'
     # 'Compute the eigenvalues and right eigenvectors of a square array.' (NumPy documentation)
     eigenvalues, eigenvectors = np.linalg.eig(covariance_matrix)
-
-    # assert np.allclose(eigenvalues, sklearn_eigenvalues)
 
     # 'where σ2 is the variance of the elements of M (in our case σ2 = 1 due to z-score normalization)'
     assert np.isclose(np.var(ssp_vectors_z), 1)
@@ -159,13 +206,12 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # 'Thus, if the rows of M are statistically independent, the probability of finding an eigenvalue outside these bounds is zero.
     #  In other words, the variance of the data in any axis cannot be larger than λmax when neurons are uncorrelated.
     #  Therefore, λmax can be used as a statistical threshold for detecting cell assembly activity'
-    significant_components = eigenvalues > lambda_max
+    n_significant_components = np.sum(eigenvalues > lambda_max)
 
-    # 'with rows corresponding to PCs and columns corresponding to significant ICA components.'
-    # TODO: would this be the loading matrix?
-    loading_matrix = eigenvectors[:, significant_components]
+    if n_significant_components < 1:
+        raise ValueError("There are no significant components!")
 
-    return loading_matrix
+    return fast_ica_significant_components(ssp_vectors_z, n_significant_components)
 
 
 def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
@@ -695,11 +741,12 @@ def main() -> None:
         )
 
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
-        ensemble_matrix = compute_PCA_components(ssp_vectors=ssp_vectors)
-        ensemble_matrix_shuffled_data = compute_PCA_components(
+        # TODO: are we returning the right thing here?
+        ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+        ensemble_matrix_shuffled_data = compute_ICA_components(
             ssp_vectors=ssp_vectors_shuffled
         )
-        print("PCA done")
+        print("ICA done")
         # OFFLINE
         t2 = time.time()
         reactivation_strength = offline_reactivation(
@@ -862,5 +909,65 @@ def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
         ax1.legend(lines, labels, loc="upper left")
 
 
+def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
+
+    def sort_and_align(W):
+        # Sort columns by their L2 norm (or sum of squares)
+        norms = np.sum(W**2, axis=1)
+        order = np.argsort(norms)
+        W_sorted = W[order, :]
+        return W_sorted
+
+    W_py = sort_and_align(W_py)
+    W_mat = sort_and_align(W_mat)
+
+    # Align signs
+    for i in range(W_py.shape[1]):
+        if np.dot(W_py[:, i], W_mat[:, i]) < 0:
+            W_py[:, i] *= -1
+
+    test_subspace(W_py, W_mat)
+    # assert np.allclose(W_py, W_mat, atol=1e-3)
+    print("All close")
+
+
+def test_subspace(W_py: np.ndarray, W_mat: np.ndarray) -> None:
+    # Assume W_py_sorted and W_mat_sorted are (n_cells, n_components)
+    # Orthonormalize columns (if not already)
+    def orthonormalize(W):
+        # QR decomposition for orthonormal basis
+        Q, _ = np.linalg.qr(W)
+        return Q
+
+    Q_py = orthonormalize(W_mat)
+    Q_mat = orthonormalize(W_py)
+
+    # Compute principal angles (in radians)
+    angles = subspace_angles(Q_py, Q_mat)
+    print("Principal angles (degrees):", np.degrees(angles))
+    print("Max angle:", np.max(np.degrees(angles)))
+    assert np.max(np.degrees(angles)) < 1e-9
+
+
+def compare_to_matlab() -> None:
+    # test_data = np.load(
+    #     "/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0/oasis_spikes.npy"
+    # )
+    # test_data = gaussian_filter1d(test_data, sigma=30, axis=1)
+    # # take a random-ish subset of the online data
+    # test_data = test_data[:, 27000:100000]
+    # np.save("test_ensemble_data.npy", test_data)
+
+    matlab_result = np.load(
+        "/Users/jamesrowland/Code/Cell-Assembly-Detection/assembly_templates.npy"
+    )
+
+    test_data = np.load("test_ensemble_data.npy")
+    python_result = compute_ICA_components(test_data)
+    np.save("python_result.npy", python_result)
+
+    compare_run_results(python_result, matlab_result)
+
+
 if __name__ == "__main__":
-    main()
+    compare_to_matlab()
