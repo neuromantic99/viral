@@ -2,17 +2,28 @@ from pathlib import Path
 from typing import List
 import numpy as np
 from pydantic import BaseModel
+import matplotlib.pyplot as plt
 
-from viral.imaging_utils import extract_TTL_chunks
-from viral.models import SpeedPosition
+from viral.constants import BEHAVIOUR_DATA_PATH, CACHE_PATH
+from viral.imaging_utils import (
+    compute_speed_grosmark,
+    compute_windowed_speed_1d,
+    extract_TTL_chunks,
+    get_online_position_and_frames,
+)
+from viral.models import Cached2pSession, SpeedPosition, TrialInfo
 from viral.utils import (
+    above_threshold_for_n_consecutive_samples,
     array_bin_mean,
+    degrees_to_cm,
     get_speed_positions,
+    get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     remove_consecutive_ones,
     shuffle_rows,
     threshold_detect_edges,
     get_session_type,
+    trial_is_imaged,
 )
 
 
@@ -326,3 +337,216 @@ def test_shuffle_rows_make_sure_not_seeded() -> None:
     result2 = shuffle_rows(matrix)
 
     assert not np.array_equal(result1, result2)
+
+
+def test_above_threshold_for_n_consecutive_samples_basic_zeros() -> None:
+    arr = np.zeros(100)
+
+    for n_samples in range(1, 100):
+        result = above_threshold_for_n_consecutive_samples(
+            arr, threshold=1, n_samples=n_samples
+        )
+        assert np.array_equal(result, np.zeros(100))
+
+
+def test_above_threshold_for_n_consecutive_samples_all_above() -> None:
+    arr = np.ones(100)
+
+    for n_samples in range(1, 100):
+        result = above_threshold_for_n_consecutive_samples(
+            arr, threshold=0.5, n_samples=n_samples
+        )
+        assert np.array_equal(result, np.ones(100))
+
+
+def test_above_threshold_for_n_consecutive_samples_chunk_in_the_middle() -> None:
+    arr = np.zeros(100)
+    arr[10:20] = 1
+    arr[30:33] = 1
+
+    result = above_threshold_for_n_consecutive_samples(arr, threshold=0.2, n_samples=5)
+    expected = np.zeros(100)
+    expected[10:20] = 1
+    assert np.array_equal(result, expected)
+
+    result = above_threshold_for_n_consecutive_samples(arr, threshold=0.2, n_samples=2)
+    expected = np.zeros(100)
+    expected[10:20] = 1
+    expected[30:33] = 1
+    assert np.array_equal(result, expected)
+
+
+def test_above_threshold_for_n_consecutive_samples_edge_cases() -> None:
+    arr = np.zeros(100)
+    arr[98:99] = 1
+    result = above_threshold_for_n_consecutive_samples(arr, threshold=0.2, n_samples=5)
+    expected = np.zeros(100)
+    assert np.array_equal(result, expected)
+
+    arr[95:100] = 1
+    result = above_threshold_for_n_consecutive_samples(arr, threshold=0.2, n_samples=5)
+    expected = np.zeros(100)
+    expected[95:100] = 1
+    assert np.array_equal(result, expected)
+
+
+def test_compute_windowed_speed_1d() -> None:
+    # Travels 90 cm in 3 seconds
+    position = np.arange(90)
+    expected = np.repeat(30, 90)
+    for window_duration in [0.1, 0.5, 1, 2, 3]:
+        result = compute_windowed_speed_1d(position, window_duration=window_duration)
+        # Can get a floating point error here
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+
+def test_compute_windowed_speed_no_movement() -> None:
+    position = np.repeat(0, 100)
+    expected = np.repeat(0, 100)
+    for window_duration in [0.1, 0.5, 1, 2, 3]:
+        result = compute_windowed_speed_1d(position, window_duration=window_duration)
+        # Can get a floating point error here
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+
+def test_compute_windowed_speed_movement_in_the_middle() -> None:
+    position = np.repeat(0, 20)
+
+    position[10:] = 1
+    window_duration = 0.2  # 6 samples
+
+    expected = np.repeat(0, 20)
+
+    # travelled 1 cm in 0.2 seconds
+    # between 10 - (window / 2) and 10 + (window / 2)
+    expected[7:13] = 5
+
+    result = compute_windowed_speed_1d(position, window_duration=window_duration)
+    np.testing.assert_allclose(result, expected, atol=1e-10)
+
+
+def test_compute_windowed_speed_movement_and_at_the_edges() -> None:
+    position = np.repeat(0, 40)
+
+    position[5:20] = 1
+
+    position[20:] = 2
+
+    position[39:] = 3
+
+    window_duration = 0.2  # 6 samples
+
+    expected = np.repeat(0, 40)
+    # window is full not halved at the edges, so full window is used
+    expected[:6] = 5
+    # Then we get to the half window, which also looks backwards
+    expected[6:8] = 5
+
+    # movement in the middle with the half window
+    expected[17:23] = 5
+
+    # Full window at the end
+    expected[36:] = 5
+
+    result = compute_windowed_speed_1d(position, window_duration=window_duration)
+    np.testing.assert_allclose(result, expected, atol=1e-10)
+
+
+# def test_compare_speed_functions() -> None:
+#     """Dont have this as part of the actual test suite as it requires server access"""
+#     # Get a random real trial
+#     trial_file = BEHAVIOUR_DATA_PATH / "JB035" / "2025-07-16" / "002" / "trial0.json"
+#     with open(trial_file) as f:
+#         trial = TrialInfo.model_validate_json(f.read())
+
+#     position = degrees_to_cm(
+#         np.array(trial.rotary_encoder_position), get_wheel_circumference_from_rig("2P")
+#     )
+#     our_speed = compute_windowed_speed_1d(position, window_duration=0.5)
+#     grosmark_speed = compute_speed_grosmark(position)
+#     _, ax = plt.subplots(figsize=(20, 10))
+
+#     ax2 = ax.twinx()
+#     ax.plot(position, color="blue")
+#     ax.set_ylabel("Position (cm)")
+#     ax2.plot(our_speed, label="Our speed", color="red")
+#     ax2.plot(grosmark_speed, label="Grosmark speed", color="green")
+#     ax2.set_ylabel("Speed (cm/s)")
+#     ax2.legend()
+#     plt.axhline(y=5, color="black", linestyle="--")
+#     plt.show()
+
+
+# def load_test_trial() -> TrialInfo:
+#     path = CACHE_PATH / "JB036_2025-07-05.json"
+#     with open(path) as f:
+#         session = Cached2pSession.model_validate_json(f.read())
+
+#     trial = session.trials[19]
+
+#     assert trial_is_imaged(trial)
+
+#     return trial
+
+
+# def test_compare_speed_functions() -> None:
+#     """Dont have this as part of the actual test suite as it requires server access"""
+#     trial = load_test_trial()
+#     position = degrees_to_cm(
+#         np.array(trial.rotary_encoder_position), get_wheel_circumference_from_rig("2P")
+#     )
+#     our_speed = compute_windowed_speed_1d(position, window_duration=0.5)
+#     grosmark_speed = compute_speed_grosmark(position)
+#     _, ax = plt.subplots(figsize=(20, 10))
+#     ax2 = ax.twinx()
+#     ax.plot(position, color="blue")
+#     ax.set_ylabel("Position (cm)")
+#     ax2.plot(our_speed, label="Our speed", color="red")
+#     ax2.plot(grosmark_speed, label="Grosmark speed", color="green")
+#     ax2.set_ylabel("Speed (cm/s)")
+#     ax2.legend()
+#     plt.axhline(y=5, color="black", linestyle="--")
+#     plt.show()
+
+
+# def test_get_online_position_and_frames() -> None:
+#     """Also best done with a real trial"""
+
+#     trial = load_test_trial()
+
+#     original_position = degrees_to_cm(
+#         np.array(trial.rotary_encoder_position), get_wheel_circumference_from_rig("2P")
+#     )
+#     original_frames = np.array(
+#         [
+#             state.closest_frame_start
+#             for state in trial.states_info
+#             if state.name
+#             in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+#         ]
+#     )
+
+#     position, frames = get_online_position_and_frames(
+#         trial, get_wheel_circumference_from_rig("2P")
+#     )
+#     speed = compute_speed_grosmark(original_position)
+
+#     _, ax = plt.subplots(figsize=(20, 10))
+#     ax2 = ax.twinx()
+
+#     ax.plot(original_frames, original_position, ".", color="red", label="Original")
+#     ax.plot(frames, position, ".", color="blue", label="Online filtered")
+
+#     ax.legend()
+#     ax.set_ylabel("Position (cm)")
+#     ax2.plot(original_frames, speed, color="green", label="Speed")
+#     ax2.set_ylabel("Speed (cm/s)")
+#     ax2.axhline(y=5, color="black", linestyle="--")
+
+#     time = ((original_frames - original_frames[0]) / 30).astype(int)
+
+#     plt.xticks(original_frames[::40], time[::40])
+#     ax.set_xlabel("Time (s)")
+#     ax2.set_xlabel("Time (s)")
+
+#     plt.show()
