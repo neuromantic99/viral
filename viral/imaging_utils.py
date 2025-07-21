@@ -389,14 +389,23 @@ def get_ITI_matrix(
     return np.array(matrices)
 
 
-def get_frozen_wheel_flu(
+def split_fluoresence_online_freeze(
     flu: np.ndarray, wheel_freeze: WheelFreeze
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return sliced flu array: offline epochs before and after behaviour session."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Split the fluorescence data three chunks:
+    pre-training freeze
+    online
+    post-training freeze
+    """
     return (
         flu[
             :,
             wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame,
+        ],
+        flu[
+            :,
+            wheel_freeze.pre_training_end_frame : wheel_freeze.post_training_start_frame,
         ],
         flu[
             :,

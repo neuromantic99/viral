@@ -20,7 +20,7 @@ from viral.imaging_utils import (
     load_imaging_data,
     trial_is_imaged,
     activity_trial_position,
-    get_frozen_wheel_flu,
+    split_fluoresence_online_freeze,
 )
 
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
@@ -67,7 +67,7 @@ def grosmark_place_field(
             ],
             mad_threshold=1.5,
         )
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
+        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
             flu=spks_raw, wheel_freeze=session.wheel_freeze
         )
         # TODO: should pre and post be binarised as one?
@@ -338,7 +338,7 @@ def offline_correlations(
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
         # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
     else:
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
+        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
             flu=spks, wheel_freeze=wheel_freeze
         )
         pre_corrs_real = get_offline_correlation_matrix(

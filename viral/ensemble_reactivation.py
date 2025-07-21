@@ -33,7 +33,7 @@ from viral.utils import (
     shuffle_rows,
     trial_is_imaged,
 )
-from viral.imaging_utils import get_ITI_start_frame, get_frozen_wheel_flu
+from viral.imaging_utils import get_ITI_start_frame, split_fluoresence_online_freeze
 from viral.grosmark_analysis import binarise_spikes, get_place_cells
 
 
@@ -111,7 +111,7 @@ def get_ssp_vectors(
     )
 
 
-@deprecated("Use fast_ica_sklearn instead, tested as its the same")
+@deprecated("Use fast_ica_sklearn instead, tested and its the same")
 def fast_ica_significant_components(X: np.ndarray, n_components: int) -> np.ndarray:
     """
     Port of github.com/tortlab/Cell-Assembly-Detection/blob/master/fast_ica.m to python
@@ -191,7 +191,6 @@ def fast_ica_sklearn(X: np.ndarray, n_components: int) -> np.ndarray:
     S = ica.fit_transform(X_centered)  # Shape: (n_timepoints, n_components)
     W = ica.components_  # Shape: (n_components, n_cells)
 
-    # Transpose to match your return shape: (n_cells, n_components)
     return W.T
 
 
@@ -690,66 +689,39 @@ def main() -> None:
         ) = load_data_from_cache(cache_file)
     else:
         print("No cached data found, processing data")
-        # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
         config = GrosmarkConfig(
             bin_size=5,
             start=0,
             end=170,
         )
-        spks_raw, _, _, _ = load_data(
-            session,
-            # AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
-            Path("/Volumes/hard_drive/VR-2p/2025-03-25/JB031/suite2p/plane0"),
-            # TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
-            "spks",
+
+        spks = np.load(
+            TIFF_UMBRELLA
+            / session.date
+            / session.mouse_name
+            / "suite2p"
+            / "plane0"
+            / "oasis_spikes.npy"
         )
 
-        # """Based on the observed differences in calcium activity waveforms between the online and
-        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
-
-        online_spks = binarise_spikes(
-            spks_raw[
-                :,
-                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
-            ],
-            mad_threshold=1.5,
-        )
-        offline_spks_pre = binarise_spikes(
-            spks_raw[:, : session.wheel_freeze.pre_training_end_frame],
-            mad_threshold=1.25,
-        )
-
-        offline_spks_post = binarise_spikes(
-            spks_raw[:, session.wheel_freeze.post_training_start_frame :],
-            mad_threshold=1.25,
-        )
-        spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
-
-        assert spks_raw.shape == spks.shape
         t1 = time.time()
         pcs_mask, _ = get_place_cells(
             session=session, spks=spks, rewarded=None, config=config, plot=True
         )
         print(f"Time to get place cells: {time.time() - t1}")
         place_cells = spks[pcs_mask, :]
-        reactivation = offline_spks_post[pcs_mask]
-        preactivation = offline_spks_pre[pcs_mask]
 
-        ## Taken out while we figure out how best to do this
-        # running_bouts = get_running_bouts(
-        #     place_cells=place_cells,
-        #     speed=speed,
-        #     frames_positions=positions,
-        #     aligned_trial_frames=aligned_trial_frames,
-        #     config=config,
-        # )
+        preactivation, _, reactivation = split_fluoresence_online_freeze(
+            flu=place_cells, wheel_freeze=session.wheel_freeze
+        )
 
         trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
         sigma = 30
         # Doing the gaussian filter on a trial by trial basis to prevent edge effects
         # Pretty stupid doing this in a oneliner
+        # TODO: This should only be running bouts
+
         ssp_vectors = np.hstack(
             [
                 np.apply_along_axis(
@@ -1005,4 +977,4 @@ def compare_to_matlab() -> None:
 
 
 if __name__ == "__main__":
-    compare_to_matlab()
+    main()
