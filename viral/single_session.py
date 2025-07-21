@@ -28,8 +28,8 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB031"
-DATE = "2025-03-25"
+MOUSE = "JB036"
+DATE = "2025-07-10"
 SESSION_NUMBER = "002"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
@@ -125,7 +125,7 @@ def get_anticipatory_licking(trial: TrialInfo, wheel_circumference: float) -> in
     return np.sum(
         np.logical_and(
             np.logical_and(lick_positions > 150, lick_positions < 180),
-            lick_times < reward_state_time + 0.1,
+            lick_times < reward_state_time,
         )
     )
 

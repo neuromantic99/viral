@@ -10,18 +10,17 @@ sys.path.append(str(HERE.parent.parent))
 
 from viral.imaging_utils import get_ITI_start_frame, load_imaging_data, trial_is_imaged
 from viral.utils import (
-    TrialInfo,
     trial_is_imaged,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
 )
-from viral.models import Cached2pSession, ImagedTrialInfo
+from viral.models import Cached2pSession, TrialInfo, ImagedTrialInfo
 from viral.constants import TIFF_UMBRELLA
 
 
 def get_spks_pos(s2p_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    spks = np.load(s2p_path / "spks.npy")[iscell, :]
+    spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     stat = np.load(s2p_path / "stat.npy", allow_pickle=True)[iscell]
     pos = np.array([[int(coord) for coord in cell["med"]] for cell in stat])
     xpos = pos[:, 1]
@@ -370,33 +369,32 @@ def process_trials_data(
         valid_mask = filter_speed_position(
             speed=speed,
             frames_positions=frames_positions,
-            speed_threshold=0.5,
-            position_threshold=180,
-            filter_speed=False,
-            filter_position=False,
         )
         if not np.any(valid_mask):
             print("No valid frames in the trial")
+            continue
         valid_trial_frames = trial_frames[valid_mask]
         valid_trial_start = valid_trial_frames[0]
-        trial_data = {
-            "trial_start_frame": valid_trial_start,
-            "trial_end_frame": end,
-            "rewarded": rewarded,
-            "trial_frames": trial_frames,
-            "iti_start_frame": ITI_start_frame,
-            "iti_end_frame": end,
-            "frames_positions": frames_positions[valid_mask, :],
-            "frames_speed": speed[valid_mask, :],
-            "corridor_width": (ITI_start_frame - start),
-            "signal": spikes_trial[:, valid_mask],
-        }
-        if licks is not None:
-            trial_data["lick_idx"] = licks
-        if rewards is not None:
-            trial_data["reward_idx"] = rewards
-        imaged_trials_infos.append(ImagedTrialInfo(**trial_data))
-
+        if not np.any(licks):
+            licks = np.array([])
+        if not np.any(rewards):
+            rewards = np.array([])
+        imaged_trials_infos.append(
+            ImagedTrialInfo(
+                trial_start_frame=valid_trial_start,
+                trial_end_frame=end,
+                rewarded=rewarded,
+                trial_frames=trial_frames,
+                iti_start_frame=ITI_start_frame,
+                iti_end_frame=end,
+                frames_positions=frames_positions[valid_mask, :],
+                frames_speed=speed[valid_mask, :],
+                corridor_width=(ITI_start_frame - start),
+                lick_idx=licks,
+                reward_idx=rewards,
+                signal=spikes_trial[:, valid_mask],
+            )
+        )
     return imaged_trials_infos
 
 
@@ -404,23 +402,35 @@ def filter_speed_position(
     speed: np.ndarray,
     frames_positions: np.ndarray,
     speed_threshold: Optional[float] = None,
-    position_threshold: Optional[float] = None,
-    filter_speed: bool = False,
-    filter_position: bool = False,
+    position_threshold: Optional[tuple[float, float]] = None,
+    use_or: bool = True,
 ) -> np.ndarray:
     """Return a mask of valid frames"""
 
-    valid_mask = np.zeros(len(speed), dtype=bool)
+    if speed_threshold is None and position_threshold is None:
+        return np.ones(len(speed), dtype=bool)
+    valid_mask = (
+        np.ones(len(speed), dtype=bool)
+        if not use_or
+        else np.zeros(len(speed), dtype=bool)
+    )
 
     # filter out frames with sub-threshold speeds
     # converting cm/s to cm/frames
-    if filter_speed and speed_threshold is not None:
+    if speed_threshold is not None:
         speed_mask = speed[:, 1] >= (speed_threshold)
-        valid_mask |= speed_mask
+        if use_or:
+            valid_mask |= speed_mask
+        else:
+            valid_mask = speed_mask
     # specified positions that should always be included
-    if filter_position and position_threshold is not None:
-        position_mask = frames_positions[:, 1] >= position_threshold
-        valid_mask |= position_mask  # bitwise OR?
+    if position_threshold is not None:
+        position_mask = frames_positions[:, 1] >= position_threshold[0]
+        position_mask &= frames_positions[:, 1] <= position_threshold[1]
+        if use_or:
+            valid_mask |= position_mask
+        else:
+            valid_mask &= position_mask
 
     return valid_mask
 
@@ -540,7 +550,6 @@ def process_session(
 ) -> None:
     s2p_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
-    # TODO: it is actually dff and not spks but I will still call it that
     spks, xpos, ypos, trials = load_data(session, s2p_path, "spks")
     aligned_trial_frames, spikes_trials = align_validate_data(spks, trials)
     imaged_trials_infos = process_trials_data(
@@ -572,6 +581,16 @@ def process_session(
     ), "Number of corridor widths and aligned_trial_frames do not match"
 
     assert positions.shape[0] == speed.shape[0] == signals.shape[1]
+    # Checking that neither positions nor speed have values that exceed the trial boundaries
+    assert np.min(positions[:, 0]) == aligned_trial_frames[0, 0]
+    assert np.max(positions[:, 0]) == aligned_trial_frames[-1, 1]
+    assert np.min(speed[:, 0]) == aligned_trial_frames[0, 0]
+    assert np.max(speed[:, 0]) == aligned_trial_frames[-1, 1]
+    valid_frames = set()
+    for start, end, _ in aligned_trial_frames:
+        valid_frames.update(np.arange(start, end + 1))
+    assert np.all(np.isin(positions[:, 0], list(valid_frames)))
+    assert np.all(np.isin(speed[:, 0], list(valid_frames)))
 
     if ITI_split:
         valid_frame_mask = filter_out_ITI(ITI_starts_ends, positions)

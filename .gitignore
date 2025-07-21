@@ -1,4 +1,6 @@
+*.pkl
 *.npy
+*.npz
 constants.py
 
 *.png
