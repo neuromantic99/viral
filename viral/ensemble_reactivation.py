@@ -232,7 +232,7 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     n_significant_components = np.sum(eigenvalues > lambda_max)
 
     if n_significant_components < 1:
-        raise ValueError("There are no significant components!")
+        return np.zeros((0, ssp_vectors_z.shape[0]))
 
     return fast_ica_sklearn(ssp_vectors_z, n_significant_components)
 
@@ -406,6 +406,7 @@ def sort_ensembles_by_reactivation_strength(
     # total_strength = np.sum(positive_only, axis=1)
 
     total_strength = np.sum(reactivation_strength, axis=1)
+    # total_strength = np.max(zscore(reactivation_strength, axis=1), axis=1)
     sorted_indices = np.argsort(total_strength)[::-1]
     return sorted_indices[:n_top]
 
@@ -456,7 +457,7 @@ def plot_ensemble_reactivation_preactivation(
     """
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
     """
-    colours = ["r", "b"]
+    colours = ["red", "blue", "green", "yellow"]
     matrices = {
         "post": reactivation_strength,
         "post_shuffled": reactivation_strength_shuffled,
@@ -503,7 +504,7 @@ def plot_cell_weights(
     Producing Fig. 4j, panel III. Plotting each cell's weight in the top ICA components/ensembles.
     """
     # TODO: is this correct? compare to Grosmark et al.
-    colours = ["r", "b"]
+    colours = ["red", "blue", "green", "yellow"]
     sorted_cells, n_a, n_b = (
         sorted_pcs.sorted_indices,
         sorted_pcs.n_ensemble_a,
@@ -585,11 +586,14 @@ def plot_grosmark_panel(
 
     # 1) reactivation strength (top)
     ax1 = fig.add_subplot(gs[0, 1])
-    colours = ["r", "b"]
+    colours = ["red", "blue", "green", "yellow"]
+
     if smooth:
         processed_reactivation_strength = gaussian_filter1d(reactivation_strength, 30)
     else:
         processed_reactivation_strength = reactivation_strength
+
+    processed_reactivation_strength = zscore(processed_reactivation_strength, axis=1)
 
     for i, idx in enumerate(top_ensembles):
         ax1.plot(
@@ -648,7 +652,6 @@ def plot_grosmark_panel(
     # ax3.set_title("Smoothed offline firing rate raster")
 
     plt.savefig("plots/grosmark_panel.svg", dpi=300)
-    1 / 0
     # plt.show()
 
 
@@ -657,7 +660,7 @@ def main() -> None:
     date = "2025-07-05"
 
     verbose = True
-    use_cache = False
+    use_cache = True
 
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -677,7 +680,7 @@ def main() -> None:
         (
             pcs_mask,
             ensemble_matrix,
-            ensemble_matrix_shuffled_data,
+            ensemble_matrix_shuffled,
             reactivation_strength,
             reactivation_strength_shuffled,
             preactivation_strength,
@@ -739,9 +742,14 @@ def main() -> None:
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
         # TODO: are we returning the right thing here?
         ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
-        ensemble_matrix_shuffled_data = compute_ICA_components(
+        num_shuffled_components = compute_ICA_components(
             ssp_vectors=ssp_vectors_shuffled
-        )
+        ).shape[0]
+
+        # Using this instead of passing ssp_vectors_shuffled to compute_ICA_components
+        # as there is normally 0 significant components
+        ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
+
         print("ICA done")
         # OFFLINE
         t2 = time.time()
@@ -752,9 +760,6 @@ def main() -> None:
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
 
-        total_reactivation = np.sum(reactivation_strength, axis=1)
-        total_preactivation = np.sum(preactivation_strength, axis=1)
-
         # Plot the component changes
 
         # TODO: get rid of the "do_shuffle" argument
@@ -762,11 +767,11 @@ def main() -> None:
         reactivation_shuffled = shuffle_rows(reactivation)
         reactivation_strength_shuffled = offline_reactivation(
             reactivation=reactivation_shuffled,
-            ensemble_matrix=ensemble_matrix_shuffled_data,
+            ensemble_matrix=ensemble_matrix_shuffled,
         )
         preactivation_strength_shuffled = offline_reactivation(
             reactivation=preactivation_shuffled,
-            ensemble_matrix=ensemble_matrix_shuffled_data,
+            ensemble_matrix=ensemble_matrix_shuffled,
         )
         print(f"Time to get reactivation strength(s): {time.time() - t2}")
         t3 = time.time()
@@ -785,7 +790,7 @@ def main() -> None:
             cache_file,
             pcs_mask=pcs_mask,
             ensemble_matrix=ensemble_matrix,
-            ensemble_matrix_shuffled_data=ensemble_matrix_shuffled_data,
+            ensemble_matrix_shuffled_data=ensemble_matrix_shuffled,
             reactivation_strength=reactivation_strength,
             reactivation_strength_shuffled=reactivation_strength_shuffled,
             preactivation_strength=preactivation_strength,
@@ -801,11 +806,16 @@ def main() -> None:
         print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
         # TODO: remove eventually?
         print(
-            f"# significant components (Marcenko-Pastur), shuffled data: {ensemble_matrix_shuffled_data.shape[1]}"
+            f"# significant components (Marcenko-Pastur), shuffled data: {num_shuffled_components if not use_cache else 'not computed'}"
         )
 
+    plot_reactivation_strength_change(
+        reactivation_strength=reactivation_strength,
+        preactivation_strength=preactivation_strength,
+    )
+
     top_ensembles = sort_ensembles_by_reactivation_strength(
-        reactivation_strength=reactivation_strength
+        reactivation_strength=reactivation_strength, n_top=2
     )
     sorted_pcs = classify_and_sort_place_cells(
         ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles
@@ -833,8 +843,15 @@ def main() -> None:
         ensemble_matrix=ensemble_matrix,
         sorted_pcs=sorted_pcs,
         reactivation=reactivation,
-        smooth=False,
+        smooth=True,
     )
+
+    plt.show()
+
+
+def plot_reactivation_strength_change(
+    reactivation_strength: np.ndarray, preactivation_strength: np.ndarray
+) -> None:
 
     total_reactivation = np.sum(reactivation_strength, axis=1)
     total_preactivation = np.sum(preactivation_strength, axis=1)
@@ -853,7 +870,6 @@ def main() -> None:
 
     plt.ylabel("Reactivation strength (sum across time)")
     plt.title(f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f}")
-    plt.show()
 
 
 def load_data_from_cache(cache_file: Path) -> tuple:
@@ -913,7 +929,8 @@ def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
         or even sign (i.e. the same component may be positive or negative)
 
     However their absolute sums should be similar. And the actual components (once sorted and the signs aligned)
-    should span the same subspace. You can test this by looking at the angles between two components. They should be 0 (within floating point error)
+    should span the same subspace. You can test this by looking at the angles between two components.
+    They should be 0 (within floating point error)
 
     """
 

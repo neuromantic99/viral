@@ -2,6 +2,7 @@ import itertools
 import math
 from pathlib import Path
 import sys
+import warnings
 from matplotlib import pyplot as plt
 from scipy.stats import median_abs_deviation, zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
@@ -138,6 +139,10 @@ def get_place_cells(
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
     n_shuffles = 2000
+    if n_shuffles < 2000:
+        warnings.warn(
+            "n_shuffles is less than 2000. This may not be enough to get a good estimate of the place cell distribution."
+        )
 
     all_trials = np.array(
         [
@@ -204,8 +209,8 @@ def get_place_cells(
 
     place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
-    if plot:
-        plot_speed(session, rewarded, config)
+    # if plot:
+    #     plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -534,7 +539,7 @@ def filter_additional_check(
         cell_not_place_activity = all_trials[:, cell, cell_out_of_place_field]
         count = 0
         for trial in range(n_trials):
-            if np.mean(cell_place_activity[trial, :]) > np.mean(
+            if np.nanmean(cell_place_activity[trial, :]) > np.nanmean(
                 cell_not_place_activity[trial, :]
             ):
                 count += 1
