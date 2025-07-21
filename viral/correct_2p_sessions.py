@@ -64,6 +64,18 @@ def apply_session_correction(
         ), "Each epoch should have 6 values (year, month, ...)"
         return c
 
+        assert sum(c.chunk_lengths_daq) == len(c.frame_times_daq)
+        # I found a bug where if you deleted a column of the epochs array in a session correction,
+        # all the assertions would pass and save the session cache regardless.
+        # It is fixed now, but these assertions are here to ensure it does not happen again.
+        assert c.epochs.shape[0] == len(
+            c.stack_lengths_tiffs
+        ), "There should be one epoch per tiff stack"
+        assert (
+            c.epochs.shape[1] == 6
+        ), "Each epoch should have 6 values (year, month, ...)"
+        return c
+
     return SessionCorrection(
         epochs=epochs,
         all_tiff_timestamps=all_tiff_timestamps,

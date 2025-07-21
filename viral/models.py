@@ -151,6 +151,16 @@ class GrosmarkConfig:
     start: int
     end: int
 
+    def __repr__(self) -> str:
+        return f"GrosmarkConfig(bin_size={self.bin_size}, start={self.start}, end={self.end})"
+
+
+@dataclass
+class SortedPlaceCells:
+    sorted_indices: np.ndarray
+    n_ensemble_a: int
+    n_ensemble_b: int
+
 
 @dataclass
 class SessionImagingInfo:

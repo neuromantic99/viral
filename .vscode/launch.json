@@ -8,7 +8,7 @@
       "program": "viral/single_session.py",
       "console": "integratedTerminal",
       "justMyCode": true,
-      "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" }
     },
     {
       "name": "multiple sessions",
@@ -17,7 +17,7 @@
       "program": "viral/multiple_sessions.py",
       "console": "integratedTerminal",
       "justMyCode": true,
-      "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" }
     },
     {
       "name": "presentation",
@@ -25,7 +25,7 @@
       "request": "launch",
       "program": "presentations/2024-06-18_replaymeeting.py",
       "console": "integratedTerminal",
-      "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "justMyCode": true
     },
     {
@@ -34,7 +34,7 @@
       "request": "launch",
       "program": "viral/grosmark_analysis.py",
       "console": "integratedTerminal",
-      "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "justMyCode": true
     },
     {
@@ -43,7 +43,7 @@
       "request": "launch",
       "program": "viral/cache_2p_sessions.py",
       "console": "integratedTerminal",
-      "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "justMyCode": true
     },
     {
@@ -51,7 +51,7 @@
       "type": "debugpy",
       "request": "launch",
       "program": "viral/rastermap_utils.py",
-      "env": {"PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "console": "integratedTerminal",
       "justMyCode": true
     },
@@ -63,7 +63,12 @@
       "console": "integratedTerminal",
       "justMyCode": true
     },
-
+    {
+      "name": "Ensemble reactivation",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/ensemble_reactivation.py"
+    },
     {
       "name": "learning stages",
       "type": "debugpy",
@@ -71,6 +76,6 @@
       "program": "viral/learning_stages.py",
       "console": "integratedTerminal",
       "justMyCode": true
-    },
+    }
   ]
 }
