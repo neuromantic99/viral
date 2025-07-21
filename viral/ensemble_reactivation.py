@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from matplotlib import pyplot as plt
+from deprecated import deprecated
 from scipy.linalg import fractional_matrix_power, subspace_angles
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import zscore, rankdata
@@ -110,6 +111,7 @@ def get_ssp_vectors(
     )
 
 
+@deprecated("Use fast_ica_sklearn instead, tested as its the same")
 def fast_ica_significant_components(X: np.ndarray, n_components: int) -> np.ndarray:
     """
     Port of github.com/tortlab/Cell-Assembly-Detection/blob/master/fast_ica.m to python
@@ -141,19 +143,15 @@ def fast_ica_significant_components(X: np.ndarray, n_components: int) -> np.ndar
     whitening_matrix = D @ eigenvectors.T
     dewhitening_matrix = eigenvectors @ np.linalg.inv(D)
 
-    # Correct up to here by checksum
-
     ## ICA ##
     # X.shape 0 and n_components are the same so bit weird
 
     B = np.random.normal(size=(X.shape[0], n_components))
-    # np.save("B_seed.npy", B)
 
     ortho = lambda x: x @ fractional_matrix_power(x.T @ x, -0.5)
     B = ortho(B)
 
     W = np.random.uniform(size=(B.T @ whitening_matrix).shape)
-    # np.save("W_seed.npy", W)
 
     N = X.shape[1]
 
@@ -168,6 +166,32 @@ def fast_ica_significant_components(X: np.ndarray, n_components: int) -> np.ndar
         B = ortho(B)
         W = B.T @ whitening_matrix
 
+    return W.T
+
+
+def fast_ica_sklearn(X: np.ndarray, n_components: int) -> np.ndarray:
+    from sklearn.decomposition import FastICA
+
+    # Don't need to do this
+    # X_centered = X - np.mean(X, axis=1, keepdims=True)
+
+    X_centered = X
+
+    # Transpose to (n_samples, n_features) for sklearn
+    X_centered = X_centered.T
+
+    ica = FastICA(
+        n_components=n_components,
+        whiten="unit-variance",
+        fun="logcosh",  # logcosh with alpha = 1 is the same as tanh used in matlab
+        fun_args={"alpha": 1.0},
+        max_iter=500,
+        random_state=0,  # Optional: for reproducibility
+    )
+    S = ica.fit_transform(X_centered)  # Shape: (n_timepoints, n_components)
+    W = ica.components_  # Shape: (n_components, n_cells)
+
+    # Transpose to match your return shape: (n_cells, n_components)
     return W.T
 
 
@@ -211,7 +235,7 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     if n_significant_components < 1:
         raise ValueError("There are no significant components!")
 
-    return fast_ica_significant_components(ssp_vectors_z, n_significant_components)
+    return fast_ica_sklearn(ssp_vectors_z, n_significant_components)
 
 
 def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
@@ -910,9 +934,21 @@ def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
 
 
 def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
+    """There is no guarentee that two runs of ICA (particularly from different programming languages with different random seeds)
+    will return the same:
+        numerical values
+        column order
+        or even sign (i.e. the same component may be positive or negative)
+
+    However their absolute sums should be similar. And the actual components (once sorted and the signs aligned)
+    should span the same subspace. You can test this by looking at the angles between two components. They should be 0 (within floating point error)
+
+    """
+
+    assert np.sum(np.abs(W_py)) - np.sum(np.abs(W_mat)) < np.sum(np.abs(W_mat)) * 0.01
 
     def sort_and_align(W):
-        # Sort columns by their L2 norm (or sum of squares)
+        # Sort columns by their L2 norm
         norms = np.sum(W**2, axis=1)
         order = np.argsort(norms)
         W_sorted = W[order, :]
@@ -931,29 +967,28 @@ def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
     print("All close")
 
 
-def test_subspace(W_py: np.ndarray, W_mat: np.ndarray) -> None:
-    # Assume W_py_sorted and W_mat_sorted are (n_cells, n_components)
-    # Orthonormalize columns (if not already)
+def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
     def orthonormalize(W):
         # QR decomposition for orthonormal basis
         Q, _ = np.linalg.qr(W)
         return Q
 
-    Q_py = orthonormalize(W_mat)
-    Q_mat = orthonormalize(W_py)
+    Q1 = orthonormalize(W1)
+    Q2 = orthonormalize(W2)
 
     # Compute principal angles (in radians)
-    angles = subspace_angles(Q_py, Q_mat)
-    print("Principal angles (degrees):", np.degrees(angles))
+    angles = subspace_angles(Q2, Q1)
     print("Max angle:", np.max(np.degrees(angles)))
     assert np.max(np.degrees(angles)) < 1e-9
 
 
 def compare_to_matlab() -> None:
+
     # test_data = np.load(
     #     "/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0/oasis_spikes.npy"
     # )
     # test_data = gaussian_filter1d(test_data, sigma=30, axis=1)
+
     # # take a random-ish subset of the online data
     # test_data = test_data[:, 27000:100000]
     # np.save("test_ensemble_data.npy", test_data)
@@ -963,10 +998,10 @@ def compare_to_matlab() -> None:
     )
 
     test_data = np.load("test_ensemble_data.npy")
-    python_result = compute_ICA_components(test_data)
-    np.save("python_result.npy", python_result)
 
-    compare_run_results(python_result, matlab_result)
+    python_result = compute_ICA_components(test_data)
+
+    compare_run_results(matlab_result, python_result)
 
 
 if __name__ == "__main__":
