@@ -70,7 +70,7 @@ def grosmark_place_field(
         offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
             flu=spks_raw, wheel_freeze=session.wheel_freeze
         )
-        # TODO: should pre and post be binarised as one?
+        # According to Grosmark, each offline epoch is singly binarised
         offline_spks_pre = binarise_spikes(
             offline_spks_pre,
             mad_threshold=1.25,
