@@ -531,3 +531,9 @@ def above_threshold_for_n_consecutive_samples(
     for start in valid_starts:
         mask[start : start + n_samples] = True
     return mask
+
+
+def split_continuous_chunks(arr: np.ndarray) -> List[np.ndarray]:
+    """Split an array into continuous chunks"""
+    split_indices = np.where(np.diff(arr) != 1)[0] + 1
+    return np.split(arr, split_indices)

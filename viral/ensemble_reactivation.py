@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from deprecated import deprecated
 from scipy.linalg import fractional_matrix_power, subspace_angles
 from scipy.ndimage import gaussian_filter1d
-from scipy.stats import zscore, rankdata
+from scipy.stats import wilcoxon, zscore, rankdata
 from opt_einsum import contract
 import seaborn as sns
 from tqdm import tqdm
@@ -28,13 +28,18 @@ from viral.rastermap_utils import (
     filter_speed_position,
 )
 from viral.utils import (
+    above_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     shuffle_rows,
+    split_continuous_chunks,
     trial_is_imaged,
 )
-from viral.imaging_utils import get_ITI_start_frame, split_fluoresence_online_freeze
-from viral.grosmark_analysis import binarise_spikes, get_place_cells
+from viral.imaging_utils import (
+    compute_speed_grosmark,
+    split_fluoresence_online_freeze,
+)
+from viral.grosmark_analysis import get_place_cells
 
 
 def process_behaviour(
@@ -97,18 +102,6 @@ def get_running_bouts(
         use_or=False,
     )
     return place_cells_behaviour[:, behaviour_mask]
-
-
-def get_ssp_vectors(
-    place_cells_running: np.ndarray,
-) -> np.ndarray:
-    """Briefly, PC run running-bout spike
-    estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel corresponding to
-    behavioral timescales."""
-    sigma = 30  # 1 second * 30 Hz sampling rate
-    return np.apply_along_axis(
-        gaussian_filter1d, axis=1, arr=place_cells_running, sigma=sigma
-    )
 
 
 @deprecated("Use fast_ica_sklearn instead, tested and its the same")
@@ -655,12 +648,60 @@ def plot_grosmark_panel(
     # plt.show()
 
 
+def get_ssp_vectors(
+    trials: List[TrialInfo],
+    place_cells: np.ndarray,
+) -> np.ndarray:
+    sigma = 30
+    ssp_vectors = []
+    for trial in trials:
+        position = degrees_to_cm(
+            np.array(trial.rotary_encoder_position),
+            get_wheel_circumference_from_rig("2P"),
+        )
+
+        frame_position = np.array(
+            [
+                state.closest_frame_start
+                for state in trial.states_info
+                if state.name
+                in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+            ]
+        )
+        assert len(position) == len(frame_position)
+
+        speed = compute_speed_grosmark(position)
+
+        speed_threshold = 5
+        idx_keep = above_threshold_for_n_consecutive_samples(
+            speed, threshold=speed_threshold, n_samples=3 * 30
+        )
+        # Take the ITI out
+        idx_keep = idx_keep & (position < 180)
+        frames_keep = np.unique(frame_position[idx_keep])
+
+        # Don't smooth across non-continuous chunks
+        for chunk in split_continuous_chunks(frames_keep):
+            if len(chunk) < 2 * 30:  # Arbitrary removal of short chunks
+                continue
+            ssp_vectors.append(
+                np.apply_along_axis(
+                    gaussian_filter1d,
+                    axis=1,
+                    arr=place_cells[:, chunk],
+                    sigma=sigma,
+                )
+            )
+
+    return np.hstack(ssp_vectors)
+
+
 def main() -> None:
     mouse = "JB036"
     date = "2025-07-05"
 
     verbose = True
-    use_cache = True
+    use_cache = False
 
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -708,9 +749,13 @@ def main() -> None:
         )
 
         t1 = time.time()
-        pcs_mask, _ = get_place_cells(
-            session=session, spks=spks, rewarded=None, config=config, plot=True
-        )
+        # pcs_mask, _ = get_place_cells(
+        #     session=session, spks=spks, rewarded=None, config=config, plot=True
+        # )
+
+        print("AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHh")
+        pcs_mask = [True] * spks.shape[0]
+
         print(f"Time to get place cells: {time.time() - t1}")
         place_cells = spks[pcs_mask, :]
 
@@ -720,23 +765,9 @@ def main() -> None:
 
         trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-        sigma = 30
-        # Doing the gaussian filter on a trial by trial basis to prevent edge effects
-        # Pretty stupid doing this in a oneliner
-        # TODO: This should only be running bouts
-
-        ssp_vectors = np.hstack(
-            [
-                np.apply_along_axis(
-                    gaussian_filter1d,
-                    axis=1,
-                    arr=place_cells[
-                        :, trial.trial_start_closest_frame : get_ITI_start_frame(trial)
-                    ],
-                    sigma=sigma,
-                )
-                for trial in trials
-            ]
+        ssp_vectors = get_ssp_vectors(
+            trials=trials,
+            place_cells=place_cells,
         )
 
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
@@ -869,7 +900,9 @@ def plot_reactivation_strength_change(
     )
 
     plt.ylabel("Reactivation strength (sum across time)")
-    plt.title(f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f}")
+    plt.title(
+        f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f} p ={wilcoxon(total_reactivation, total_preactivation)[1]:.2f}",
+    )
 
 
 def load_data_from_cache(cache_file: Path) -> tuple:

@@ -166,7 +166,7 @@ def get_place_cells(
     smoothed_matrix = np.nanmean(all_trials, 0)
 
     # Probably delete cache logic once we're all sorted
-    use_cache = False
+    use_cache = True
     cache_file = (
         HERE
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
@@ -581,44 +581,6 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     )
 
     return circular_dist_matrix
-
-
-def binarise_spikes(spks: np.ndarray, mad_threshold: float = 1.5) -> np.ndarray:
-    """Implements the calcium imaging preprocessing stepts here:
-    https://www.nature.com/articles/s41593-021-00920-7#Sec12
-
-    Though the first steps done in our oasis fork.
-
-    Currently we are not doing wavelet denoising as I've found this makes the fit much worse.
-    We have added zhang baseline step. As without this, if our baseline drifts, higher baseline
-    periods are considered to have more spikes.
-
-    We are also not normalising by the residual between denoised and actual. It's not clear
-    how they do this. What factor are they reducing the residual by? The residual is some
-    massive number.
-
-    They threshold based on the MAD. But is it just the MAD or is the MAD deviation from the median?
-    I also had to take the MAD of only non-zero periods. As the raw MAD of all cells is 0. This may
-    not be true in the hippocampus which is why they may not do this. We're also not currently
-    altering the threshold depending or running or not. TOOD: DO THIS
-
-
-    """
-
-    non_zero_spikes = np.copy(spks)
-    non_zero_spikes[non_zero_spikes == 0] = np.nan
-
-    mad = median_abs_deviation(non_zero_spikes, axis=1, nan_policy="omit")
-
-    # Maybe
-    # threshold = mad * 1.5
-
-    # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * mad_threshold
-    mask = spks - threshold[:, np.newaxis] > 0
-    spks[~mask] = 0
-    spks[mask] = 1
-    return remove_consecutive_ones(spks)
 
 
 if __name__ == "__main__":

@@ -197,6 +197,7 @@ def get_online_position_and_frames(
     )
 
     # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
+    # TODO: Not sure this is working correctly
     trial_onset = frame_position < frame_position[0] + 60
     # TODO: Make sure this works
     idx_keep = idx_keep & ~trial_onset
