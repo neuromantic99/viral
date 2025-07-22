@@ -3,7 +3,7 @@
 from scipy.ndimage import gaussian_filter1d
 from typing import List, Tuple
 import numpy as np
-from viral.models import TrialInfo
+from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     array_bin_mean,
     degrees_to_cm,
@@ -112,6 +112,45 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
+def compute_windowed_speed_1d(
+    positions: np.ndarray, window_duration: float
+) -> np.ndarray:
+    """
+    Compute smoothed speed for 1D positions using a moving window,
+    with full-length output (no NaNs).
+
+    Args:
+        positions (np.ndarray): 1D array of positions.
+        sampling_rate (float): Samples per second (Hz), e.g., 30.
+        window_duration (float): Duration of the window in seconds.
+
+    Returns:
+        np.ndarray: Smoothed speed (same length as positions).
+    """
+    n = len(positions)
+    sampling_rate = 30
+    half_window = int((window_duration * sampling_rate) // 2)
+    full_window = 2 * half_window
+    speeds = np.zeros(n)
+
+    for i in range(n):
+        if i < half_window:
+            # forward difference
+            start, end = i, min(i + full_window, n - 1)
+        elif i > n - half_window - 1:
+            # backward difference
+            start, end = max(i - full_window, 0), i
+        else:
+            # central difference
+            start, end = i - half_window, i + half_window
+
+        displacement = positions[end] - positions[start]
+        duration = (end - start) / sampling_rate
+        speeds[i] = abs(displacement) / duration if duration > 0 else 0.0
+
+    return speeds
+
+
 def activity_trial_position(
     trial: TrialInfo,
     flu: np.ndarray,
@@ -135,8 +174,6 @@ def activity_trial_position(
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
 
-    # TODO: remove non running epochs?
-
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference
     )
@@ -149,6 +186,15 @@ def activity_trial_position(
             in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
         ]
     )
+
+    # compute rolling speed across the position
+    speed = compute_windowed_speed_1d(position, window_duration=1)
+    # 1000 % review this
+    speed_threshold = 5
+    idx_keep = speed > speed_threshold
+    idx_keep[:30] = False
+    position = position[idx_keep]
+    frame_position = frame_position[idx_keep]
 
     assert len(position) == len(frame_position)
 
@@ -275,7 +321,7 @@ def get_ITI_matrix(
 ) -> np.ndarray:
     """
     In theory will be 600 frames in an ITI (as is always 20 seconds)
-    In practise it's 599 or 598 (or could be something like 597 or 600, fix
+    In practice it's 599 or 598 (or could be something like 597 or 600, fix
     the assertion if so).
     Or could be less if you stop the trial in the ITI.
     So we'll take the first 598 frames of any trial that has 599 or 598
@@ -306,6 +352,22 @@ def get_ITI_matrix(
             raise ValueError(f"Chunk with {n_frames} frames not understood")
 
     return np.array(matrices)
+
+
+def get_frozen_wheel_flu(
+    flu: np.ndarray, wheel_freeze: WheelFreeze
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return sliced flu array: offline epochs before and after behaviour session."""
+    return (
+        flu[
+            :,
+            wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame,
+        ],
+        flu[
+            :,
+            wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame,
+        ],
+    )
 
 
 def get_imaging_crashed(mouse_name: str, date: str) -> bool:
