@@ -5,10 +5,13 @@ import os
 import time
 from pathlib import Path
 from matplotlib import pyplot as plt
+from deprecated import deprecated
+from scipy.linalg import fractional_matrix_power, subspace_angles
 from scipy.ndimage import gaussian_filter1d
-from scipy.stats import zscore, rankdata, ttest_ind
+from scipy.stats import wilcoxon, zscore, rankdata
 from opt_einsum import contract
 import seaborn as sns
+from tqdm import tqdm
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -25,13 +28,18 @@ from viral.rastermap_utils import (
     filter_speed_position,
 )
 from viral.utils import (
+    above_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     shuffle_rows,
+    split_continuous_chunks,
     trial_is_imaged,
 )
-from viral.imaging_utils import get_ITI_start_frame, get_frozen_wheel_flu
-from viral.grosmark_analysis import binarise_spikes, get_place_cells
+from viral.imaging_utils import (
+    compute_speed_grosmark,
+    split_fluoresence_online_freeze,
+)
+from viral.grosmark_analysis import get_place_cells
 
 
 def process_behaviour(
@@ -96,32 +104,90 @@ def get_running_bouts(
     return place_cells_behaviour[:, behaviour_mask]
 
 
-def get_ssp_vectors(
-    place_cells_running: np.ndarray,
-) -> np.ndarray:
-    """Briefly, PC run running-bout spike
-    estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel corresponding to
-    behavioral timescales."""
-    sigma = 30  # 1 second * 30 Hz sampling rate
-    return np.apply_along_axis(
-        gaussian_filter1d, axis=1, arr=place_cells_running, sigma=sigma
+@deprecated("Use fast_ica_sklearn instead, tested and its the same")
+def fast_ica_significant_components(X: np.ndarray, n_components: int) -> np.ndarray:
+    """
+    Port of github.com/tortlab/Cell-Assembly-Detection/blob/master/fast_ica.m to python
+
+    X: (n_cells, n_timepoints) z-scored
+    n_components: int
+
+    Returns:
+    Significant components (n_cells, n_components)
+    """
+    # demean X, (does this make sense for the z-scored data?)
+    X = X - np.mean(X, axis=1, keepdims=True)
+    X1 = X.copy()
+
+    # covariance matrix
+    C = X @ X.T / X.shape[1]
+
+    # eigenvalues are sorted from largest to smallest
+    # but in the documentation it says they are not necessarily sorted
+    # so make sure
+    eigenvalues, eigenvectors = np.linalg.eig(C)
+    sorted_order = np.argsort(eigenvalues)[::-1]
+    # Take only siginificant eigenvectors / values
+    eigenvectors = eigenvectors[:, sorted_order[:n_components]]
+    eigenvalues = eigenvalues[sorted_order[:n_components]]
+    D = np.diag(eigenvalues ** (-1 / 2))
+
+    X = D @ eigenvectors.T @ X
+    whitening_matrix = D @ eigenvectors.T
+    dewhitening_matrix = eigenvectors @ np.linalg.inv(D)
+
+    ## ICA ##
+    # X.shape 0 and n_components are the same so bit weird
+
+    B = np.random.normal(size=(X.shape[0], n_components))
+
+    ortho = lambda x: x @ fractional_matrix_power(x.T @ x, -0.5)
+    B = ortho(B)
+
+    W = np.random.uniform(size=(B.T @ whitening_matrix).shape)
+
+    N = X.shape[1]
+
+    for _ in tqdm(range(500)):
+        hyp_tan = np.tanh(X.T @ B)
+        B = (
+            X @ hyp_tan / N
+            - np.ones((B.shape[0], 1))
+            @ np.expand_dims(np.mean(1 - hyp_tan**2, axis=0), axis=0)
+            * B
+        )
+        B = ortho(B)
+        W = B.T @ whitening_matrix
+
+    return W.T
+
+
+def fast_ica_sklearn(X: np.ndarray, n_components: int) -> np.ndarray:
+    from sklearn.decomposition import FastICA
+
+    # Don't need to do this
+    # X_centered = X - np.mean(X, axis=1, keepdims=True)
+
+    X_centered = X
+
+    # Transpose to (n_samples, n_features) for sklearn
+    X_centered = X_centered.T
+
+    ica = FastICA(
+        n_components=n_components,
+        whiten="unit-variance",
+        fun="logcosh",  # logcosh with alpha = 1 is the same as tanh used in matlab
+        fun_args={"alpha": 1.0},
+        max_iter=500,
+        random_state=0,  # Optional: for reproducibility
     )
+    S = ica.fit_transform(X_centered)  # Shape: (n_timepoints, n_components)
+    W = ica.components_  # Shape: (n_components, n_cells)
+
+    return W.T
 
 
-def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
-    """
-    'Subsequently, the ICA components of these smoothed run
-    activity estimates were calculated across time using the fastICA algorithm. Only
-    the subset of components found to be significant under the Marcenko-Pasteur
-    distribution were considered ICA ensembles and included in the ICA ensemble
-    matrix w, with rows corresponding to PCs and columns corresponding to
-    significant ICA components.' (Grosmark et al., 2021)
-
-    Using Lopes-dos-Santos, Ribeiro and Tort, 2013 method to detect significant components.
-    '2.2. Determination of the number of cell assemblies'
-    www.sciencedirect.com/science/article/pii/S0165027013001489
-    Finding PCA components found to be significant under the Marcenko-Pastur distribution.).
-    """
+def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # 'the elements of M (in our case σ2 = 1 due to z-score normalization), Ncolumns is the number of columns and Nrows the number of rows.'
     n_rows, n_cols = ssp_vectors.shape
 
@@ -130,7 +196,6 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # ssp_vectors is (n_place_cells, n_frames)
 
     # 'Next, the spike count of each neuron (i.e., each row of the matrix) is normalized by z-score transformation'
-    # TODO: it should be axis = 0 right?? (z-scoring time bins for each neuron??)
     ssp_vectors_z = zscore(ssp_vectors, axis=1)
 
     # 'in our case the covariance matrix is equal to the correlation matrix, and can be calculated as:
@@ -142,8 +207,6 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # 'Since C is necessarily real and symmetric, it follows from the spectral theorem that it can be decomposed'
     # 'Compute the eigenvalues and right eigenvectors of a square array.' (NumPy documentation)
     eigenvalues, eigenvectors = np.linalg.eig(covariance_matrix)
-
-    # assert np.allclose(eigenvalues, sklearn_eigenvalues)
 
     # 'where σ2 is the variance of the elements of M (in our case σ2 = 1 due to z-score normalization)'
     assert np.isclose(np.var(ssp_vectors_z), 1)
@@ -159,13 +222,12 @@ def compute_PCA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     # 'Thus, if the rows of M are statistically independent, the probability of finding an eigenvalue outside these bounds is zero.
     #  In other words, the variance of the data in any axis cannot be larger than λmax when neurons are uncorrelated.
     #  Therefore, λmax can be used as a statistical threshold for detecting cell assembly activity'
-    significant_components = eigenvalues > lambda_max
+    n_significant_components = np.sum(eigenvalues > lambda_max)
 
-    # 'with rows corresponding to PCs and columns corresponding to significant ICA components.'
-    # TODO: would this be the loading matrix?
-    loading_matrix = eigenvectors[:, significant_components]
+    if n_significant_components < 1:
+        return np.zeros((0, ssp_vectors_z.shape[0]))
 
-    return loading_matrix
+    return fast_ica_sklearn(ssp_vectors_z, n_significant_components)
 
 
 def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
@@ -337,6 +399,7 @@ def sort_ensembles_by_reactivation_strength(
     # total_strength = np.sum(positive_only, axis=1)
 
     total_strength = np.sum(reactivation_strength, axis=1)
+    # total_strength = np.max(zscore(reactivation_strength, axis=1), axis=1)
     sorted_indices = np.argsort(total_strength)[::-1]
     return sorted_indices[:n_top]
 
@@ -387,7 +450,7 @@ def plot_ensemble_reactivation_preactivation(
     """
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
     """
-    colours = ["r", "b"]
+    colours = ["red", "blue", "green", "yellow"]
     matrices = {
         "post": reactivation_strength,
         "post_shuffled": reactivation_strength_shuffled,
@@ -434,7 +497,7 @@ def plot_cell_weights(
     Producing Fig. 4j, panel III. Plotting each cell's weight in the top ICA components/ensembles.
     """
     # TODO: is this correct? compare to Grosmark et al.
-    colours = ["r", "b"]
+    colours = ["red", "blue", "green", "yellow"]
     sorted_cells, n_a, n_b = (
         sorted_pcs.sorted_indices,
         sorted_pcs.n_ensemble_a,
@@ -516,11 +579,14 @@ def plot_grosmark_panel(
 
     # 1) reactivation strength (top)
     ax1 = fig.add_subplot(gs[0, 1])
-    colours = ["r", "b"]
+    colours = ["red", "blue", "green", "yellow"]
+
     if smooth:
         processed_reactivation_strength = gaussian_filter1d(reactivation_strength, 30)
     else:
         processed_reactivation_strength = reactivation_strength
+
+    processed_reactivation_strength = zscore(processed_reactivation_strength, axis=1)
 
     for i, idx in enumerate(top_ensembles):
         ax1.plot(
@@ -579,8 +645,55 @@ def plot_grosmark_panel(
     # ax3.set_title("Smoothed offline firing rate raster")
 
     plt.savefig("plots/grosmark_panel.svg", dpi=300)
-    1 / 0
     # plt.show()
+
+
+def get_ssp_vectors(
+    trials: List[TrialInfo],
+    place_cells: np.ndarray,
+) -> np.ndarray:
+    sigma = 30
+    ssp_vectors = []
+    for trial in trials:
+        position = degrees_to_cm(
+            np.array(trial.rotary_encoder_position),
+            get_wheel_circumference_from_rig("2P"),
+        )
+
+        frame_position = np.array(
+            [
+                state.closest_frame_start
+                for state in trial.states_info
+                if state.name
+                in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+            ]
+        )
+        assert len(position) == len(frame_position)
+
+        speed = compute_speed_grosmark(position)
+
+        speed_threshold = 5
+        idx_keep = above_threshold_for_n_consecutive_samples(
+            speed, threshold=speed_threshold, n_samples=3 * 30
+        )
+        # Take the ITI out
+        idx_keep = idx_keep & (position < 180)
+        frames_keep = np.unique(frame_position[idx_keep])
+
+        # Don't smooth across non-continuous chunks
+        for chunk in split_continuous_chunks(frames_keep):
+            if len(chunk) < 2 * 30:  # Arbitrary removal of short chunks
+                continue
+            ssp_vectors.append(
+                np.apply_along_axis(
+                    gaussian_filter1d,
+                    axis=1,
+                    arr=place_cells[:, chunk],
+                    sigma=sigma,
+                )
+            )
+
+    return np.hstack(ssp_vectors)
 
 
 def main() -> None:
@@ -608,7 +721,7 @@ def main() -> None:
         (
             pcs_mask,
             ensemble_matrix,
-            ensemble_matrix_shuffled_data,
+            ensemble_matrix_shuffled,
             reactivation_strength,
             reactivation_strength_shuffled,
             preactivation_strength,
@@ -620,86 +733,55 @@ def main() -> None:
         ) = load_data_from_cache(cache_file)
     else:
         print("No cached data found, processing data")
-        # TODO: think about speed_bin_size -> set to 30 i.e. 1s (30 fps)
         config = GrosmarkConfig(
             bin_size=5,
             start=0,
             end=170,
         )
-        spks_raw, _, _, _ = load_data(
-            session,
-            # AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
-            Path("/Volumes/hard_drive/VR-2p/2025-03-25/JB031/suite2p/plane0"),
-            # TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0",
-            "spks",
+
+        spks = np.load(
+            TIFF_UMBRELLA
+            / session.date
+            / session.mouse_name
+            / "suite2p"
+            / "plane0"
+            / "oasis_spikes.npy"
         )
 
-        # """Based on the observed differences in calcium activity waveforms between the online and
-        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
-
-        online_spks = binarise_spikes(
-            spks_raw[
-                :,
-                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
-            ],
-            mad_threshold=1.5,
-        )
-        offline_spks_pre = binarise_spikes(
-            spks_raw[:, : session.wheel_freeze.pre_training_end_frame],
-            mad_threshold=1.25,
-        )
-
-        offline_spks_post = binarise_spikes(
-            spks_raw[:, session.wheel_freeze.post_training_start_frame :],
-            mad_threshold=1.25,
-        )
-        spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
-
-        assert spks_raw.shape == spks.shape
         t1 = time.time()
-        pcs_mask, _ = get_place_cells(
-            session=session, spks=spks, rewarded=None, config=config, plot=True
-        )
+        # pcs_mask, _ = get_place_cells(
+        #     session=session, spks=spks, rewarded=None, config=config, plot=True
+        # )
+
+        print("AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHh")
+        pcs_mask = [True] * spks.shape[0]
+
         print(f"Time to get place cells: {time.time() - t1}")
         place_cells = spks[pcs_mask, :]
-        reactivation = offline_spks_post[pcs_mask]
-        preactivation = offline_spks_pre[pcs_mask]
 
-        ## Taken out while we figure out how best to do this
-        # running_bouts = get_running_bouts(
-        #     place_cells=place_cells,
-        #     speed=speed,
-        #     frames_positions=positions,
-        #     aligned_trial_frames=aligned_trial_frames,
-        #     config=config,
-        # )
+        preactivation, _, reactivation = split_fluoresence_online_freeze(
+            flu=place_cells, wheel_freeze=session.wheel_freeze
+        )
 
         trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-        sigma = 30
-        # Doing the gaussian filter on a trial by trial basis to prevent edge effects
-        # Pretty stupid doing this in a oneliner
-        ssp_vectors = np.hstack(
-            [
-                np.apply_along_axis(
-                    gaussian_filter1d,
-                    axis=1,
-                    arr=place_cells[
-                        :, trial.trial_start_closest_frame : get_ITI_start_frame(trial)
-                    ],
-                    sigma=sigma,
-                )
-                for trial in trials
-            ]
+        ssp_vectors = get_ssp_vectors(
+            trials=trials,
+            place_cells=place_cells,
         )
 
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
-        ensemble_matrix = compute_PCA_components(ssp_vectors=ssp_vectors)
-        ensemble_matrix_shuffled_data = compute_PCA_components(
+        # TODO: are we returning the right thing here?
+        ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
+        num_shuffled_components = compute_ICA_components(
             ssp_vectors=ssp_vectors_shuffled
-        )
-        print("PCA done")
+        ).shape[0]
+
+        # Using this instead of passing ssp_vectors_shuffled to compute_ICA_components
+        # as there is normally 0 significant components
+        ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
+
+        print("ICA done")
         # OFFLINE
         t2 = time.time()
         reactivation_strength = offline_reactivation(
@@ -709,9 +791,6 @@ def main() -> None:
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
 
-        total_reactivation = np.sum(reactivation_strength, axis=1)
-        total_preactivation = np.sum(preactivation_strength, axis=1)
-
         # Plot the component changes
 
         # TODO: get rid of the "do_shuffle" argument
@@ -719,11 +798,11 @@ def main() -> None:
         reactivation_shuffled = shuffle_rows(reactivation)
         reactivation_strength_shuffled = offline_reactivation(
             reactivation=reactivation_shuffled,
-            ensemble_matrix=ensemble_matrix_shuffled_data,
+            ensemble_matrix=ensemble_matrix_shuffled,
         )
         preactivation_strength_shuffled = offline_reactivation(
             reactivation=preactivation_shuffled,
-            ensemble_matrix=ensemble_matrix_shuffled_data,
+            ensemble_matrix=ensemble_matrix_shuffled,
         )
         print(f"Time to get reactivation strength(s): {time.time() - t2}")
         t3 = time.time()
@@ -742,7 +821,7 @@ def main() -> None:
             cache_file,
             pcs_mask=pcs_mask,
             ensemble_matrix=ensemble_matrix,
-            ensemble_matrix_shuffled_data=ensemble_matrix_shuffled_data,
+            ensemble_matrix_shuffled_data=ensemble_matrix_shuffled,
             reactivation_strength=reactivation_strength,
             reactivation_strength_shuffled=reactivation_strength_shuffled,
             preactivation_strength=preactivation_strength,
@@ -758,11 +837,16 @@ def main() -> None:
         print(f"# significant components (Marcenko-Pastur): {ensemble_matrix.shape[1]}")
         # TODO: remove eventually?
         print(
-            f"# significant components (Marcenko-Pastur), shuffled data: {ensemble_matrix_shuffled_data.shape[1]}"
+            f"# significant components (Marcenko-Pastur), shuffled data: {num_shuffled_components if not use_cache else 'not computed'}"
         )
 
+    plot_reactivation_strength_change(
+        reactivation_strength=reactivation_strength,
+        preactivation_strength=preactivation_strength,
+    )
+
     top_ensembles = sort_ensembles_by_reactivation_strength(
-        reactivation_strength=reactivation_strength
+        reactivation_strength=reactivation_strength, n_top=2
     )
     sorted_pcs = classify_and_sort_place_cells(
         ensemble_matrix=ensemble_matrix, top_ensembles=top_ensembles
@@ -790,8 +874,15 @@ def main() -> None:
         ensemble_matrix=ensemble_matrix,
         sorted_pcs=sorted_pcs,
         reactivation=reactivation,
-        smooth=False,
+        smooth=True,
     )
+
+    plt.show()
+
+
+def plot_reactivation_strength_change(
+    reactivation_strength: np.ndarray, preactivation_strength: np.ndarray
+) -> None:
 
     total_reactivation = np.sum(reactivation_strength, axis=1)
     total_preactivation = np.sum(preactivation_strength, axis=1)
@@ -809,8 +900,9 @@ def main() -> None:
     )
 
     plt.ylabel("Reactivation strength (sum across time)")
-    plt.title(f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f}")
-    plt.show()
+    plt.title(
+        f"Mean change = {np.mean(total_reactivation - total_preactivation):.2f} p ={wilcoxon(total_reactivation, total_preactivation)[1]:.2f}",
+    )
 
 
 def load_data_from_cache(cache_file: Path) -> tuple:
@@ -860,6 +952,78 @@ def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
         lines = [p1, p2, p3]
         labels = [line.get_label() for line in lines]
         ax1.legend(lines, labels, loc="upper left")
+
+
+def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
+    """There is no guarentee that two runs of ICA (particularly from different programming languages with different random seeds)
+    will return the same:
+        numerical values
+        column order
+        or even sign (i.e. the same component may be positive or negative)
+
+    However their absolute sums should be similar. And the actual components (once sorted and the signs aligned)
+    should span the same subspace. You can test this by looking at the angles between two components.
+    They should be 0 (within floating point error)
+
+    """
+
+    assert np.sum(np.abs(W_py)) - np.sum(np.abs(W_mat)) < np.sum(np.abs(W_mat)) * 0.01
+
+    def sort_and_align(W):
+        # Sort columns by their L2 norm
+        norms = np.sum(W**2, axis=1)
+        order = np.argsort(norms)
+        W_sorted = W[order, :]
+        return W_sorted
+
+    W_py = sort_and_align(W_py)
+    W_mat = sort_and_align(W_mat)
+
+    # Align signs
+    for i in range(W_py.shape[1]):
+        if np.dot(W_py[:, i], W_mat[:, i]) < 0:
+            W_py[:, i] *= -1
+
+    test_subspace(W_py, W_mat)
+    # assert np.allclose(W_py, W_mat, atol=1e-3)
+    print("All close")
+
+
+def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
+    def orthonormalize(W):
+        # QR decomposition for orthonormal basis
+        Q, _ = np.linalg.qr(W)
+        return Q
+
+    Q1 = orthonormalize(W1)
+    Q2 = orthonormalize(W2)
+
+    # Compute principal angles (in radians)
+    angles = subspace_angles(Q2, Q1)
+    print("Max angle:", np.max(np.degrees(angles)))
+    assert np.max(np.degrees(angles)) < 1e-9
+
+
+def compare_to_matlab() -> None:
+
+    # test_data = np.load(
+    #     "/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0/oasis_spikes.npy"
+    # )
+    # test_data = gaussian_filter1d(test_data, sigma=30, axis=1)
+
+    # # take a random-ish subset of the online data
+    # test_data = test_data[:, 27000:100000]
+    # np.save("test_ensemble_data.npy", test_data)
+
+    matlab_result = np.load(
+        "/Users/jamesrowland/Code/Cell-Assembly-Detection/assembly_templates.npy"
+    )
+
+    test_data = np.load("test_ensemble_data.npy")
+
+    python_result = compute_ICA_components(test_data)
+
+    compare_run_results(matlab_result, python_result)
 
 
 if __name__ == "__main__":

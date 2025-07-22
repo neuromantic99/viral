@@ -2,6 +2,7 @@ import itertools
 import math
 from pathlib import Path
 import sys
+import warnings
 from matplotlib import pyplot as plt
 from scipy.stats import median_abs_deviation, zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
@@ -20,7 +21,7 @@ from viral.imaging_utils import (
     load_imaging_data,
     trial_is_imaged,
     activity_trial_position,
-    get_frozen_wheel_flu,
+    split_fluoresence_online_freeze,
 )
 
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
@@ -67,7 +68,7 @@ def grosmark_place_field(
             ],
             mad_threshold=1.5,
         )
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
+        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
             flu=spks_raw, wheel_freeze=session.wheel_freeze
         )
         # TODO: should pre and post be binarised as one?
@@ -138,6 +139,10 @@ def get_place_cells(
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
     n_shuffles = 2000
+    if n_shuffles < 2000:
+        warnings.warn(
+            "n_shuffles is less than 2000. This may not be enough to get a good estimate of the place cell distribution."
+        )
 
     all_trials = np.array(
         [
@@ -161,7 +166,7 @@ def get_place_cells(
     smoothed_matrix = np.nanmean(all_trials, 0)
 
     # Probably delete cache logic once we're all sorted
-    use_cache = False
+    use_cache = True
     cache_file = (
         HERE
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
@@ -204,8 +209,8 @@ def get_place_cells(
 
     place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
-    if plot:
-        plot_speed(session, rewarded, config)
+    # if plot:
+    #     plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -338,7 +343,7 @@ def offline_correlations(
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
         # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
     else:
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
+        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
             flu=spks, wheel_freeze=wheel_freeze
         )
         pre_corrs_real = get_offline_correlation_matrix(
@@ -534,7 +539,7 @@ def filter_additional_check(
         cell_not_place_activity = all_trials[:, cell, cell_out_of_place_field]
         count = 0
         for trial in range(n_trials):
-            if np.mean(cell_place_activity[trial, :]) > np.mean(
+            if np.nanmean(cell_place_activity[trial, :]) > np.nanmean(
                 cell_not_place_activity[trial, :]
             ):
                 count += 1
@@ -576,44 +581,6 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     )
 
     return circular_dist_matrix
-
-
-def binarise_spikes(spks: np.ndarray, mad_threshold: float = 1.5) -> np.ndarray:
-    """Implements the calcium imaging preprocessing stepts here:
-    https://www.nature.com/articles/s41593-021-00920-7#Sec12
-
-    Though the first steps done in our oasis fork.
-
-    Currently we are not doing wavelet denoising as I've found this makes the fit much worse.
-    We have added zhang baseline step. As without this, if our baseline drifts, higher baseline
-    periods are considered to have more spikes.
-
-    We are also not normalising by the residual between denoised and actual. It's not clear
-    how they do this. What factor are they reducing the residual by? The residual is some
-    massive number.
-
-    They threshold based on the MAD. But is it just the MAD or is the MAD deviation from the median?
-    I also had to take the MAD of only non-zero periods. As the raw MAD of all cells is 0. This may
-    not be true in the hippocampus which is why they may not do this. We're also not currently
-    altering the threshold depending or running or not. TOOD: DO THIS
-
-
-    """
-
-    non_zero_spikes = np.copy(spks)
-    non_zero_spikes[non_zero_spikes == 0] = np.nan
-
-    mad = median_abs_deviation(non_zero_spikes, axis=1, nan_policy="omit")
-
-    # Maybe
-    # threshold = mad * 1.5
-
-    # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * mad_threshold
-    mask = spks - threshold[:, np.newaxis] > 0
-    spks[~mask] = 0
-    spks[mask] = 1
-    return remove_consecutive_ones(spks)
 
 
 if __name__ == "__main__":

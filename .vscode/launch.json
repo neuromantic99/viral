@@ -60,6 +60,7 @@
       "type": "debugpy",
       "request": "launch",
       "program": "viral/run_oasis.py",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "console": "integratedTerminal",
       "justMyCode": true
     },
@@ -67,12 +68,14 @@
       "name": "Ensemble reactivation",
       "type": "debugpy",
       "request": "launch",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "program": "viral/ensemble_reactivation.py"
     },
     {
       "name": "learning stages",
       "type": "debugpy",
       "request": "launch",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "program": "viral/learning_stages.py",
       "console": "integratedTerminal",
       "justMyCode": true
