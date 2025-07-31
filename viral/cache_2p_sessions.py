@@ -654,6 +654,18 @@ def process_session(
             f,
         )
 
+    if wheel_freeze is not None:
+        from viral.run_oasis import main as oasis_main
+
+        s2p_path = tiff_directory / "suite2p" / "plane0"
+        if not (s2p_path / "oasis_spikes.npy").exists():
+            oasis_main(
+                s2p_path=s2p_path,
+                wheel_freeze=wheel_freeze,
+                parallel=True,
+                plot=False,
+            )
+
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
@@ -668,7 +680,6 @@ def check_against_suite2p_output(
 def main() -> None:
     """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
 
-    # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
     for mouse_name in ["JB034"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
