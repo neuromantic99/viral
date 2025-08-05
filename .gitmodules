@@ -1,3 +1,6 @@
 [submodule "OASIS"]
 	path = OASIS
 	url = https://github.com/j-friedrich/OASIS.git
+[submodule "OASIS"]
+	path = OASIS
+	url = https://github.com/j-friedrich/OASIS.git

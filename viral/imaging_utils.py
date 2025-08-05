@@ -375,5 +375,6 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
     return (mouse_name, date) in [
         ("JB011", "2024-10-22"),
         ("JB011", "2024-10-25"),
+        ("JB031", "2025-03-10"),
         ("JB034", "2025-07-04"),
     ]
