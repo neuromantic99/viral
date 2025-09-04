@@ -251,8 +251,10 @@ def offline_reactivation(
     of the bth ICA component was calculated as the square of the projection length of Zi on Pb as follows:
     Rbi = ZiT * Pb * Zb
     """
-    # TODO:
-    # is Z_b a typo in the Grosmark paper? It would be ZiT * Pb * Zi
+
+    reactivation = zscore(reactivation, axis=1)
+    # Remove nans from silent neurons
+    reactivation = np.nan_to_num(reactivation)
 
     if do_shuffle:
         # """ICA components were shuffled by randomly permuting the weight matrix w across
