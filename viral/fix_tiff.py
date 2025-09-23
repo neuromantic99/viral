@@ -15,6 +15,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple
 from ScanImageTiffReader import ScanImageTiffReader
+from natsort import natsorted
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -68,8 +69,7 @@ def check_if_tiff_is_broken(tiff_path: Path) -> bool:
     # Doing this with ScanImageTiffReader first as it is faster than tifffile
     print(f"Checking {tiff_path}")
     try:
-        tiff_file = ScanImageTiffReader(str(tiff_path))
-        tiff_file.data()
+        ScanImageTiffReader(str(tiff_path))
     except Exception as e:
         print(f"Error found with ScanImageTiffReader: '{e}'")
         return True
@@ -79,18 +79,17 @@ def check_if_tiff_is_broken(tiff_path: Path) -> bool:
 def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
     """Looks for broken tiff files in a given session. It then caches all tiff metadata and saves fixed tiff files."""
     tiffs_dir = TIFF_UMBRELLA / date / mouse_name
-    tiff_files = sorted(tiffs_dir.glob("*.tif")) + sorted(tiffs_dir.glob("*.tiff"))
-    tiff_files_checked = list()
+    tiff_files = natsorted(tiffs_dir.glob("*.tif*"))
+    print(f"Found tiffs: {tiff_files}")
     broken_tiffs = list()
     if cache_metadata:
         stack_lengths = list()
         epochs = list()
         all_tiff_timestamps = list()
-    for _, f in enumerate(tiff_files):
+    for f in tiff_files:
         broken = check_if_tiff_is_broken(f)
         if broken:
             broken_tiffs.append(f)
-            tiff_files_checked.append((f, True))
             if cache_metadata:
                 stack_length, epoch, timestamps = extract_metadata_broken_tiff(f)
                 stack_lengths.append(stack_length)
@@ -98,7 +97,6 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
                 check_no_dropped_frames(timestamps)
                 all_tiff_timestamps.extend(timestamps)
         else:
-            tiff_files_checked.append((f, False))
             if cache_metadata:
                 stack_length, epoch, timestamps = extract_metadata(
                     ScanImageTiffReader(str(f))
@@ -124,7 +122,11 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
 
 
 if __name__ == "__main__":
-    mouse_name = "JB015"
-    dates = ["2024-11-20"]
+    # mouse_name = "JB018"
+    # dates = ["2024-11-27"]
+    # TODO: suite2p!
+
+    mouse_name = "JB020"
+    dates = ["2025-02-06"]
     for date in dates:
         main(mouse_name, date, True)
