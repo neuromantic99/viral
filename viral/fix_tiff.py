@@ -26,7 +26,7 @@ from viral.cache_2p_sessions import extract_metadata, check_no_dropped_frames
 
 def extract_metadata_broken_tiff(
     tiff_path: Path,
-) -> Tuple[float, np.ndarray, List[float]]:
+) -> Tuple[int, np.ndarray, List[float]]:
     """Extract metadata from tiff file until the broken frame (last frame)"""
     with tifffile.TiffFile(tiff_path) as tiff:
         n_frames = len(tiff.pages)
@@ -54,8 +54,8 @@ def save_tiff_until_broken(tiff_path: Path) -> None:
     """Save broken tiff file until the broken frame (last frame)."""
     print(f"Fixing {tiff_path}")
     # need to read the entire file to get the number of frames
-    tiff = tifffile.TiffFile(tiff_path)
-    n_frames = len(tiff.pages)
+    with tifffile.TiffFile(tiff_path) as tiff:
+        n_frames = len(tiff.pages)
     # then read all but the last, presumably broken, frame
     tiff_read = tifffile.imread(tiff_path, key=range(0, n_frames - 1, 1))
     output_path = tiff_path.parent / (tiff_path.stem + "_until_broken.tiff")
@@ -87,11 +87,6 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
         epochs = list()
         all_tiff_timestamps = list()
     for _, f in enumerate(tiff_files):
-        if not (tiffs_dir / f).is_file() or Path(f).suffix.lower() not in [
-            ".tif",
-            ".tiff",
-        ]:
-            continue
         broken = check_if_tiff_is_broken(f)
         if broken:
             broken_tiffs.append(f)
