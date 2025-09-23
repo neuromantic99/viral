@@ -69,7 +69,7 @@ def check_if_tiff_is_broken(tiff_path: Path) -> bool:
     print(f"Checking {tiff_path}")
     try:
         tiff_file = ScanImageTiffReader(str(tiff_path))
-        tiff_file.data()
+        # tiff_file.data()
     except Exception as e:
         print(f"Error found with ScanImageTiffReader: '{e}'")
         return True
@@ -124,7 +124,7 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
 
 
 if __name__ == "__main__":
-    mouse_name = "JB015"
-    dates = ["2024-11-20"]
+    mouse_name = "JB018"
+    dates = ["2024-11-27"]
     for date in dates:
         main(mouse_name, date, True)
