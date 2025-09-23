@@ -76,6 +76,14 @@
       "program": "viral/learning_stages.py",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "fix tiff",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fix_tiff.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ]
 }
