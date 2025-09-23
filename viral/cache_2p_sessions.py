@@ -516,35 +516,9 @@ def get_tiff_metadata(
     epochs = []
     all_tiff_timestamps = []
     for tiff in tiffs:
-        tiff_timestamps = [
-            float(
-                re.search(
-                    r"frameTimestamps_sec\s*=\s*(-?\d+\.\d+)",
-                    tiff.description(idx),
-                )[1]
-            )
-            for idx in range(tiff.shape()[0])
-        ]
-        all_tiff_timestamps.extend(tiff_timestamps)
+        tiff_timestamps = extract_metadata(epochs, all_tiff_timestamps, tiff)
 
-        # Epoch is the same for all frames
-        epochs.append(
-            list(
-                map(
-                    float,
-                    re.search(r"epoch\s*=\s*\[([^\]]+)\]", tiff.description(0))[
-                        1
-                    ].split(),
-                )
-            )
-        )
-
-        diffed = np.diff(tiff_timestamps)
-
-        # Check no dropped frames in the middle
-        assert (
-            round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
-        ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
+        check_no_dropped_frames(tiff_timestamps)
 
     if use_cache:
         for variable, name in zip(
@@ -557,6 +531,35 @@ def get_tiff_metadata(
             )
 
     return stack_lengths, epochs, all_tiff_timestamps
+
+
+def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[int, np.ndarray, List[float]]:
+    stack_length = tiff.shape()[0]
+    tiff_timestamps = [
+        float(
+            re.search(
+                r"frameTimestamps_sec\s*=\s*(-?\d+\.\d+)",
+                tiff.description(idx),
+            )[1]
+        )
+        for idx in range(tiff.shape()[0])
+    ]
+    if any([t is None for t in tiff_timestamps]):
+        raise ValueError("Could not extract all timestamps from tiff description")
+    # epoch (same across frames, grab from first description)
+    epoch_match = re.search(r"epoch\s*=\s*\[([^\]]+)\]", tiff.description(0))
+    if epoch_match is None:
+        raise ValueError("Could not extract epoch from tiff description")
+    epoch = list(map(float, epoch_match[1].split()))
+    return stack_length, epoch, tiff_timestamps
+
+
+def check_no_dropped_frames(tiff_timestamps) -> None:
+    diffed = np.diff(tiff_timestamps)
+    # Check no dropped frames in the middle
+    assert (
+        round(np.max(diffed), 3) == round(np.min(diffed), 3) == 0.033
+    ), f"Dropped frames in the middle based on tiff timestamps. Min diffed = {np.min(diffed)}, max diffed = {np.max(diffed)}"
 
 
 def check_timestamps(
