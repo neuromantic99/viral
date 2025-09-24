@@ -123,10 +123,6 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
 
 
 if __name__ == "__main__":
-    # mouse_name = "JB018"
-    # dates = ["2024-11-27"]
-    # TODO: suite2p!
-
     mouse_name = "JB020"
     dates = ["2025-02-06"]
     for date in dates:
