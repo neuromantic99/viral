@@ -1,5 +1,6 @@
 import itertools
 import math
+import math
 from pathlib import Path
 import sys
 from matplotlib import pyplot as plt
@@ -21,6 +22,7 @@ from viral.imaging_utils import (
     trial_is_imaged,
     activity_trial_position,
     get_frozen_wheel_flu,
+    get_frozen_wheel_flu,
 )
 
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
@@ -30,7 +32,7 @@ from viral.utils import (
     degrees_to_cm,
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
-    has_n_consecutive_trues,
+    has_five_consecutive_trues,
     remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
@@ -48,74 +50,8 @@ def grosmark_place_field(
     config: GrosmarkConfig,
     plot: bool = True,
 ) -> None:
-    """
-    Grosmark et al. place field analysis.
-    1. get place cell mask
-    2. get peak indices and peak positions
-    3. do pair-wise correlations
-    """
-    if session.wheel_freeze is None:
-        spks = binarise_spikes(spks_raw)
-    else:
-        # """Based on the observed differences in calcium activity waveforms between the online and
-        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
-        online_spks = binarise_spikes(
-            spks_raw[
-                :,
-                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
-            ],
-            mad_threshold=1.5,
-        )
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
-            flu=spks_raw, wheel_freeze=session.wheel_freeze
-        )
-        # TODO: should pre and post be binarised as one?
-        offline_spks_pre = binarise_spikes(
-            offline_spks_pre,
-            mad_threshold=1.25,
-        )
-        offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
-        spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
-        assert spks_raw.shape == spks.shape
-
-    pcs, smoothed_matrix = get_place_cells(
-        session=session, spks=spks, rewarded=rewarded, config=config, plot=plot
-    )
-
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
-
-    peak_indices = np.argmax(smoothed_matrix, axis=1)
-    peak_position_cm = peak_indices * config.bin_size + config.start
-    sorted_order = np.argsort(peak_indices)
-    peak_position_cm = peak_position_cm[sorted_order]
-    smoothed_matrix = smoothed_matrix[sorted_order, :]
-    spks = spks[sorted_order, :]
-
-    if plot:
-        plot_circular_distance_matrix(smoothed_matrix)
-
-    offline_correlations(
-        session,
-        spks,
-        peak_position_cm=peak_position_cm,
-        wheel_freeze=session.wheel_freeze,
-        rewarded=rewarded,
-    )
-
-
-def get_place_cells(
-    session: Cached2pSession,
-    spks: np.ndarray,
-    config: GrosmarkConfig,
-    rewarded: bool | None,
-    plot: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    From Grosmark et al.:
-    The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
-    2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
+    """The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
+      2-cm spatial bins. For each cell, the as within spatial-bin firing rate was calculated across all bins
     based on its sparsified spike estimate vector, Ssp. This firing rate by position vector was subsequently
     smoothed with a 7.5-cm Gaussian kernel leading to the smoothed firing rate by position vector.
     In addition, for each cell, 2,000 shuffled smoothed firing rate by position vectors were computed for each
@@ -578,7 +514,7 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-def binarise_spikes(spks: np.ndarray, mad_threshold: float = 1.5) -> np.ndarray:
+def binarise_spikes(spks: np.ndarray) -> np.ndarray:
     """Implements the calcium imaging preprocessing stepts here:
     https://www.nature.com/articles/s41593-021-00920-7#Sec12
 
@@ -609,7 +545,7 @@ def binarise_spikes(spks: np.ndarray, mad_threshold: float = 1.5) -> np.ndarray:
     # threshold = mad * 1.5
 
     # Or maybe
-    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * mad_threshold
+    threshold = np.nanmedian(non_zero_spikes, axis=1) + mad * 1.5
     mask = spks - threshold[:, np.newaxis] > 0
     spks[~mask] = 0
     spks[mask] = 1

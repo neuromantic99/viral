@@ -17,7 +17,6 @@ from viral.utils import (
     array_bin_mean,
     degrees_to_cm,
     get_speed_positions,
-    get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     remove_consecutive_ones,
     shuffle_rows,

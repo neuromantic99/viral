@@ -1,39 +1,44 @@
+import pickle
+import time
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import sys
 from pathlib import Path
 from typing import Tuple
 
 import pywt
-from tqdm import tqdm
-from scipy.stats import median_abs_deviation
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
-sys.path.append(str(HERE.parent / "OASIS"))
 
-from OASIS.oasis.functions import deconvolve
+import pywt
+from tqdm import tqdm
+import concurrent.futures
 
-from BaselineRemoval import BaselineRemoval
-
-from viral.constants import TIFF_UMBRELLA
-from viral.imaging_utils import subtract_neuropil, compute_dff
+from viral.constants import CACHE_PATH, TIFF_UMBRELLA
 
 
-def get_f(s2p_path: Path) -> np.ndarray:
-    """
-    Returns fluorescence with neuropil signal subtracted.
-    """
-    # not using iscell as it will be used in later analysis steps
-    f_raw = np.load(s2p_path / "F.npy")
-    f_neu = np.load(s2p_path / "Fneu.npy")
-    print("Loaded fluorescence data and subtracted neuropil")
-    return subtract_neuropil(f_raw, f_neu)
+from viral.models import Cached2pSession, WheelFreeze
+from viral.utils import remove_consecutive_ones
+
+
+from oasis.functions import (
+    deconvolve,
+)
+
+from scipy.stats import median_abs_deviation
+from scipy.ndimage import percentile_filter
+
+""" 
+This now does every step in the Calcium activity detection section in Grosmark.
+Though i've found the deconvolution to be better without the wavelet denoising.
+"""
 
 
 def modwt_denoise(
-    signal: np.ndarray, wavelet: str = "sym4", level: int = 3
+    signal: np.ndarray, wavelet: str = "sym4", level: int = 5
 ) -> np.ndarray:
     """
     Perform MODWT-based wavelet denoising similar to MATLAB's wden with 'modwtsqtwolog'.
@@ -45,6 +50,10 @@ def modwt_denoise(
 
     Returns:
         array: Denoised signal.
+
+    N.B Have checked with real data that this matches matlab and it does.
+
+    This is not currently used as I've found the deconvolution to be better without it.
     """
     # Perform MODWT (Maximal Overlap Discrete Wavelet Transform)
     coeffs = pywt.wavedec(signal, wavelet, level=level, mode="periodization")
@@ -68,42 +77,32 @@ def modwt_denoise(
 
 def grosmark_preprocess(
     s2p_path: Path, plot: bool = False
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """To reduce calcium white 'scatter' noise and to improve signal detection, a wavelet-based denoising algorithm (Matlab 2019a, wden function,
-    using the parameters modwtsqtwolog, s, mln, 5 and sym4) was applied to the calcium activity traces resulting in the denoised activity trace vector Tdn.
-    This algorithm was adopted as, when compared to other algorithms such as Savitsky-Golay filtering,
-    it resulted in robust white noise reduction while minimally altering the underlying waveforms of observable calcium transient events.
-    Subsequently, the per-trace median was subtracted from each of the smoothed traces and they were deconvolved using a
-    first-order autoregressive model as implemented in the OASIS software package.
-    This algorithm outputs the deconvolved (spike estimate) of the trace Csp, and a denoised trace reconstruction Test based on the re-convolution of the spike estimates.
-    The deconvolution noise was taken as the m.a.d. of the residual of the observed trace T and the reconstructed trace Test.
-    Spike estimates, Csp, were normalized by the deconvolution noise [...]"""
+) -> Tuple[np.ndarray, np.ndarray]:
     f = get_f(s2p_path)
 
     all_spikes = []
     all_spikes_norm = []
     all_denoised = []
-
-    for idx, cell in enumerate(tqdm(f)):
+    for idx, cell in enumerate(f):
         wavelet_denoised = modwt_denoise(cell, wavelet="sym4", level=5)
         wavelet_denoised = wavelet_denoised - np.median(wavelet_denoised)
-        oasis_denoised, spikes, b, g, lam = deconvolve(
+        denoised, spikes, b, g, lam = deconvolve(
             wavelet_denoised, penalty=1, b_nonneg=False
         )
+        if plot and idx < 30:
+            _, ax1 = plt.subplots()
+            baseobj = BaselineRemoval(cell)
+            cell_baselined = baseobj.ZhangFit()
 
-        residual = np.abs(cell - oasis_denoised)
+            residual = np.sum(np.abs(cell - cell_baselined))
 
-        # if plot and idx < 30:
-        #     baseobj = BaselineRemoval(cell)
-        #     cell_baselined = baseobj.ZhangFit()
-        #     print(f"residual is {residual}")
+            print(f"residual is {residual}")
 
-        #     _, ax1 = plt.subplots()
-        #     # ax1.plot(cell, color="pink")
-        #     ax1.plot(cell_baselined, color="blue")
-        #     ax1.plot(spikes, color="black")
-        #     # ax2 = ax1.twinx()
-        #     # ax2.plot(wavelet_denoised, color="pink")
+            # ax1.plot(cell, color="pink")
+            ax1.plot(cell_baselined, color="blue")
+            ax1.plot(spikes, color="black")
+            # ax2 = ax1.twinx()
+            # ax2.plot(wavelet_denoised, color="pink")
 
         """The deconvolution noise was taken as the m.a.d. of the residual of the observed trace T and the reconstructed trace Test.
         Spike estimates, Csp, were normalized by the deconvolution noise [...]"""
@@ -115,7 +114,7 @@ def grosmark_preprocess(
     if plot:
         plt.show()
 
-    return np.array(all_spikes), np.array(all_spikes_norm), np.array(all_denoised)
+    return np.array(all_spikes), np.array(all_denoised)
 
 
 def main(mouse: str, date: str, grosmark: bool = False) -> None:
@@ -127,7 +126,7 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
     if grosmark:
         print("Using grosmark preprocessing")
-        spikes, spikes_norm, denoised = grosmark_preprocess(s2p_path, plot)
+        spikes, denoised = grosmark_preprocess(s2p_path, plot)
 
     else:
         dff = compute_dff(get_f(s2p_path))
@@ -160,13 +159,61 @@ def main(mouse: str, date: str, grosmark: bool = False) -> None:
 
     np.save(s2p_path / "oasis_spikes.npy", spikes)
     np.save(s2p_path / "oasis_denoised.npy", denoised)
-    if grosmark:
-        np.save(s2p_path / "oasis_spikes_norm.npy", spikes_norm)
     print("Saved oasis spikes and denoised data")
     if plot:
         plt.show()
 
 
+def plot_result(
+    raw: np.ndarray,
+    cell_baselined: np.ndarray,
+    baseline: np.ndarray,
+    oasis_denoised: np.ndarray,
+    spikes: np.ndarray,
+) -> Figure:
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax2 = ax.twinx()
+    (p1,) = ax.plot(
+        spikes,
+        color="red",
+        label=f"spikes",
+        alpha=1,
+    )
+    # ax.hlines(1.25, color="red", linestyle="--", xmin=0, xmax=27000)
+    # ax.hlines(1.5, color="red", linestyle="--", xmin=27000, xmax=len(cell) - 27000)
+    # ax.hlines(1.25, color="red", linestyle="--", xmin=len(cell) - 27000, xmax=len(cell))
+
+    (p2,) = ax2.plot(cell_baselined, color="blue", label="baselined")
+    (p5,) = ax2.plot(oasis_denoised, color="green", label="denoised")
+    # (p6,) = ax.plot(wavelet_denoised, color="orange", label="wavelet denoised")
+    (p3,) = ax2.plot(raw, color="black", label="raw", alpha=0.01)
+    (p4,) = ax2.plot(baseline, color="pink", label="baseline", alpha=0.01)
+    lines = [p1, p2, p3, p4, p5]
+    labels = [line.get_label() for line in lines]
+    ax.set_ylabel("spikes")
+    ax2.set_ylabel("flu")
+    ax.legend(lines, labels, loc="upper right")
+    return fig
+
+
+def main(
+    s2p_path: Path, wheel_freeze: WheelFreeze, parallel: bool = True, plot: bool = False
+) -> None:
+
+    all_spikes, all_denoised = preprocess_and_run(
+        s2p_path,
+        wheel_freeze=wheel_freeze,
+        plot=plot,
+        parallel=parallel,
+    )
+
+    all_spikes = remove_consecutive_ones(all_spikes)
+
+    np.save(s2p_path / "oasis_spikes.npy", all_spikes)
+    np.save(s2p_path / "oasis_denoised.npy", all_denoised)
+
+
 if __name__ == "__main__":
-    main(mouse="JB031", date="2025-03-25", grosmark=True)
+    main(mouse="JB031", date="2025-03-07", grosmark=False)
     # main(mouse="JB027", date="2025-02-26", grosmark=True)

@@ -231,9 +231,23 @@ def activity_trial_position(
     verbose: if True, print the binning information
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
-    position, frame_position = get_online_position_and_frames(
-        trial, wheel_circumference
+
+    # TODO: remove non running epochs?
+
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
     )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+
+    assert len(position) == len(frame_position)
 
     dff_position_list = []
 
