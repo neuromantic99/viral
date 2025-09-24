@@ -236,7 +236,6 @@ def preprocess_and_run(
         return all_spikes, all_denoised
 
     all_spikes = []
-    all_spikes_norm = []
     all_denoised = []
     for idx, cell in tqdm(enumerate(f)):
         mouse, date = get_mouse_and_date_from_path(s2p_path)
@@ -253,12 +252,8 @@ def preprocess_and_run(
             / f"{mouse}_{date}_{idx}.pkl",
         )
 
-        """The deconvolution noise was taken as the m.a.d. of the residual of the observed trace T and the reconstructed trace Test.
-        Spike estimates, Csp, were normalized by the deconvolution noise [...]"""
-        spikes_norm = spikes / median_abs_deviation(residual)
         all_spikes.append(spikes)
-        all_spikes_norm.append(spikes_norm)
-        all_denoised.append(oasis_denoised)
+        all_denoised.append(denoised)
 
         if idx == 10 and plot:
             plt.show()
