@@ -22,6 +22,7 @@ from viral.imaging_utils import (
     trial_is_imaged,
     activity_trial_position,
     split_fluoresence_online_freeze,
+    get_frozen_wheel_flu,
 )
 
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
@@ -68,10 +69,10 @@ def grosmark_place_field(
             ],
             mad_threshold=1.5,
         )
-        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
+        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
             flu=spks_raw, wheel_freeze=session.wheel_freeze
         )
-        # TODO: should pre and post be binarised as one?
+        # According to Grosmark, each offline epoch is singly binarised
         offline_spks_pre = binarise_spikes(
             offline_spks_pre,
             mad_threshold=1.25,
@@ -166,7 +167,7 @@ def get_place_cells(
     smoothed_matrix = np.nanmean(all_trials, 0)
 
     # Probably delete cache logic once we're all sorted
-    use_cache = True
+    use_cache = False
     cache_file = (
         HERE
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
@@ -209,8 +210,8 @@ def get_place_cells(
 
     place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
-    # if plot:
-    #     plot_speed(session, rewarded, config)
+    if plot:
+        plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)

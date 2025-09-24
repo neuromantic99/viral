@@ -1,6 +1,7 @@
+OASIS/  
 *.pkl
-*.npy
 *.npz
+*.npy
 constants.py
 
 *.png
