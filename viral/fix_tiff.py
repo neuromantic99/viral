@@ -2,10 +2,11 @@
 Utils to fix broken tiff files by saving all but the last, presumably broken, frame.
 Recommended to fix in this order:
 1. If you set up suite2p to be verbose (print the tiff file name when loading), you can skip step 2.
-2. Use "find_broken_tiffs_in_session" to get a list of broken tiff files in a given session directory.
+2. Use "check_if_tiff_is_broken" to check a list of tiff files in a given session directory to find broken tiff files.
 3. Use "save_tiff_until_broken" on each broken tiff file to save a new tiff file with all but the last frame.
 4. Carefully move the broken file from the original directory to the "damaged_tiffs" directory.
 5. Now re-run suite2p on the session directory.
+When using main(), it will check all tiff files in a given session directory, cache metadata, and fix broken tiff files.
 """
 
 import tifffile
@@ -40,14 +41,14 @@ def extract_metadata_broken_tiff(
             )
             timestamps.append(float(timestamp_match[1]))
 
-        if timestamps is None or len(timestamps) != n_frames - 1:
+        if any([t is None for t in timestamps]):
             raise ValueError("Could not extract all timestamps from tiff description")
         # epoch (same across frames, grab from first description)
         description0 = tiff.pages[0].tags["ImageDescription"].value
         epoch_match = re.search(r"epoch\s*=\s*\[([^\]]+)\]", description0)
-        epoch = list(map(float, epoch_match[1].split()))
-        if epoch is None:
+        if epoch_match is None:
             raise ValueError("Could not extract epoch from tiff description")
+        epoch = list(map(float, epoch_match[1].split()))
         return n_frames - 1, epoch, timestamps
 
 
