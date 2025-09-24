@@ -680,8 +680,8 @@ def check_against_suite2p_output(
 def main() -> None:
     """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
 
-    redo = True
-    for mouse_name in ["JB034"]:
+    redo = False
+    for mouse_name in ["JB030", "JB031", "JB032", "JB033", "JB034", "JB035"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:

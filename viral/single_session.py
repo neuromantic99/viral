@@ -18,6 +18,7 @@ from viral.constants import BEHAVIOUR_DATA_PATH, ENCODER_TICKS_PER_TURN, SPREADS
 
 from viral.models import SpeedPosition, TrialInfo, TrialSummary
 
+
 from viral.utils import (
     degrees_to_cm,
     get_speed_positions,
@@ -31,6 +32,7 @@ sns.set_theme(context="talk", style="ticks")
 MOUSE = "JB036"
 DATE = "2025-07-10"
 SESSION_NUMBER = "002"
+
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
