@@ -588,8 +588,6 @@ def plot_grosmark_panel(
     else:
         processed_reactivation_strength = reactivation_strength
 
-    processed_reactivation_strength = zscore(processed_reactivation_strength, axis=1)
-
     for i, idx in enumerate(top_ensembles):
         ax1.plot(
             processed_reactivation_strength[idx, xmin:xmax],
@@ -699,11 +697,12 @@ def get_ssp_vectors(
 
 
 def main() -> None:
-    mouse = "JB036"
-    date = "2025-07-05"
+
+    mouse = "JB030"
+    date = "2025-03-13"
 
     verbose = True
-    use_cache = False
+    use_cache = True
 
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -751,12 +750,9 @@ def main() -> None:
         )
 
         t1 = time.time()
-        # pcs_mask, _ = get_place_cells(
-        #     session=session, spks=spks, rewarded=None, config=config, plot=True
-        # )
-
-        print("AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHh")
-        pcs_mask = [True] * spks.shape[0]
+        pcs_mask, _ = get_place_cells(
+            session=session, spks=spks, rewarded=None, config=config, plot=True
+        )
 
         print(f"Time to get place cells: {time.time() - t1}")
         place_cells = spks[pcs_mask, :]
@@ -779,10 +775,6 @@ def main() -> None:
             ssp_vectors=ssp_vectors_shuffled
         ).shape[0]
 
-        # Using this instead of passing ssp_vectors_shuffled to compute_ICA_components
-        # as there is normally 0 significant components
-        ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
-
         print("ICA done")
         # OFFLINE
         t2 = time.time()
@@ -792,20 +784,32 @@ def main() -> None:
         preactivation_strength = offline_reactivation(
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
+        reactivation_strength_shuffled = []
+        preactivation_strength_shuffled = []
 
-        # Plot the component changes
+        for shuffle in tqdm(range(100)):
+            ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
+            reactivation_strength_shuffled.append(
+                offline_reactivation(
+                    reactivation=reactivation,
+                    ensemble_matrix=ensemble_matrix_shuffled,
+                )
+            )
 
-        # TODO: get rid of the "do_shuffle" argument
-        preactivation_shuffled = shuffle_rows(preactivation)
-        reactivation_shuffled = shuffle_rows(reactivation)
-        reactivation_strength_shuffled = offline_reactivation(
-            reactivation=reactivation_shuffled,
-            ensemble_matrix=ensemble_matrix_shuffled,
+            preactivation_strength_shuffled.append(
+                offline_reactivation(
+                    reactivation=preactivation,
+                    ensemble_matrix=ensemble_matrix_shuffled,
+                )
+            )
+
+        reactivation_strength_shuffled = np.percentile(
+            np.array(reactivation_strength_shuffled), 95, axis=0
         )
-        preactivation_strength_shuffled = offline_reactivation(
-            reactivation=preactivation_shuffled,
-            ensemble_matrix=ensemble_matrix_shuffled,
+        preactivation_strength_shuffled = np.percentile(
+            np.array(preactivation_strength_shuffled), 95, axis=0
         )
+
         print(f"Time to get reactivation strength(s): {time.time() - t2}")
         t3 = time.time()
         pcc_scores = get_normalised_pcc_scores(
@@ -814,10 +818,6 @@ def main() -> None:
             ensemble_matrix=ensemble_matrix,
         )
         print(f"Time to get PCC scores: {time.time() - t3}")
-
-        # TODO: should the top ensembles be the same for reactivation and preactivation?
-        # I mean we would look at the reactivation strength of the same ensembles?
-
         print("Saving cache")
         np.savez(
             cache_file,
