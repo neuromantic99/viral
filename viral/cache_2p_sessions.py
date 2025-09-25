@@ -516,8 +516,7 @@ def get_tiff_metadata(
     epochs = []
     all_tiff_timestamps = []
     for tiff in tiffs:
-        tiff_timestamps = extract_metadata(epochs, all_tiff_timestamps, tiff)
-
+        stack_lengths, epochs, tiff_timestamps = extract_metadata(tiff)
         check_no_dropped_frames(tiff_timestamps)
 
     if use_cache:

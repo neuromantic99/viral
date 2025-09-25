@@ -3,11 +3,9 @@ Utils to fix broken tiff files by saving all but the last, presumably broken, fr
 Recommended to fix in this order:
 1. If you set up suite2p to be verbose (print the tiff file name when loading), you can skip step 2.
 2. Use "check_if_tiff_is_broken" to check a list of tiff files in a given session directory to find broken tiff files.
-2. Use "check_if_tiff_is_broken" to check a list of tiff files in a given session directory to find broken tiff files.
 3. Use "save_tiff_until_broken" on each broken tiff file to save a new tiff file with all but the last frame.
 4. Carefully move the broken file from the original directory to the "damaged_tiffs" directory.
 5. Now re-run suite2p on the session directory.
-When using main(), it will check all tiff files in a given session directory, cache metadata, and fix broken tiff files.
 When using main(), it will check all tiff files in a given session directory, cache metadata, and fix broken tiff files.
 """
 
@@ -127,7 +125,7 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
 
 
 if __name__ == "__main__":
-    mouse_name = "JB018"
-    dates = ["2024-11-27"]
+    mouse_name = "JB011"
+    dates = ["2024-11-20"]
     for date in dates:
         main(mouse_name, date, True)
