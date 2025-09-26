@@ -22,7 +22,6 @@ from viral.imaging_utils import (
     trial_is_imaged,
     activity_trial_position,
     split_fluoresence_online_freeze,
-    get_frozen_wheel_flu,
 )
 
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
