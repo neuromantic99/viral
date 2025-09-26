@@ -225,7 +225,7 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     n_significant_components = np.sum(eigenvalues > lambda_max)
 
     if n_significant_components < 1:
-        return np.zeros((0, ssp_vectors_z.shape[0]))
+        return np.zeros((ssp_vectors_z.shape[0], 0))
 
     return fast_ica_sklearn(ssp_vectors_z, n_significant_components)
 
@@ -782,7 +782,7 @@ def main() -> None:
         ensemble_matrix = compute_ICA_components(ssp_vectors=ssp_vectors)
         num_shuffled_components = compute_ICA_components(
             ssp_vectors=ssp_vectors_shuffled
-        ).shape[0]
+        ).shape[1]
 
         print("ICA done")
         # OFFLINE
