@@ -9,6 +9,7 @@ from typing import Tuple
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
+sys.path.append(str(HERE.parent / "OASIS"))
 sys.path.append(str(HERE.parent.parent))
 
 import pywt
@@ -336,9 +337,8 @@ def main(
 
 
 if __name__ == "__main__":
-    mouse_name = "JB036"
-    date = "2025-07-05"
-    cache_path = CACHE_PATH / f"{mouse_name}_{date}.json"
+
+    cache_files = CACHE_PATH.glob("*.json")
     s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
     cached_session = Cached2pSession.model_validate_json(cache_path.read_text())
     assert cached_session.wheel_freeze is not None

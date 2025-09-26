@@ -1,5 +1,6 @@
 annotated-types==0.7.0
 BaselineRemoval==0.1.6
+black==25.9.0
 cachetools==5.5.1
 certifi==2025.1.31
 cffi==1.17.1
@@ -26,6 +27,8 @@ joblib==1.4.2
 kiwisolver==1.4.8
 MarkupSafe==3.0.2
 matplotlib==3.10.0
+mypy==1.18.2
+mypy_extensions==1.1.0
 natsort==8.4.0
 nose2==0.15.1
 npTDMS==1.10.0
