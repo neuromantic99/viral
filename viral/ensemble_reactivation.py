@@ -698,8 +698,17 @@ def get_ssp_vectors(
 
 def main() -> None:
 
-    mouse = "JB030"
-    date = "2025-03-13"
+    # This is the file that's saved by the full grosmark oasis preprocessing as a flag
+    valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
+    # valid_sessions = np.load("valid_sessions.npy", allow_pickle=True)
+
+    for session_idx in range(len(valid_sessions)):
+        session_path = valid_sessions[session_idx]
+        mouse = session_path.parts[-4]
+        date = session_path.parts[-5]
+        #  Using this dumb logic to select a mouse for now
+        if mouse == "JB033":
+            break
 
     verbose = True
     use_cache = True
@@ -842,6 +851,19 @@ def main() -> None:
             f"# significant components (Marcenko-Pastur), shuffled data: {num_shuffled_components if not use_cache else 'not computed'}"
         )
 
+    significant_reactivation = (
+        reactivation_strength > reactivation_strength_shuffled * 1.5
+    )
+    significant_preactivation = (
+        preactivation_strength > preactivation_strength_shuffled * 1.5
+    )
+
+    only_significant_reactivation = reactivation_strength.copy()
+    only_significant_preactivation = preactivation_strength.copy()
+
+    only_significant_reactivation[~significant_reactivation] = np.nan
+    only_significant_preactivation[~significant_preactivation] = np.nan
+
     plot_reactivation_strength_change(
         reactivation_strength=reactivation_strength,
         preactivation_strength=preactivation_strength,
@@ -878,8 +900,6 @@ def main() -> None:
         reactivation=reactivation,
         smooth=True,
     )
-
-    plt.show()
 
 
 def plot_reactivation_strength_change(
