@@ -34,12 +34,7 @@ def load_imaging_data(
     print(f"Suite 2p path is {s2p_path}")
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
-    if not (s2p_path / "oasis_spikes.npy").exists():
-        from viral.run_oasis import main as run_oasis
-
-        run_oasis(mouse=mouse, date=date, grosmark=False)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
 
