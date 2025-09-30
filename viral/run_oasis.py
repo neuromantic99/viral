@@ -94,7 +94,7 @@ def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
 
 def process_cell(
     cell: np.ndarray,
-    wheel_freeze: WheelFreeze,
+    wheel_freeze: WheelFreeze | None,
     plot: bool = False,
     figure_path: Path | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -104,8 +104,8 @@ def process_cell(
     spikes = np.array([])
     denoised = np.array([])
 
-    for chunk_name, chunk in zip(
-        ["pre", "online", "post"],
+    chunk_names = ["pre", "online", "post"] if wheel_freeze is not None else ["online"]
+    chunks = (
         [
             cell[
                 wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame
@@ -116,8 +116,12 @@ def process_cell(
             cell[
                 wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame
             ],
-        ],
-    ):
+        ]
+        if wheel_freeze is not None
+        else [cell]
+    )
+
+    for chunk_name, chunk in zip(chunk_names, chunks, strict=True):
         raw = np.append(raw, chunk)
         chunk_baselined, chunk_baseline = compute_dff_percentile_filter(
             chunk, percentile=5, window_size_seconds=90
@@ -193,7 +197,7 @@ def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
 
 
 def _process_cell_no_plot_with_index(
-    args: tuple[int, np.ndarray, WheelFreeze],
+    args: tuple[int, np.ndarray, WheelFreeze | None],
 ) -> tuple[int, np.ndarray, np.ndarray]:
     """Driver for parallel processing, ensure cells are returned in the correct order"""
     idx, cell, wheel_freeze = args
@@ -206,7 +210,7 @@ def _process_cell_no_plot_with_index(
 
 def preprocess_and_run(
     s2p_path: Path,
-    wheel_freeze: WheelFreeze,
+    wheel_freeze: WheelFreeze | None,
     plot: bool = False,
     parallel: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -320,7 +324,10 @@ def plot_result(
 
 
 def main(
-    s2p_path: Path, wheel_freeze: WheelFreeze, parallel: bool = True, plot: bool = False
+    s2p_path: Path,
+    wheel_freeze: WheelFreeze | None,
+    parallel: bool = True,
+    plot: bool = False,
 ) -> None:
 
     all_spikes, all_denoised = preprocess_and_run(
@@ -334,12 +341,31 @@ def main(
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
     np.save(s2p_path / "oasis_denoised.npy", all_denoised)
+    np.save(s2p_path / "full_grosmark_oasis_preprocessed.npy", np.array([True]))
 
 
 if __name__ == "__main__":
 
-    cache_files = CACHE_PATH.glob("*.json")
-    s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
-    cached_session = Cached2pSession.model_validate_json(cache_path.read_text())
-    assert cached_session.wheel_freeze is not None
-    main(s2p_path, cached_session.wheel_freeze, parallel=True, plot=False)
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    for cache_file in cache_files:
+        print("Processing", cache_file)
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse_name = file_parts[0]
+        s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
+        cached_session = Cached2pSession.model_validate_json(cache_file.read_text())
+
+        if (s2p_path / "full_grosmark_oasis_preprocessed.npy").exists():
+            print(f"Already processed {mouse_name} {date}, skipping")
+            continue
+        if cached_session.wheel_freeze is None:
+            print(
+                f"No wheel freeze info for {mouse_name} {date}, haven't dealt with this in oasis yet so skipping"
+            )
+            continue
+
+        try:
+            main(s2p_path, cached_session.wheel_freeze, parallel=False, plot=False)
+        except Exception as e:
+            print(f"Error processing {mouse_name} {date}: {e}")
+            continue
