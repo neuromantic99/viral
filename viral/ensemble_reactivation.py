@@ -1,6 +1,7 @@
 from typing import List
 import numpy as np
 import sys
+import concurrent.futures
 import os
 import time
 from pathlib import Path
@@ -696,19 +697,7 @@ def get_ssp_vectors(
     return np.hstack(ssp_vectors)
 
 
-def main() -> None:
-
-    # This is the file that's saved by the full grosmark oasis preprocessing as a flag
-    valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
-    # valid_sessions = np.load("valid_sessions.npy", allow_pickle=True)
-
-    for session_idx in range(len(valid_sessions)):
-        session_path = valid_sessions[session_idx]
-        mouse = session_path.parts[-4]
-        date = session_path.parts[-5]
-        #  Using this dumb logic to select a mouse for now
-        if mouse == "JB033":
-            break
+def main(mouse: str, date: str, plot: bool = True) -> None:
 
     verbose = True
     use_cache = True
@@ -793,24 +782,34 @@ def main() -> None:
         preactivation_strength = offline_reactivation(
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
-        reactivation_strength_shuffled = []
-        preactivation_strength_shuffled = []
 
-        for shuffle in tqdm(range(100)):
+        def compute_shuffled_strength(_):
             ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
-            reactivation_strength_shuffled.append(
+            return (
                 offline_reactivation(
                     reactivation=reactivation,
                     ensemble_matrix=ensemble_matrix_shuffled,
-                )
-            )
-
-            preactivation_strength_shuffled.append(
+                ),
                 offline_reactivation(
                     reactivation=preactivation,
                     ensemble_matrix=ensemble_matrix_shuffled,
+                ),
+            )
+
+        n_shuffles = 500
+        reactivation_strength_shuffled = []
+        preactivation_strength_shuffled = []
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = list(
+                tqdm(
+                    executor.map(compute_shuffled_strength, range(n_shuffles)),
+                    total=n_shuffles,
                 )
             )
+            for reac, preac in results:
+                reactivation_strength_shuffled.append(reac)
+                preactivation_strength_shuffled.append(preac)
 
         reactivation_strength_shuffled = np.percentile(
             np.array(reactivation_strength_shuffled), 95, axis=0
@@ -832,7 +831,6 @@ def main() -> None:
             cache_file,
             pcs_mask=pcs_mask,
             ensemble_matrix=ensemble_matrix,
-            ensemble_matrix_shuffled_data=ensemble_matrix_shuffled,
             reactivation_strength=reactivation_strength,
             reactivation_strength_shuffled=reactivation_strength_shuffled,
             preactivation_strength=preactivation_strength,
@@ -842,6 +840,8 @@ def main() -> None:
             # running_bouts=,
             pcc_scores=pcc_scores,
         )
+        # if not plot:
+        #     return
     if verbose:
         # print(f"# frames with running: {running_bouts.shape[1]}")
         # print(f"# place cells: {running_bouts.shape[0]}")
@@ -1049,4 +1049,18 @@ def compare_to_matlab() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # This is the file that's saved by the full grosmark oasis preprocessing as a flag
+    valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
+    # valid_sessions = np.load("valid_sessions.npy", allow_pickle=True)
+
+    for session_idx in range(len(valid_sessions)):
+        session_path = valid_sessions[session_idx]
+        mouse = session_path.parts[-4]
+        date = session_path.parts[-5]
+
+        # Bad imaging, replace eventually with column
+        # in spreadsheet, or filter by number of place cells
+        if mouse in {"JB033", "JB032"}:
+            continue
+
+        main(mouse, date, plot=False)
