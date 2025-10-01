@@ -142,6 +142,39 @@ def threshold_detect(signal: np.ndarray, threshold: float) -> np.ndarray:
     return times[0]
 
 
+def threshold_detect_continuous(
+    signal: np.ndarray, threshold: np.ndarray
+) -> np.ndarray:
+    """
+    Detect threshold crossings where signal > threshold (elementwise).
+    Suppresses consecutive detections to only return first index of each crossing.
+
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal.
+    threshold : np.ndarray
+        Threshold array of same shape as signal.
+
+    Returns
+    -------
+    np.ndarray
+        Indices where signal crosses threshold.
+    """
+    if signal.shape != threshold.shape:
+        raise ValueError("signal and threshold must have the same shape")
+
+    # Compare elementwise
+    thresh_signal = signal > threshold
+
+    # Keep only rising edge detections
+    thresh_signal[1:][thresh_signal[:-1] & thresh_signal[1:]] = False
+
+    # Return indices
+    times = np.where(thresh_signal)
+    return times[0]
+
+
 def pade_approx_norminv(p: float) -> float:
     q = (
         math.sqrt(2 * math.pi) * (p - 1 / 2)
