@@ -4,14 +4,12 @@ import sys
 import pandas as pd
 from pydantic import ValidationError
 
-
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.run_oasis import main as run_oasis
 from viral.models import Cached2pSession, Mouse2pSessions
 from viral.cache_2p_sessions import process_session
 from viral.constants import (
@@ -92,14 +90,6 @@ SESSIONS_KEEP = {
 
 # 26 is ok, 27 dont use,
 # 30 is ok 33 is good 31 is ok not great
-
-
-def oasis_runner() -> None:
-    print("Running OASIS deconvolution on session data")
-    for mouse_name, sessions in SESSIONS_KEEP.items():
-        for stage, date in sessions.items():
-            print(f"Processing {mouse_name} {date} for stage {stage}")
-            run_oasis(mouse_name, date, grosmark=False)
 
 
 def get_session(
@@ -200,7 +190,8 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
 
 def main() -> None:
     mouse_name = "JB016"
+    mouse_sessions = get_mouse_sessions(mouse_name)
 
 
 if __name__ == "__main__":
-    oasis_runner()
+    main()

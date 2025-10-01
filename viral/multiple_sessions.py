@@ -5,6 +5,9 @@ import random
 import pandas as pd
 import re
 import sys
+from scipy import stats
+
+
 import inspect
 from pydantic import ValidationError
 import pandas as pd
