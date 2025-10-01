@@ -2,12 +2,7 @@ import itertools
 import math
 from pathlib import Path
 import sys
-from typing import Dict, List
 from matplotlib import pyplot as plt
-
-import matplotlib
-
-matplotlib.rcParams["pdf.fonttype"] = 42
 from scipy.stats import median_abs_deviation, zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
@@ -19,11 +14,10 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import CACHE_PATH, HERE
+from viral.constants import HERE
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
-    load_only_spks,
     trial_is_imaged,
     activity_trial_position,
     get_frozen_wheel_flu,
@@ -34,7 +28,7 @@ from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 from viral.utils import (
     cross_correlation_pandas,
     degrees_to_cm,
-    find_five_consecutive_trues_center,
+    find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     remove_diagonal,
@@ -137,16 +131,6 @@ def get_place_cells(
     - smoothed_matrix: smoothed firing rate by position matrix of shape (n_cells, n_bins)
     """
 
-    results_path = HERE.parent / "results" / "pairwise-reactivations-ITI"
-
-    for file in results_path.glob(f"*.npy"):
-        # This won't work if you change the config
-        if file.stem.startswith(
-            f"{session.mouse_name}_{session.date}_rewarded_{rewarded}"
-        ):
-            print(f"File {file} already exists, skipping Grosmark analysis")
-            return
-
     n_cells_total = spks.shape[0]
 
     sigma_cm = 7.5  # Desired smoothing in cm
@@ -219,7 +203,8 @@ def get_place_cells(
 
     place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
-    plot_speed(session, rewarded, config)
+    if plot:
+        plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -251,36 +236,26 @@ def get_place_cells(
         n_consecutive_trues=n_consecutive_trues,
     )
 
-    # Don't love this double indexing
-    spks = spks[pcs, :]
-    smoothed_matrix = smoothed_matrix[pcs, :]
+    # Cells that pass both the original and additional checks
+    pcs_combined = pcs.copy()
+    pcs_combined[pcs] = pcs[pcs] & pcs_additional
+    # TODO: should it be
+    # pcs_combined[pcs] = pcs_additional???
 
-    plot_place_cells(
-        smoothed_matrix=smoothed_matrix,
-        shuffled_matrices=shuffled_matrices,
-        shuffled_place_cells=shuffled_place_cells,
-        config=config,
+    print(
+        f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"
     )
+    if plot:
+        plot_place_cells(
+            smoothed_matrix=smoothed_matrix[pcs_combined, :],
+            config=config,
+        )
 
     print(
         f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
     )
 
-    peak_indices = np.argmax(smoothed_matrix, axis=1)
-    peak_position_cm = peak_indices * config.bin_size + config.start
-    sorted_order = np.argsort(peak_indices)
-    peak_position_cm = peak_position_cm[sorted_order]
-
-    plot_circular_distance_matrix(smoothed_matrix, sorted_order)
-
-    offline_correlations(
-        session,
-        spks[sorted_order, :],
-        peak_position_cm=peak_position_cm,
-        rewarded=rewarded,
-    )
-
-    plt.show()
+    return pcs_combined, smoothed_matrix
 
 
 def plot_speed(
@@ -345,12 +320,17 @@ def offline_correlations(
             bin_size=None,
         )
 
-    shuffled_corrs = get_offline_correlation_matrix(offline, do_shuffle=True, plot=True)
-    real_corrs = get_offline_correlation_matrix(offline, do_shuffle=False, plot=True)
+        shuffled_corrs = get_offline_correlation_matrix(
+            offline, wheel_freeze=False, do_shuffle=True, plot=True
+        )
+        real_corrs = get_offline_correlation_matrix(
+            offline, wheel_freeze=False, do_shuffle=False, plot=True
+        )
+        plt.figure()
 
-    correlations_vs_peak_distance(
-        real_corrs, peak_position_cm=peak_position_cm, plot=True
-    )
+        r, p = correlations_vs_peak_distance(
+            real_corrs, peak_position_cm=peak_position_cm, plot=True
+        )
 
         plt.xlabel("Distance between peaks")
         plt.ylabel("Average pearson correlation")
@@ -435,8 +415,12 @@ def get_offline_correlation_matrix(
 
 
 def correlations_vs_peak_distance(
-    corrs: np.ndarray, peak_position_cm: np.ndarray, plot: bool = False
-) -> None:
+    corrs: np.ndarray,
+    peak_position_cm: np.ndarray,
+    colour: str | None = None,
+    label: str | None = None,
+    plot: bool = True,
+) -> tuple[float, float]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
     distance between their place field peaks.
 
@@ -473,15 +457,9 @@ def correlations_vs_peak_distance(
         y.append(np.mean(cell_corrs[in_bin]))
 
     if plot:
-        plt.figure()
-        plt.plot(x, y)
-        r, p = pearsonr(x, y)
-
-        plt.xlabel("Distance between peaks")
-        plt.ylabel("Average pearson correlation")
-        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
-
-        plt.show()
+        plt.plot(x, y, color=colour, label=label)
+    r, p = pearsonr(x, y)
+    return r, p
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
@@ -496,7 +474,6 @@ def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
 def plot_place_cells(
     smoothed_matrix: np.ndarray,
     config: GrosmarkConfig,
-    name: str,
 ) -> None:
     plt.figure()
     plt.imshow(
@@ -517,8 +494,6 @@ def plot_place_cells(
     )
 
     plt.colorbar()
-    plt.tight_layout()
-    plt.savefig(HERE.parent / "plots" / "replay-meeting" / name)
 
 
 def filter_additional_check(
@@ -609,9 +584,8 @@ if __name__ == "__main__":
 
     mouse = "JB027"
     date = "2025-02-26"
-    # date = "2024-12-10"
 
-    with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
+    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
     print(f"Total number of trials: {len(session.trials)}")
@@ -619,7 +593,7 @@ if __name__ == "__main__":
         f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
     )
 
-    spks = load_only_spks(mouse, date)
+    dff, spks, denoised = load_imaging_data(mouse, date)
 
     print("Got dff")
 
@@ -631,8 +605,6 @@ if __name__ == "__main__":
         )
         < dff.shape[1]
     ), "Tiff is too short"
-
-    spks = binarise_spikes(spks)
 
     is_unsupervised = session_is_unsupervised(session)
 
