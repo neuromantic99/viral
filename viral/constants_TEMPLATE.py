@@ -11,6 +11,9 @@ BEHAVIOUR_DATA_PATH = SERVER_PATH / Path("Behaviour/online/Subjects")
 SYNC_FILE_PATH = SERVER_PATH / "DAQami"
 TIFF_UMBRELLA = SERVER_PATH / "2P"
 
+CACHE_PATH = ""
+TEMP_CACHE_PATH = ""
+
 # Probably true of all encoders but again may need adjusting
 ENCODER_TICKS_PER_TURN = 360
 

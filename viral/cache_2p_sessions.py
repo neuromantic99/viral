@@ -510,7 +510,13 @@ def get_tiff_metadata(
             return stack_lengths, epochs, all_tiff_timestamps
 
     print("Could not find cached tiff metadata. Reading tiffs (takes a long time)")
-    tiffs = [ScanImageTiffReader(str(tiff)) for tiff in tiff_paths]
+    tiffs = []
+    for tiff in tiff_paths:
+        try:
+            tiffs.append(ScanImageTiffReader(str(tiff)))
+        except Exception as e:
+            raise Exception(f"Error reading tiff file: {tiff}") from e
+
     stack_lengths = [tiff.shape()[0] for tiff in tiffs]
     epochs = []
     all_tiff_timestamps = []
@@ -663,6 +669,18 @@ def process_session(
             f,
         )
 
+    if wheel_freeze is not None:
+        from viral.run_oasis import main as oasis_main
+
+        s2p_path = tiff_directory / "suite2p" / "plane0"
+        if not (s2p_path / "oasis_spikes.npy").exists():
+            oasis_main(
+                s2p_path=s2p_path,
+                wheel_freeze=wheel_freeze,
+                parallel=True,
+                plot=False,
+            )
+
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
@@ -677,15 +695,12 @@ def check_against_suite2p_output(
 def main() -> None:
     """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
 
-    # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
-    redo = True
-    for mouse_name in ["JB031"]:
+    redo = False
+    for mouse_name in ["JB030", "JB031", "JB032", "JB033", "JB034", "JB035"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
-
             try:
-                print(f"the type is {row['Type']}")
-
+                print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
                 try:
@@ -694,22 +709,19 @@ def main() -> None:
                     print(f"No column 'Wheel blocked?' found: {e}")
                     print("Wheel blocked set to None")
                     wheel_blocked = None
-                if (
-                    not redo
-                    and (
-                        HERE.parent / "data" / "cached_2p" / f"{mouse_name}_{date}.json"
-                    ).exists()
-                ):
+                if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue
 
-                if (
-                    "learning day" not in session_type
-                    and "reversal learning" not in session_type
-                ):
+                if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")
                     continue
-
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
                 if not row["Sync file"]:
                     print(
                         f"Skipping {mouse_name} {date} {session_type} as no sync file"
@@ -738,10 +750,17 @@ def main() -> None:
                 )
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__)
-                line_number = tb[-1].lineno  # Get the line number of the exception
-                msg = f"Error processing {mouse_name} {date} {session_type} on line {line_number}: {e}"
+                last_trace = tb[
+                    -1
+                ]  # Get the last traceback entry (where the exception occurred)
+                filename = last_trace.filename
+                line_number = last_trace.lineno
+                msg = f"Error processing {mouse_name} {date} {session_type} in {filename} on line {line_number}: {e}"
                 logger.debug(msg)
                 print(msg)
+                full_tb = traceback.format_exc()  # Get full traceback as a string
+                logger.debug(full_tb)
+                print(full_tb)
 
 
 if __name__ == "__main__":

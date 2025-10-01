@@ -46,7 +46,7 @@ def test_extract_frozen_wheel_chunks_behaviour_pulses_pre() -> None:
     behaviour_times = np.arange(26000, 36900) * (sampling_rate / 30)
 
     with pytest.raises(
-        AssertionError, match="Behavioral pulses detected in pre-training period!"
+        AssertionError, match="Behavioural pulses detected in pre-training period!"
     ):
         extract_frozen_wheel_chunks(
             stack_lengths_tiffs=stack_lengths_tiff,
@@ -64,7 +64,7 @@ def test_extract_frozen_wheel_chunks_behaviour_pulses_post() -> None:
     valid_frame_times = np.arange(sum(stack_lengths_tiff)) * (sampling_rate / 30)
     behaviour_times = np.arange(37000, 40000) * (sampling_rate / 30)
     with pytest.raises(
-        AssertionError, match="Behavioral pulses detected in post-training period!"
+        AssertionError, match="Behavioural pulses detected in post-training period!"
     ):
         extract_frozen_wheel_chunks(
             stack_lengths_tiffs=stack_lengths_tiff,
