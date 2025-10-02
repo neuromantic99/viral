@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+from typing import Dict
 
 import pandas as pd
 from pydantic import ValidationError
@@ -23,8 +24,10 @@ from viral.gsheets_importer import gsheet2df
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import load_data
 
+## TODO: Do we want to include the first day of learning?
+# There's likely a lot of interesting reactivated activtity there
 
-SESSIONS_KEEP = {
+SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
     # Imaging of poor quality, dont analyse
     # "JB011": {
     #     "unsupervised": "2024-10-22",
@@ -81,15 +84,34 @@ SESSIONS_KEEP = {
         "learning": "2025-03-13",
         "learned": "2025-03-14",
     },
+    # Imaging was ok for the first few days but then degraded to become not usable
+    "JB031": {"unsupervised": "2025-03-07", "learning": "2025-03-12", "learned": None},
     "JB033": {
         "unsupervised": "2025-03-13",
         "learning": "2025-03-17",
         "learned": "2025-03-19",
     },
+    "JB034": {
+        "unsupervised": "2025-07-04",
+        "learning": "2025-07-07",
+        "learned": "2025-07-08",
+    },
+    "JB035": {
+        "unsupervised": "2025-07-04",
+        "learning": "2025-07-08",
+        "learned": "2025-07-11",
+    },
+    "JB036": {
+        "unsupervised": "2025-07-05",
+        "learning": "2025-07-07",
+        "learned": "2025-07-08",
+    },
 }
 
+
 # 26 is ok, 27 dont use,
-# 30 is ok 33 is good 31 is ok not great
+# 30 is ok 33 is good
+# 32 don't use
 
 
 def get_session(
@@ -116,6 +138,14 @@ def get_session(
             )
             trials.extend(load_data(session_path))
         print(f"Got error when loading {mouse_name} {date} from cache. Error is: {e}")
+
+        try:
+            wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+        except KeyError as e:
+            print(f"No column 'Wheel blocked?' found: {e}")
+            print("Wheel blocked set to None")
+            wheel_blocked = False
+
         process_session(
             trials=trials,
             tiff_directory=TIFF_UMBRELLA / date / mouse_name,
@@ -123,11 +153,13 @@ def get_session(
             mouse_name=mouse_name,
             session_type=session_type,
             date=date,
+            wheel_blocked=wheel_blocked,
         )
+
     return Cached2pSession.model_validate_json(path.read_text())
 
 
-def get_completed_mouse_sessions(mouse_name: str) -> list[Mouse2pSessions]:
+def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
 
     results = [None, None, None]
     for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
@@ -148,48 +180,33 @@ def get_completed_mouse_sessions(mouse_name: str) -> list[Mouse2pSessions]:
 
 def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
-    try:
-        unsupervised = get_session(
-            mouse_name,
-            SESSIONS_KEEP[mouse_name]["unsupervised"],
-            metadata,
-            stage="unsupervised",
-        )
-    except Exception as e:
-        print(f"Error retrieving unsupervised session for {mouse_name}: {e}")
-        unsupervised = None
+    stages = ["unsupervised", "learning", "learned"]
+    sessions: dict[str, Cached2pSession | None] = {}
+    for stage in stages:
+        if SESSIONS_KEEP[mouse_name][stage] is None:
+            sessions[stage] = None
+            continue
 
-    try:
-        learning = get_session(
+        sessions[stage] = get_session(
             mouse_name,
-            SESSIONS_KEEP[mouse_name]["learning"],
+            SESSIONS_KEEP[mouse_name][stage],
             metadata,
-            stage="learning",
+            stage=stage,
         )
-    except Exception as e:
-        print(f"Error retrieving learning session for {mouse_name}: {e}")
-        learning = None
-    try:
-        learned = get_session(
-            mouse_name,
-            SESSIONS_KEEP[mouse_name]["learned"],
-            metadata,
-            stage="learned",
-        )
-    except Exception as e:
-        print(f"Error retrieving learned session for {mouse_name}: {e}")
-        learned = None
+        # except Exception as e:
+        #     print(f"Error retrieving {stage} session for {mouse_name}: {e}")
+        #     sessions[stage] = None
 
     return Mouse2pSessions(
         mouse_name=mouse_name,
-        unsupervised=unsupervised,
-        learning=learning,
-        learned=learned,
+        unsupervised=sessions["unsupervised"],
+        learning=sessions["learning"],
+        learned=sessions["learned"],
     )
 
 
 def main() -> None:
-    mouse_name = "JB016"
+    mouse_name = "JB031"
     mouse_sessions = get_mouse_sessions(mouse_name)
 
 

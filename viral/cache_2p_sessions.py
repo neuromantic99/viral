@@ -622,7 +622,7 @@ def process_session(
     mouse_name: str,
     date: str,
     session_type: str,
-    wheel_blocked: bool = False,
+    wheel_blocked: bool,
 ) -> None:
     print(f"Off we go for {mouse_name} {date} {session_type}")
     imaging_crashed = get_imaging_crashed(mouse_name, date)

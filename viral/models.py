@@ -122,9 +122,9 @@ class Cached2pSession(BaseModel):
 
 class Mouse2pSessions(BaseModel):
     mouse_name: str
-    unsupervised: Cached2pSession
-    learning: Cached2pSession
-    learned: Cached2pSession
+    unsupervised: Cached2pSession | None
+    learning: Cached2pSession | None
+    learned: Cached2pSession | None
 
 
 class ImagedTrialInfo(BaseModel):
