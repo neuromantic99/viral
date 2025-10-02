@@ -17,9 +17,12 @@ from viral.utils import (
     array_bin_mean,
     degrees_to_cm,
     get_speed_positions,
+    get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     remove_consecutive_ones,
     shuffle_rows,
+    split_continuous_chunks,
+    threshold_detect_continuous,
     threshold_detect_edges,
     get_session_type,
     trial_is_imaged,
@@ -549,3 +552,45 @@ def test_compute_windowed_speed_movement_and_at_the_edges() -> None:
 #     ax2.set_xlabel("Time (s)")
 
 #     plt.show()
+
+
+def test_split_continuous_chunks_one_chunk() -> None:
+    arr = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    result = split_continuous_chunks(arr)
+    assert len(result) == 1
+    assert np.array_equal(result[0], arr)
+
+
+def test_split_continuous_chunks_two_chunks() -> None:
+    arr = np.array([1, 2, 3, 4, 6, 7, 8, 9, 10])
+    result = split_continuous_chunks(arr)
+    assert len(result) == 2
+    assert np.array_equal(result[0], np.array([1, 2, 3, 4]))
+    assert np.array_equal(result[1], np.array([6, 7, 8, 9, 10]))
+
+
+def test_split_continuous_chunks_three_chunks() -> None:
+    arr = np.array([100, 101, 2000, 2001, 2002, 2003, 10000, 10001])
+    result = split_continuous_chunks(arr)
+    assert len(result) == 3
+    assert np.array_equal(result[0], np.array([100, 101]))
+    assert np.array_equal(result[1], np.array([2000, 2001, 2002, 2003]))
+    assert np.array_equal(result[2], np.array([10000, 10001]))
+
+
+def test_threshold_detect_continuous() -> None:
+    arr = np.array([0, 0, 0, 10, 10, 10, 0])
+    threshold = np.array([1, 1, -10, 9, 9, 100, 0])
+
+    result = threshold_detect_continuous(arr, threshold)
+    expected = np.array([2])
+    assert np.array_equal(result, expected)
+
+
+def test_threshold_detect_continuous_multiple_crossings() -> None:
+    arr = np.array([0, 0, 0, 10, 10, 100, 0])
+    threshold = np.array([1, -1, 10, 11, 10000, 99, 0])
+
+    result = threshold_detect_continuous(arr, threshold)
+    expected = np.array([1, 5])
+    assert np.array_equal(result, expected)

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel, computed_field
 from datetime import datetime
 import numpy as np
@@ -187,6 +187,13 @@ class SessionCorrection:
     chunk_lengths_daq: np.ndarray
     frame_times_daq: np.ndarray
     offset_after_pre_epoch: int
+
+
+@dataclass
+class EnsembleSessionResult:
+    reactivation_triggered_response: Tuple[np.ndarray, np.ndarray]
+    number_of_events: Tuple[np.ndarray, np.ndarray]
+    sum_values_over_threshold: Tuple[np.ndarray, np.ndarray]
 
 
 @dataclass
