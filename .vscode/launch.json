@@ -86,6 +86,12 @@
       "request": "launch",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "100" },
       "program": "viral/run_oasis.py",
+    },
+    {
+      "name": "fix tiff",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fix_tiff.py",
       "console": "integratedTerminal",
       "justMyCode": true
     }
