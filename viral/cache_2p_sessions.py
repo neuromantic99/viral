@@ -672,9 +672,11 @@ def process_session(
 def check_against_suite2p_output(
     mouse: str, date: str, valid_frame_times: np.ndarray
 ) -> None:
-    dff, spks, denoised = load_imaging_data(mouse, date)
-    assert dff.shape == spks.shape == denoised.shape
-    assert len(valid_frame_times) == spks.shape[1]
+    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    # Just check the fluoresence shape. We need to cache before we run
+    # oasis now, so it doesn't make sense to look at the spikes too
+    f = np.load(s2p_path / "F.npy")
+    assert len(valid_frame_times) == f.shape[1]
 
 
 def main() -> None:

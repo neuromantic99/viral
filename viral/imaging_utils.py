@@ -35,6 +35,11 @@ def load_imaging_data(
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+    assert (
+        s2p_path / "full_grosmark_oasis_preprocessed.npy"
+    ).exists(), (
+        "This session may have been processed with an old version of the oasis pipeline"
+    )
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
 

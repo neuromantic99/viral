@@ -206,8 +206,9 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
 
 
 def main() -> None:
-    mouse_name = "JB031"
-    mouse_sessions = get_mouse_sessions(mouse_name)
+    # mouse_sessions = get_mouse_sessions("JB034")
+    for mouse_name in SESSIONS_KEEP.keys():
+        mouse_sessions = get_mouse_sessions(mouse_name)
 
 
 if __name__ == "__main__":
