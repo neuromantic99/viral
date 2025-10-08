@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import warnings
 from matplotlib import pyplot as plt
-from scipy.stats import median_abs_deviation, zscore, pearsonr
+from scipy.stats import zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
@@ -32,7 +32,6 @@ from viral.utils import (
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
-    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -56,27 +55,14 @@ def grosmark_place_field(
     3. do pair-wise correlations
     """
     if session.wheel_freeze is None:
-        spks = binarise_spikes(spks_raw)
+        spks = spks_raw
     else:
-        # """Based on the observed differences in calcium activity waveforms between the online and
-        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
-        online_spks = binarise_spikes(
-            spks_raw[
-                :,
-                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
-            ],
-            mad_threshold=1.5,
+        offline_spks_pre, online_spks, offline_spks_post = (
+            split_fluoresence_online_freeze(
+                flu=spks_raw, wheel_freeze=session.wheel_freeze
+            )
         )
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
-            flu=spks_raw, wheel_freeze=session.wheel_freeze
-        )
-        # According to Grosmark, each offline epoch is singly binarised
-        offline_spks_pre = binarise_spikes(
-            offline_spks_pre,
-            mad_threshold=1.25,
-        )
-        offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
+
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
         assert spks_raw.shape == spks.shape
 

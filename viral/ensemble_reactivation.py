@@ -29,7 +29,6 @@ from viral.models import (
 from viral.rastermap_utils import (
     get_frame_position,
     get_speed_frame,
-    load_data,
     align_validate_data,
     process_trials_data,
     filter_speed_position,
