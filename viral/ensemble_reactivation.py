@@ -806,8 +806,6 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         preactivation_strength = offline_reactivation(
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
-        reactivation_strength_shuffled = []
-        preactivation_strength_shuffled = []
 
         def compute_shuffled_strength(_):
             ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
@@ -873,11 +871,6 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         print(
             f"# significant components (Marcenko-Pastur), shuffled data: {num_shuffled_components if not use_cache else 'not computed'}"
         )
-
-    plot_reactivation_strength_change(
-        reactivation_strength=reactivation_strength,
-        preactivation_strength=preactivation_strength,
-    )
 
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength, n_top=2
@@ -1264,78 +1257,6 @@ def all_mice_ensemble_results_plots(
         label="preactivation",
     )
     plt.xlabel("Time (s) from event onset")
-
-
-def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
-    """There is no guarentee that two runs of ICA (particularly from different programming languages with different random seeds)
-    will return the same:
-        numerical values
-        column order
-        or even sign (i.e. the same component may be positive or negative)
-
-    However their absolute sums should be similar. And the actual components (once sorted and the signs aligned)
-    should span the same subspace. You can test this by looking at the angles between two components.
-    They should be 0 (within floating point error)
-
-    """
-
-    assert np.sum(np.abs(W_py)) - np.sum(np.abs(W_mat)) < np.sum(np.abs(W_mat)) * 0.01
-
-    def sort_and_align(W):
-        # Sort columns by their L2 norm
-        norms = np.sum(W**2, axis=1)
-        order = np.argsort(norms)
-        W_sorted = W[order, :]
-        return W_sorted
-
-    W_py = sort_and_align(W_py)
-    W_mat = sort_and_align(W_mat)
-
-    # Align signs
-    for i in range(W_py.shape[1]):
-        if np.dot(W_py[:, i], W_mat[:, i]) < 0:
-            W_py[:, i] *= -1
-
-    test_subspace(W_py, W_mat)
-    # assert np.allclose(W_py, W_mat, atol=1e-3)
-    print("All close")
-
-
-def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
-    def orthonormalize(W):
-        # QR decomposition for orthonormal basis
-        Q, _ = np.linalg.qr(W)
-        return Q
-
-    Q1 = orthonormalize(W1)
-    Q2 = orthonormalize(W2)
-
-    # Compute principal angles (in radians)
-    angles = subspace_angles(Q2, Q1)
-    print("Max angle:", np.max(np.degrees(angles)))
-    assert np.max(np.degrees(angles)) < 1e-9
-
-
-def compare_to_matlab() -> None:
-
-    # test_data = np.load(
-    #     "/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0/oasis_spikes.npy"
-    # )
-    # test_data = gaussian_filter1d(test_data, sigma=30, axis=1)
-
-    # # take a random-ish subset of the online data
-    # test_data = test_data[:, 27000:100000]
-    # np.save("test_ensemble_data.npy", test_data)
-
-    matlab_result = np.load(
-        "/Users/jamesrowland/Code/Cell-Assembly-Detection/assembly_templates.npy"
-    )
-
-    test_data = np.load("test_ensemble_data.npy")
-
-    python_result = compute_ICA_components(test_data)
-
-    compare_run_results(matlab_result, python_result)
 
 
 if __name__ == "__main__":

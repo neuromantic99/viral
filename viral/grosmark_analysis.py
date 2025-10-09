@@ -32,7 +32,6 @@ from viral.utils import (
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
-    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
