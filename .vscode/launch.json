@@ -85,7 +85,7 @@
       "type": "debugpy",
       "request": "launch",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "100" },
-      "program": "viral/run_oasis.py",
+      "program": "viral/run_oasis.py"
     },
     {
       "name": "fix tiff",

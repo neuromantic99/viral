@@ -1,21 +1,15 @@
-from pathlib import Path
 from typing import List
 import numpy as np
 from pydantic import BaseModel
-import matplotlib.pyplot as plt
 
-from viral.constants import BEHAVIOUR_DATA_PATH, CACHE_PATH
 from viral.imaging_utils import (
-    compute_speed_grosmark,
     compute_windowed_speed_1d,
     extract_TTL_chunks,
-    get_online_position_and_frames,
 )
-from viral.models import Cached2pSession, SpeedPosition, TrialInfo
+from viral.models import SpeedPosition
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
-    degrees_to_cm,
     get_speed_positions,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
@@ -25,7 +19,6 @@ from viral.utils import (
     threshold_detect_continuous,
     threshold_detect_edges,
     get_session_type,
-    trial_is_imaged,
 )
 
 
@@ -592,5 +585,26 @@ def test_threshold_detect_continuous_multiple_crossings() -> None:
     threshold = np.array([1, -1, 10, 11, 10000, 99, 0])
 
     result = threshold_detect_continuous(arr, threshold)
+    expected = np.array([1, 5])
+    assert np.array_equal(result, expected)
+
+
+def test_code_rabbit() -> None:
+    signal = np.array([0, 0, 0, 10, 10, 100, 0])
+    threshold = np.array([1, -1, 10, 11, 10000, 99, 0])
+
+    if signal.shape != threshold.shape:
+        raise ValueError("signal and threshold must have the same shape")
+
+    # Compare elementwise
+    thresh_signal = signal > threshold
+
+    # Keep only the first sample of each suprathreshold run
+    thresh_signal[1:] &= ~thresh_signal[:-1]
+
+    # Return indices
+    times = np.where(thresh_signal)
+    result = times[0]
+
     expected = np.array([1, 5])
     assert np.array_equal(result, expected)

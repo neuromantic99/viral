@@ -29,7 +29,6 @@ from viral.models import (
 from viral.rastermap_utils import (
     get_frame_position,
     get_speed_frame,
-    load_data,
     align_validate_data,
     process_trials_data,
     filter_speed_position,
@@ -662,6 +661,17 @@ def get_ssp_vectors(
     trials: List[TrialInfo],
     place_cells: np.ndarray,
 ) -> np.ndarray:
+    """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
+    The actual binarisation and sparsification step is run in run_oasis.
+    The place cell finding step is run in grosmark_analysis/get_place_cells
+
+    This function gets the running bouts and smooths them. Based on these sections in the methods:
+    'Online running epochs were defined as those in which the animal's smoothed velocity was above
+        5cms-1 for at least 3 consecutive seconds.'
+
+    'PC run running-bout spike estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel
+        corresponding to behavioral timescales.'
+    """
     sigma = 30
     ssp_vectors = []
     for trial in trials:
@@ -695,11 +705,10 @@ def get_ssp_vectors(
             if len(chunk) < 2 * 30:  # Arbitrary removal of short chunks
                 continue
             ssp_vectors.append(
-                np.apply_along_axis(
-                    gaussian_filter1d,
-                    axis=1,
-                    arr=place_cells[:, chunk],
+                gaussian_filter1d(
+                    input=place_cells[:, chunk],
                     sigma=sigma,
+                    axis=1,
                 )
             )
 
@@ -707,6 +716,7 @@ def get_ssp_vectors(
 
 
 def main(mouse: str, date: str, plot: bool = True) -> None:
+    print(f"Processing mouse {mouse}, date {date}")
 
     verbose = True
     use_cache = True
@@ -720,8 +730,14 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
         return
 
+    assert (
+        SERVER_PATH / "viral_caches" / "ensemble_caches"
+    ).exists(), "Cache path does not exist, please create it"
+
     cache_file = (
-        HERE.parent
+        SERVER_PATH
+        / "viral_caches"
+        / "ensemble_caches"
         / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation.npz"
     )
 
@@ -843,13 +859,10 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             reactivation_strength_shuffled=reactivation_strength_shuffled,
             preactivation_strength=preactivation_strength,
             preactivation_strength_shuffled=preactivation_strength_shuffled,
-            reactivation=reactivation,
-            preactivation=preactivation,
-            # running_bouts=,
             pcc_scores=pcc_scores,
         )
-        # if not plot:
-        #     return
+        if not plot:
+            return
     if verbose:
         # print(f"# frames with running: {running_bouts.shape[1]}")
         # print(f"# place cells: {running_bouts.shape[0]}")
@@ -926,6 +939,10 @@ def get_reactivation_strength_sum(
 def reactivation_triggered_average(
     data: np.ndarray, baseline: np.ndarray, length_event_samples: int = 30
 ) -> np.ndarray:
+    """Get the average reactivation strength arond a suprathreshold event.
+    Event is length_event_samples either side of the the time when data crosses baseline,
+    """
+
     assert data.shape == baseline.shape
 
     result = []
@@ -1070,34 +1087,176 @@ def load_data_from_cache(cache_file: Path) -> tuple:
     )
 
 
-def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
-    """Checking logic of get_speed_frame and get_frame_position. Delete this later."""
-    for trial in trials:
-        trial_frames = np.arange(
-            trial.trial_start_closest_frame, trial.trial_end_closest_frame + 1, 1
+def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
+    """There is no guarentee that two runs of ICA (particularly from different programming languages with different random seeds)
+    will return the same:
+        numerical values
+        column order
+        or even sign (i.e. the same component may be positive or negative)
+
+    However their absolute sums should be similar. And the actual components (once sorted and the signs aligned)
+    should span the same subspace. You can test this by looking at the angles between two components.
+    They should be 0 (within floating point error)
+
+    """
+
+    assert np.sum(np.abs(W_py)) - np.sum(np.abs(W_mat)) < np.sum(np.abs(W_mat)) * 0.01
+
+    def sort_and_align(W):
+        # Sort columns by their L2 norm
+        norms = np.sum(W**2, axis=1)
+        order = np.argsort(norms)
+        W_sorted = W[order, :]
+        return W_sorted
+
+    W_py = sort_and_align(W_py)
+    W_mat = sort_and_align(W_mat)
+
+    # Align signs
+    for i in range(W_py.shape[1]):
+        if np.dot(W_py[:, i], W_mat[:, i]) < 0:
+            W_py[:, i] *= -1
+
+    test_subspace(W_py, W_mat)
+    # assert np.allclose(W_py, W_mat, atol=1e-3)
+    print("All close")
+
+
+def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
+    def orthonormalize(W):
+        # QR decomposition for orthonormal basis
+        Q, _ = np.linalg.qr(W)
+        return Q
+
+    Q1 = orthonormalize(W1)
+    Q2 = orthonormalize(W2)
+
+    # Compute principal angles (in radians)
+    angles = subspace_angles(Q2, Q1)
+    print("Max angle:", np.max(np.degrees(angles)))
+    assert np.max(np.degrees(angles)) < 1e-9
+
+
+def multiple_sessions() -> None:
+    """Run ensemble reactivation on multiple cached sessions"""
+
+    cache_files = list(
+        (SERVER_PATH / "viral_caches" / "ensemble_caches").glob(
+            "*_ensemble_reactivation.npz"
         )
-        fig, ax1 = plt.subplots(figsize=(10, 5))
-        position = get_frame_position(
-            trial, trial_frames, get_wheel_circumference_from_rig("2P")
-        )
-        possy = degrees_to_cm(
-            np.array(trial.rotary_encoder_position),
-            get_wheel_circumference_from_rig("2P"),
-        )
-        (p1,) = ax1.plot(
-            possy,
-            color="black",
-            label="rotary encoder position",
+    )
+    assert cache_files, "No cache files found"
+
+    all_mice: List[EnsembleSessionResult] = []
+
+    baseline_multiplier = 1
+    for cache_file in cache_files:
+
+        mouse, date = cache_file.stem.split("_")[:2]
+        mouse = mouse.strip("suite2p")  # dunno why this is in the path lol
+        data = np.load(cache_file, allow_pickle=True)
+        (
+            reactivation_strength,
+            reactivation_strength_shuffled,
+            preactivation_strength,
+            preactivation_strength_shuffled,
+            ensemble_matrix,
+        ) = (
+            data["reactivation_strength"],
+            data["reactivation_strength_shuffled"],
+            data["preactivation_strength"],
+            data["preactivation_strength_shuffled"],
+            data["ensemble_matrix"],
         )
 
-        (p2,) = ax1.plot(position[:, 1], color="blue", label="frame position")
+        if ensemble_matrix.shape[1] < 5:
+            print(
+                f"Skipping {mouse} {date} as there are only {ensemble_matrix.shape[1]} components"
+            )
+            continue
 
-        speed = get_speed_frame(position, 30)[:, 1]
-        ax2 = ax1.twinx()
-        (p3,) = ax2.plot(speed, color="orange", label="speed")
-        lines = [p1, p2, p3]
-        labels = [line.get_label() for line in lines]
-        ax1.legend(lines, labels, loc="upper left")
+        significant_reactivation = (
+            reactivation_strength > reactivation_strength_shuffled * baseline_multiplier
+        )
+        significant_preactivation = (
+            preactivation_strength
+            > preactivation_strength_shuffled * baseline_multiplier
+        )
+
+        only_significant_reactivation = reactivation_strength.copy()
+        only_significant_preactivation = preactivation_strength.copy()
+
+        only_significant_reactivation[~significant_reactivation] = np.nan
+        only_significant_preactivation[~significant_preactivation] = np.nan
+
+        reactivation_number_of_events = get_reactivation_number_of_events(
+            reactivation_strength=reactivation_strength,
+            preactivation_strength=preactivation_strength,
+            reactivation_strength_baseline=reactivation_strength_shuffled
+            * baseline_multiplier,
+            preactivation_strength_baseline=preactivation_strength_shuffled
+            * baseline_multiplier,
+            plot=False,
+        )
+
+        reactivation_strength_sum_over_threshold = get_reactivation_strength_sum(
+            reactivation_strength=only_significant_reactivation,
+            preactivation_strength=only_significant_preactivation,
+        )
+
+        reactivation_triggered_response = get_reactivation_triggered_averages(
+            reactivation_strength=reactivation_strength,
+            reactivation_strength_baseline=reactivation_strength_shuffled
+            * baseline_multiplier,
+            preactivation_strength=preactivation_strength,
+            preactivation_strength_baseline=preactivation_strength_shuffled
+            * baseline_multiplier,
+        )
+
+        all_mice.append(
+            EnsembleSessionResult(
+                reactivation_triggered_response=reactivation_triggered_response,
+                number_of_events=reactivation_number_of_events,
+                sum_values_over_threshold=reactivation_strength_sum_over_threshold,
+            )
+        )
+    all_mice_ensemble_results_plots(all_mice=all_mice)
+
+
+def all_mice_ensemble_results_plots(
+    all_mice: List[EnsembleSessionResult],
+) -> None:
+    number_of_events = np.hstack(
+        [mouse.number_of_events[0] - mouse.number_of_events[1] for mouse in all_mice]
+    )
+
+    sum_values_over_threshold_re = np.hstack(
+        [mouse.sum_values_over_threshold[0] for mouse in all_mice]
+    )
+    sum_values_over_threshold_pre = np.hstack(
+        [mouse.sum_values_over_threshold[1] for mouse in all_mice]
+    )
+    sns.boxplot(
+        sum_values_over_threshold_re - sum_values_over_threshold_pre, showfliers=False
+    )
+
+    plt.figure()
+    response_re = np.vstack(
+        [mouse.reactivation_triggered_response[0] for mouse in all_mice]
+    )
+    response_pre = np.vstack(
+        [mouse.reactivation_triggered_response[1] for mouse in all_mice]
+    )
+    shaded_line_plot(
+        response_re, x_axis=np.arange(-30, 30) / 30, color="blue", label="reactivation"
+    )
+    shaded_line_plot(
+        response_pre,
+        x_axis=np.arange(-30, 30) / 30,
+        color="orange",
+        label="preactivation",
+    )
+    plt.xlabel("Time (s) from event onset")
 
 
 def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:

@@ -5,6 +5,7 @@ OASIS/
 *.npy
 
 constants.py
+nohup
 
 *.png
 *.jpeg
