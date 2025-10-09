@@ -85,6 +85,13 @@
       "type": "debugpy",
       "request": "launch",
       "program": "viral/fix_tiff.py",
+    },
+    {
+      "name": "run oasis",
+      "type": "debugpy",
+      "request": "launch",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "100" },
+      "program": "viral/run_oasis.py",
       "console": "integratedTerminal",
       "justMyCode": true
     }

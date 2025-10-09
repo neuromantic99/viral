@@ -28,7 +28,7 @@
 
 ## Install OASIS submodule
 * You will need to install the OASIS submodule from its repo to perform custom OASIS deconvolution:
-1. `git submodule add <https://github.com/j-friedrich/OASIS.git> OASIS`
+1. `git submodule add -f https://github.com/j-friedrich/OASIS.git OASIS`
 2. `cd OASIS`
 3. `python setup.py build_ext -i`
-
+4. You might need to change `description-file` to `description_file` in `setup.cfg`
