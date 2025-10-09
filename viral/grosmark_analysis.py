@@ -15,7 +15,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import HERE
+from viral.constants import CACHE_PATH, HERE, SERVER_PATH
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
@@ -152,9 +152,11 @@ def get_place_cells(
     smoothed_matrix = np.nanmean(all_trials, 0)
 
     # Probably delete cache logic once we're all sorted
-    use_cache = False
+    use_cache = True
     cache_file = (
-        HERE
+        SERVER_PATH
+        / "viral_caches"
+        / "place_cells"
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
     )
     if use_cache and cache_file.exists():

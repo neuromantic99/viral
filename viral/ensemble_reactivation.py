@@ -716,6 +716,7 @@ def get_ssp_vectors(
 
 
 def main(mouse: str, date: str, plot: bool = True) -> None:
+    print(f"Processing mouse {mouse}, date {date}")
 
     verbose = True
     use_cache = True
@@ -729,8 +730,14 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
         return
 
+    assert (
+        SERVER_PATH / "viral_caches" / "ensemble_caches"
+    ).exists(), "Cache path does not exist, please create it"
+
     cache_file = (
-        HERE.parent
+        SERVER_PATH
+        / "viral_caches"
+        / "ensemble_caches"
         / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation.npz"
     )
 
@@ -852,9 +859,6 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             reactivation_strength_shuffled=reactivation_strength_shuffled,
             preactivation_strength=preactivation_strength,
             preactivation_strength_shuffled=preactivation_strength_shuffled,
-            reactivation=reactivation,
-            preactivation=preactivation,
-            # running_bouts=,
             pcc_scores=pcc_scores,
         )
         if not plot:
