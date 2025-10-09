@@ -11,7 +11,6 @@ from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
     get_speed_positions,
-    get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     remove_consecutive_ones,
     shuffle_rows,
