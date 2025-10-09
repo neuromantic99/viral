@@ -661,6 +661,17 @@ def get_ssp_vectors(
     trials: List[TrialInfo],
     place_cells: np.ndarray,
 ) -> np.ndarray:
+    """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
+    The actual binarisation and sparsification step is run in run_oasis.
+    The place cell finding step is run in grosmark_analysis/get_place_cells
+
+    This function gets the running bouts and smooths them. Based on these sections in the methods:
+    'Online running epochs were defined as those in which the animal's smoothed velocity was above
+        5cms-1 for at least 3 consecutive seconds.'
+
+    'PC run running-bout spike estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel
+        corresponding to behavioral timescales.'
+    """
     sigma = 30
     ssp_vectors = []
     for trial in trials:
@@ -694,11 +705,10 @@ def get_ssp_vectors(
             if len(chunk) < 2 * 30:  # Arbitrary removal of short chunks
                 continue
             ssp_vectors.append(
-                np.apply_along_axis(
-                    gaussian_filter1d,
-                    axis=1,
-                    arr=place_cells[:, chunk],
+                gaussian_filter1d(
+                    input=place_cells[:, chunk],
                     sigma=sigma,
+                    axis=1,
                 )
             )
 
@@ -847,8 +857,8 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             # running_bouts=,
             pcc_scores=pcc_scores,
         )
-        # if not plot:
-        #     return
+        if not plot:
+            return
     if verbose:
         # print(f"# frames with running: {running_bouts.shape[1]}")
         # print(f"# place cells: {running_bouts.shape[0]}")
@@ -925,6 +935,10 @@ def get_reactivation_strength_sum(
 def reactivation_triggered_average(
     data: np.ndarray, baseline: np.ndarray, length_event_samples: int = 30
 ) -> np.ndarray:
+    """Get the average reactivation strength arond a suprathreshold event.
+    Event is length_event_samples either side of the the time when data crosses baseline,
+    """
+
     assert data.shape == baseline.shape
 
     result = []
@@ -1069,36 +1083,6 @@ def load_data_from_cache(cache_file: Path) -> tuple:
     )
 
 
-def plot_speed_and_position_logic(trials: List[TrialInfo]) -> None:
-    """Checking logic of get_speed_frame and get_frame_position. Delete this later."""
-    for trial in trials:
-        trial_frames = np.arange(
-            trial.trial_start_closest_frame, trial.trial_end_closest_frame + 1, 1
-        )
-        fig, ax1 = plt.subplots(figsize=(10, 5))
-        position = get_frame_position(
-            trial, trial_frames, get_wheel_circumference_from_rig("2P")
-        )
-        possy = degrees_to_cm(
-            np.array(trial.rotary_encoder_position),
-            get_wheel_circumference_from_rig("2P"),
-        )
-        (p1,) = ax1.plot(
-            possy,
-            color="black",
-            label="rotary encoder position",
-        )
-
-        (p2,) = ax1.plot(position[:, 1], color="blue", label="frame position")
-
-        speed = get_speed_frame(position, 30)[:, 1]
-        ax2 = ax1.twinx()
-        (p3,) = ax2.plot(speed, color="orange", label="speed")
-        lines = [p1, p2, p3]
-        labels = [line.get_label() for line in lines]
-        ax1.legend(lines, labels, loc="upper left")
-
-
 def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
     """There is no guarentee that two runs of ICA (particularly from different programming languages with different random seeds)
     will return the same:
@@ -1149,29 +1133,8 @@ def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
     assert np.max(np.degrees(angles)) < 1e-9
 
 
-def compare_to_matlab() -> None:
-
-    # test_data = np.load(
-    #     "/Volumes/hard_drive/VR-2p/2025-07-05/JB036/suite2p/plane0/oasis_spikes.npy"
-    # )
-    # test_data = gaussian_filter1d(test_data, sigma=30, axis=1)
-
-    # # take a random-ish subset of the online data
-    # test_data = test_data[:, 27000:100000]
-    # np.save("test_ensemble_data.npy", test_data)
-
-    matlab_result = np.load(
-        "/Users/jamesrowland/Code/Cell-Assembly-Detection/assembly_templates.npy"
-    )
-
-    test_data = np.load("test_ensemble_data.npy")
-
-    python_result = compute_ICA_components(test_data)
-
-    compare_run_results(matlab_result, python_result)
-
-
 def multiple_sessions() -> None:
+    """Run ensemble reactivation on multiple cached sessions"""
 
     cache_files = list(
         (SERVER_PATH / "viral_caches" / "ensemble_caches").glob(
@@ -1187,8 +1150,6 @@ def multiple_sessions() -> None:
 
         mouse, date = cache_file.stem.split("_")[:2]
         mouse = mouse.strip("suite2p")  # dunno why this is in the path lol
-        if mouse not in {"JB030", "JB031"}:
-            continue
         data = np.load(cache_file, allow_pickle=True)
         (
             reactivation_strength,
@@ -1255,10 +1216,10 @@ def multiple_sessions() -> None:
                 sum_values_over_threshold=reactivation_strength_sum_over_threshold,
             )
         )
-    all_mouse_plots(all_mice=all_mice)
+    all_mice_ensemble_results_plots(all_mice=all_mice)
 
 
-def all_mouse_plots(
+def all_mice_ensemble_results_plots(
     all_mice: List[EnsembleSessionResult],
 ) -> None:
     number_of_events = np.hstack(
@@ -1292,7 +1253,6 @@ def all_mouse_plots(
         label="preactivation",
     )
     plt.xlabel("Time (s) from event onset")
-    1 / 0
 
 
 if __name__ == "__main__":

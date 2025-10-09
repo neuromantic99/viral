@@ -499,6 +499,8 @@ def filter_additional_check(
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
 
     Currently have made the threshold more conservative (40%) as 15% does not filter any cells out, but review.
+
+    TODO: I think lots of things are being dropped here due to the blanking
     """
 
     centers = find_n_consecutive_trues_center(
