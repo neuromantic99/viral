@@ -1,28 +1,23 @@
-from pathlib import Path
 from typing import List
 import numpy as np
 from pydantic import BaseModel
-import matplotlib.pyplot as plt
 
-from viral.constants import BEHAVIOUR_DATA_PATH, CACHE_PATH
 from viral.imaging_utils import (
-    compute_speed_grosmark,
     compute_windowed_speed_1d,
     extract_TTL_chunks,
-    get_online_position_and_frames,
 )
-from viral.models import Cached2pSession, SpeedPosition, TrialInfo
+from viral.models import SpeedPosition
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
-    degrees_to_cm,
     get_speed_positions,
     has_n_consecutive_trues,
     remove_consecutive_ones,
     shuffle_rows,
+    split_continuous_chunks,
+    threshold_detect_continuous,
     threshold_detect_edges,
     get_session_type,
-    trial_is_imaged,
 )
 
 
@@ -549,3 +544,67 @@ def test_compute_windowed_speed_movement_and_at_the_edges() -> None:
 #     ax2.set_xlabel("Time (s)")
 
 #     plt.show()
+
+
+def test_split_continuous_chunks_one_chunk() -> None:
+    arr = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    result = split_continuous_chunks(arr)
+    assert len(result) == 1
+    assert np.array_equal(result[0], arr)
+
+
+def test_split_continuous_chunks_two_chunks() -> None:
+    arr = np.array([1, 2, 3, 4, 6, 7, 8, 9, 10])
+    result = split_continuous_chunks(arr)
+    assert len(result) == 2
+    assert np.array_equal(result[0], np.array([1, 2, 3, 4]))
+    assert np.array_equal(result[1], np.array([6, 7, 8, 9, 10]))
+
+
+def test_split_continuous_chunks_three_chunks() -> None:
+    arr = np.array([100, 101, 2000, 2001, 2002, 2003, 10000, 10001])
+    result = split_continuous_chunks(arr)
+    assert len(result) == 3
+    assert np.array_equal(result[0], np.array([100, 101]))
+    assert np.array_equal(result[1], np.array([2000, 2001, 2002, 2003]))
+    assert np.array_equal(result[2], np.array([10000, 10001]))
+
+
+def test_threshold_detect_continuous() -> None:
+    arr = np.array([0, 0, 0, 10, 10, 10, 0])
+    threshold = np.array([1, 1, -10, 9, 9, 100, 0])
+
+    result = threshold_detect_continuous(arr, threshold)
+    expected = np.array([2])
+    assert np.array_equal(result, expected)
+
+
+def test_threshold_detect_continuous_multiple_crossings() -> None:
+    arr = np.array([0, 0, 0, 10, 10, 100, 0])
+    threshold = np.array([1, -1, 10, 11, 10000, 99, 0])
+
+    result = threshold_detect_continuous(arr, threshold)
+    expected = np.array([1, 5])
+    assert np.array_equal(result, expected)
+
+
+# TODO: remove eventually
+def test_code_rabbit() -> None:
+    signal = np.array([0, 0, 0, 10, 10, 100, 0])
+    threshold = np.array([1, -1, 10, 11, 10000, 99, 0])
+
+    if signal.shape != threshold.shape:
+        raise ValueError("signal and threshold must have the same shape")
+
+    # Compare elementwise
+    thresh_signal = signal > threshold
+
+    # Keep only the first sample of each suprathreshold run
+    thresh_signal[1:] &= ~thresh_signal[:-1]
+
+    # Return indices
+    times = np.where(thresh_signal)
+    result = times[0]
+
+    expected = np.array([1, 5])
+    assert np.array_equal(result, expected)

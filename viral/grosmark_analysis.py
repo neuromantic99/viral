@@ -2,8 +2,9 @@ import itertools
 import math
 from pathlib import Path
 import sys
+import warnings
 from matplotlib import pyplot as plt
-from scipy.stats import median_abs_deviation, zscore, pearsonr
+from scipy.stats import zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
@@ -14,13 +15,13 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import HERE
+from viral.constants import CACHE_PATH, HERE, SERVER_PATH
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
     trial_is_imaged,
     activity_trial_position,
-    get_frozen_wheel_flu,
+    split_fluoresence_online_freeze,
 )
 
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
@@ -54,27 +55,14 @@ def grosmark_place_field(
     3. do pair-wise correlations
     """
     if session.wheel_freeze is None:
-        spks = binarise_spikes(spks_raw)
+        spks = spks_raw
     else:
-        # """Based on the observed differences in calcium activity waveforms between the online and
-        # offline epochs (Supplementary Fig. 2), a threshold of 1.5 m.a.d. was used for online running epochs,
-        # while a lower threshold of 1.25 m.a.d. were used for offline immobility epochs."""
-        online_spks = binarise_spikes(
-            spks_raw[
-                :,
-                session.wheel_freeze.pre_training_end_frame : session.wheel_freeze.post_training_start_frame,
-            ],
-            mad_threshold=1.5,
+        offline_spks_pre, online_spks, offline_spks_post = (
+            split_fluoresence_online_freeze(
+                flu=spks_raw, wheel_freeze=session.wheel_freeze
+            )
         )
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
-            flu=spks_raw, wheel_freeze=session.wheel_freeze
-        )
-        # According to Grosmark, each offline epoch is singly binarised
-        offline_spks_pre = binarise_spikes(
-            offline_spks_pre,
-            mad_threshold=1.25,
-        )
-        offline_spks_post = binarise_spikes(offline_spks_post, mad_threshold=1.25)
+
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
         assert spks_raw.shape == spks.shape
 
@@ -137,6 +125,10 @@ def get_place_cells(
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
     n_shuffles = 2000
+    if n_shuffles < 2000:
+        warnings.warn(
+            "n_shuffles is less than 2000. This may not be enough to get a good estimate of the place cell distribution."
+        )
 
     all_trials = np.array(
         [
@@ -160,9 +152,11 @@ def get_place_cells(
     smoothed_matrix = np.nanmean(all_trials, 0)
 
     # Probably delete cache logic once we're all sorted
-    use_cache = False
+    use_cache = True
     cache_file = (
-        HERE
+        SERVER_PATH
+        / "viral_caches"
+        / "place_cells"
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
     )
     if use_cache and cache_file.exists():
@@ -337,7 +331,7 @@ def offline_correlations(
         plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
         # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
     else:
-        offline_spks_pre, offline_spks_post = get_frozen_wheel_flu(
+        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
             flu=spks, wheel_freeze=wheel_freeze
         )
         pre_corrs_real = get_offline_correlation_matrix(
@@ -507,6 +501,8 @@ def filter_additional_check(
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
 
     Currently have made the threshold more conservative (40%) as 15% does not filter any cells out, but review.
+
+    TODO: I think lots of things are being dropped here due to the blanking
     """
 
     centers = find_n_consecutive_trues_center(
@@ -533,7 +529,7 @@ def filter_additional_check(
         cell_not_place_activity = all_trials[:, cell, cell_out_of_place_field]
         count = 0
         for trial in range(n_trials):
-            if np.mean(cell_place_activity[trial, :]) > np.mean(
+            if np.nanmean(cell_place_activity[trial, :]) > np.nanmean(
                 cell_not_place_activity[trial, :]
             ):
                 count += 1

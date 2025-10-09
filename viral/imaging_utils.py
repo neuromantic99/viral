@@ -34,12 +34,7 @@ def load_imaging_data(
     print(f"Suite 2p path is {s2p_path}")
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
-    if not (s2p_path / "oasis_spikes.npy").exists():
-        from viral.run_oasis import main as run_oasis
-
-        run_oasis(mouse=mouse, date=date, grosmark=False)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
 
@@ -197,6 +192,7 @@ def get_online_position_and_frames(
     )
 
     # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
+    # TODO: Not sure this is working correctly
     trial_onset = frame_position < frame_position[0] + 60
     # TODO: Make sure this works
     idx_keep = idx_keep & ~trial_onset
@@ -389,14 +385,23 @@ def get_ITI_matrix(
     return np.array(matrices)
 
 
-def get_frozen_wheel_flu(
+def split_fluoresence_online_freeze(
     flu: np.ndarray, wheel_freeze: WheelFreeze
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return sliced flu array: offline epochs before and after behaviour session."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Split the fluorescence data three chunks:
+    pre-training freeze
+    online
+    post-training freeze
+    """
     return (
         flu[
             :,
             wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame,
+        ],
+        flu[
+            :,
+            wheel_freeze.pre_training_end_frame : wheel_freeze.post_training_start_frame,
         ],
         flu[
             :,
