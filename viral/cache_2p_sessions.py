@@ -516,10 +516,11 @@ def get_tiff_metadata(
     epochs = []
     all_tiff_timestamps = []
     for tiff in tiffs:
-        epoch, tiff_timestamps = extract_metadata(tiff)
-        check_no_dropped_frames(tiff_timestamps)
+        stack_length, epoch, tiff_timestamps = extract_metadata(tiff)
+        stack_lengths.append(stack_length)
         epochs.append(epoch)
         all_tiff_timestamps.extend(tiff_timestamps)
+        check_no_dropped_frames(tiff_timestamps)
 
     if use_cache:
         for variable, name in zip(
@@ -534,7 +535,8 @@ def get_tiff_metadata(
     return stack_lengths, epochs, all_tiff_timestamps
 
 
-def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[List[float], List[float]]:
+def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[int, List[float], List[float]]:
+    stack_length = tiff.shape()[0]
     tiff_timestamps = [
         float(
             re.search(
@@ -551,7 +553,7 @@ def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[List[float], List[float
     if epoch_match is None:
         raise ValueError("Could not extract epoch from tiff description")
     epoch = list(map(float, epoch_match[1].split()))
-    return epoch, tiff_timestamps
+    return stack_length, epoch, tiff_timestamps
 
 
 def check_no_dropped_frames(tiff_timestamps) -> None:
