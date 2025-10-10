@@ -84,7 +84,7 @@
       "name": "fix tiff",
       "type": "debugpy",
       "request": "launch",
-      "program": "viral/fix_tiff.py",
+      "program": "viral/fix_tiff.py"
     },
     {
       "name": "run oasis",
