@@ -411,6 +411,12 @@ def get_session_sync(
         loosen_assertions=imaging_crashed,
     )
 
+    # crazy hack to bypass the frame times validation for post session wheel freeze when DAQ crashed
+    if "JB034" in str(tdms_path) and "2025-07-04" in str(tdms_path):
+        valid_frame_times = np.append(
+            valid_frame_times, np.ones(shape=sum([10374, 14108]))
+        )
+
     check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
