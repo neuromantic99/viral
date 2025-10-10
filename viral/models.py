@@ -190,6 +190,13 @@ class SessionCorrection:
 
 
 @dataclass
+class EnsembleSessionResult:
+    reactivation_triggered_response: Tuple[np.ndarray, np.ndarray]
+    number_of_events: Tuple[np.ndarray, np.ndarray]
+    sum_values_over_threshold: Tuple[np.ndarray, np.ndarray]
+
+
+@dataclass
 class MultipleSessionsConfig:
     window: int
     speed: float

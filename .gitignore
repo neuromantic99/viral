@@ -3,6 +3,7 @@ OASIS/
 *.npz
 *.npy
 constants.py
+nohup
 
 *.png
 *.jpeg
