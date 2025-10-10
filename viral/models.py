@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel, computed_field
 from datetime import datetime
 import numpy as np
@@ -200,3 +200,24 @@ class MultipleSessionsConfig:
             raise ValueError(
                 f"Invalid weights for speed and licking in learning metric! Sum has to equal to 1, instead it is {sum([self.speed, self.licking])}"
             )
+
+
+@dataclass
+class BayesianDecodingConfig:
+    peak_threshold: float  # SDs above mean
+    edge_threshold: float  # SDs above mean
+    event_duration: Tuple[float, float]  # min, max (frames)
+    bin_size_time_online: int  # frames
+    bin_size_time_offline: int  # frames
+    bin_size_spatial: int  # cms
+
+
+@dataclass
+class ReplayEvent:
+    start_frame: int
+    end_frame: int
+    posterior_probability_matrix: np.ndarray
+    pr_max: np.ndarray
+    p_value: float
+    weighted_r: float
+    rz_score: float
