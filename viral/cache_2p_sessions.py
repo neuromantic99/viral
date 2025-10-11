@@ -22,6 +22,7 @@ from viral.imaging_utils import (
     extract_TTL_chunks,
     get_sampling_rate,
     get_imaging_crashed,
+    get_daq_crashed,
     load_imaging_data,
     trial_is_imaged,
 )
@@ -272,36 +273,51 @@ def extract_frozen_wheel_chunks(
 
 def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
     """Get wheel freeze object."""
-    frozen_wheel_chunks = extract_frozen_wheel_chunks(
-        stack_lengths_tiffs=session_sync.stack_lengths_tiffs,
-        valid_frame_times=session_sync.valid_frame_times,
-        behaviour_times=session_sync.behaviour_times,
-        sampling_rate=session_sync.sampling_rate,
-        check_first_chunk=session_sync.offset_after_pre_epoch == 0,
-    )
-    if session_sync.offset_after_pre_epoch > 0:
-        return WheelFreeze(
+    # TODO: if this occurs more often, find a more elegant fix
+    # manually set wheele freeze objects for crashed recordings
+    manual_wheel_freeze = {
+        "JB034_2025-07-04": WheelFreeze(
             pre_training_start_frame=0,
-            pre_training_end_frame=session_sync.offset_after_pre_epoch,
-            post_training_start_frame=frozen_wheel_chunks[1][0]
-            + session_sync.offset_after_pre_epoch,
-            post_training_end_frame=frozen_wheel_chunks[1][1]
-            + session_sync.offset_after_pre_epoch,
+            pre_training_end_frame=27000,
+            post_training_start_frame=sum([27000, 30240, 69451, 10372]),
+            post_training_end_frame=sum([27000, 30240, 69451, 10372, 14200, 13000]),
         )
+    }
+    if f"{session_sync.mouse_name}_{session_sync.date}" in manual_wheel_freeze.keys():
+        print("Using a manually set WheelFreeze object")
+        return manual_wheel_freeze[f"{session_sync.mouse_name}_{session_sync.date}"]
     else:
-        assert frozen_wheel_chunks[0] is not None
-        return WheelFreeze(
-            pre_training_start_frame=frozen_wheel_chunks[0][0],
-            pre_training_end_frame=frozen_wheel_chunks[0][1],
-            post_training_start_frame=frozen_wheel_chunks[1][0],
-            post_training_end_frame=frozen_wheel_chunks[1][1],
+        frozen_wheel_chunks = extract_frozen_wheel_chunks(
+            stack_lengths_tiffs=session_sync.stack_lengths_tiffs,
+            valid_frame_times=session_sync.valid_frame_times,
+            behaviour_times=session_sync.behaviour_times,
+            sampling_rate=session_sync.sampling_rate,
+            check_first_chunk=session_sync.offset_after_pre_epoch == 0,
         )
+        if session_sync.offset_after_pre_epoch > 0:
+            return WheelFreeze(
+                pre_training_start_frame=0,
+                pre_training_end_frame=session_sync.offset_after_pre_epoch,
+                post_training_start_frame=frozen_wheel_chunks[1][0]
+                + session_sync.offset_after_pre_epoch,
+                post_training_end_frame=frozen_wheel_chunks[1][1]
+                + session_sync.offset_after_pre_epoch,
+            )
+        else:
+            assert frozen_wheel_chunks[0] is not None
+            return WheelFreeze(
+                pre_training_start_frame=frozen_wheel_chunks[0][0],
+                pre_training_end_frame=frozen_wheel_chunks[0][1],
+                post_training_start_frame=frozen_wheel_chunks[1][0],
+                post_training_end_frame=frozen_wheel_chunks[1][1],
+            )
 
 
 def add_imaging_info_to_trials(
     trials: List[TrialInfo],
     session_sync: SessionImagingInfo,
     wheel_freeze: WheelFreeze | None = None,
+    daq_crashed: bool = False,
 ) -> List[TrialInfo]:
     """Adds imaging info to trials."""
     logger.info("Adding imaging info to trials")
@@ -330,6 +346,7 @@ def add_imaging_info_to_trials(
             daq_start_time=session_sync.daq_start_time,
             wheel_blocked=bool(wheel_freeze),
             offset_after_pre_epoch=session_sync.offset_after_pre_epoch,
+            loosen_assertion=daq_crashed,
         )
 
     return trials
@@ -412,15 +429,18 @@ def get_session_sync(
     )
 
     # crazy hack to bypass the frame times validation for post session wheel freeze when DAQ crashed
-    if "JB034" in str(tdms_path) and "2025-07-04" in str(tdms_path):
+    if mouse_name == "JB034" and date == "2025-07-04":
+        print("JB034_2025-07-04 fix for valid_frame_times")
         valid_frame_times = np.append(
-            valid_frame_times, np.ones(shape=sum([10374, 14108]))
+            valid_frame_times, np.ones(shape=sum([14200, 13000]))
         )
 
     check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
+        mouse_name=mouse_name,
+        date=date,
         stack_lengths_tiffs=stack_lengths_tiffs,
         epochs=epochs,
         all_tiff_timestamps=all_tiff_timestamps,
@@ -580,6 +600,7 @@ def check_timestamps(
     daq_start_time: datetime,
     wheel_blocked: bool = False,
     offset_after_pre_epoch: int = 0,
+    loosen_assertion: bool = False,
 ) -> None:
     """Compares the timestamps in the tiff to the timestamps in the Daq (the time of the trigger, offset to the timestamp that the daq started)
     Currently works trial by trial which isn't really necessary.
@@ -591,7 +612,9 @@ def check_timestamps(
     if not trial_is_imaged(trial):
         return
 
-    assert len(all_tiff_timestamps) == len(valid_frame_times)
+    # loosen the assertion for all tiff frames being accounted for in the valid frame times (DAQ), for when the DAQ crashed
+    if not loosen_assertion:
+        assert len(all_tiff_timestamps) == len(valid_frame_times)
 
     first_frame_trial = trial.trial_start_closest_frame - offset_after_pre_epoch
     last_frame_trial = trial.trial_end_closest_frame - offset_after_pre_epoch
@@ -638,6 +661,8 @@ def process_session(
     print(f"Off we go for {mouse_name} {date} {session_type}")
     imaging_crashed = get_imaging_crashed(mouse_name, date)
     print(f"Imaging crashed: {imaging_crashed}")
+    daq_crashed = get_daq_crashed(mouse_name, date)
+    print(f"DAQ crashed: {daq_crashed}")
 
     if wheel_blocked:
         print("Wheel blocked")
@@ -650,8 +675,9 @@ def process_session(
         trials=trials,
         imaging_crashed=imaging_crashed,
     )
+
     wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
-    trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze)
+    trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze, daq_crashed)
 
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
@@ -665,17 +691,17 @@ def process_session(
             f,
         )
 
-    if wheel_freeze is not None:
-        from viral.run_oasis import main as oasis_main
+    # if wheel_freeze is not None:
+    #     from viral.run_oasis import main as oasis_main
 
-        s2p_path = tiff_directory / "suite2p" / "plane0"
-        if not (s2p_path / "oasis_spikes.npy").exists():
-            oasis_main(
-                s2p_path=s2p_path,
-                wheel_freeze=wheel_freeze,
-                parallel=True,
-                plot=False,
-            )
+    #     s2p_path = tiff_directory / "suite2p" / "plane0"
+    #     if not (s2p_path / "oasis_spikes.npy").exists():
+    #         oasis_main(
+    #             s2p_path=s2p_path,
+    #             wheel_freeze=wheel_freeze,
+    #             parallel=True,
+    #             plot=False,
+    #         )
 
     print(f"Done for {mouse_name} {date} {session_type}")
 

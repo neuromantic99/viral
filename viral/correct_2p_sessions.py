@@ -439,7 +439,7 @@ def jb033_2025_06_17(c: SessionCorrection) -> SessionCorrection:
 
 
 @register_correction("JB034", "2025-07-04")
-def jb033_2025_06_17(c: SessionCorrection) -> SessionCorrection:
+def jb034_2025_07_04(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
     # array([27000, 30240, 69451, 10372, 14200, 13000])
     # chunk_lengths_daq
@@ -448,7 +448,9 @@ def jb033_2025_06_17(c: SessionCorrection) -> SessionCorrection:
     # The C drive maxed out at 14200 frames of post-freeze (also stopping the daq).
     # Took the final 14000 on the D drive with no DAQ.
     # I think there's 27300 frames total in the post-freeze"
+
     # Bit of a crazy fix, but I'm bypassing the checks for the post wheel freeze chunks both here and in cache_2p_sessions.py for this session.
+    # -> removing the tiff stacks and DAQ chunk for the post-offline period
     c.stack_lengths_tiffs = np.delete(c.stack_lengths_tiffs, [4, 5])
     c.epochs = np.delete(c.epochs, [4, 5], axis=0)
     c.all_tiff_timestamps = c.all_tiff_timestamps[: sum([27000, 30240, 69451, 10372])]
