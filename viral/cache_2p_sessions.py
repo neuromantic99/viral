@@ -274,7 +274,7 @@ def extract_frozen_wheel_chunks(
 def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
     """Get wheel freeze object."""
     # TODO: if this occurs more often, find a more elegant fix
-    # manually set wheele freeze objects for crashed recordings
+    # manually set wheel freeze objects for crashed recordings
     manual_wheel_freeze = {
         "JB034_2025-07-04": WheelFreeze(
             pre_training_start_frame=0,
