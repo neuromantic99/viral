@@ -270,6 +270,20 @@ def extract_frozen_wheel_chunks(
     return (first_chunk, last_chunk)
 
 
+def manual_wheel_freezes(
+    mouse_name: str, date: str, session_sync: SessionImagingInfo
+) -> WheelFreeze | None:
+    if (mouse_name, date) == ("JB035", "2025-07-04"):
+        return WheelFreeze(
+            pre_training_start_frame=0,
+            pre_training_end_frame=19011 + 8000,
+            post_training_start_frame=sum(session_sync.stack_lengths_tiffs[:-1]),
+            post_training_end_frame=sum(session_sync.stack_lengths_tiffs),
+        )
+
+    return None
+
+
 def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
     """Get wheel freeze object."""
     frozen_wheel_chunks = extract_frozen_wheel_chunks(
@@ -516,8 +530,10 @@ def get_tiff_metadata(
     epochs = []
     all_tiff_timestamps = []
     for tiff in tiffs:
-        stack_lengths, epochs, tiff_timestamps = extract_metadata(tiff)
-        check_no_dropped_frames(tiff_timestamps)
+        epoch, tiff_timestamps = extract_metadata(tiff)
+        # check_no_dropped_frames(tiff_timestamps)
+        epochs.append(epoch)
+        all_tiff_timestamps.extend(tiff_timestamps)
 
     if use_cache:
         for variable, name in zip(
@@ -532,8 +548,7 @@ def get_tiff_metadata(
     return stack_lengths, epochs, all_tiff_timestamps
 
 
-def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[int, np.ndarray, List[float]]:
-    stack_length = tiff.shape()[0]
+def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[List[float], List[float]]:
     tiff_timestamps = [
         float(
             re.search(
@@ -550,7 +565,7 @@ def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[int, np.ndarray, List[f
     if epoch_match is None:
         raise ValueError("Could not extract epoch from tiff description")
     epoch = list(map(float, epoch_match[1].split()))
-    return stack_length, epoch, tiff_timestamps
+    return epoch, tiff_timestamps
 
 
 def check_no_dropped_frames(tiff_timestamps) -> None:
@@ -641,7 +656,14 @@ def process_session(
         trials=trials,
         imaging_crashed=imaging_crashed,
     )
-    wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
+
+    manual = manual_wheel_freezes(mouse_name, date, session_sync)
+    wheel_freeze = (
+        manual
+        if manual is not None
+        else get_wheel_freeze(session_sync) if wheel_blocked else None
+    )
+
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze)
 
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:

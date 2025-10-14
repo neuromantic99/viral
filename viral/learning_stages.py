@@ -5,6 +5,8 @@ from typing import Dict
 import pandas as pd
 from pydantic import ValidationError
 
+from ensemble_reactivation import main as ensemble_main
+
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -193,9 +195,6 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
             metadata,
             stage=stage,
         )
-        # except Exception as e:
-        #     print(f"Error retrieving {stage} session for {mouse_name}: {e}")
-        #     sessions[stage] = None
 
     return Mouse2pSessions(
         mouse_name=mouse_name,
@@ -206,9 +205,21 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
 
 
 def main() -> None:
-    # mouse_sessions = get_mouse_sessions("JB034")
+    # for mouse_name in SESSIONS_KEEP.keys():
+    #     mouse_sessions = get_mouse_sessions(mouse_name)
+
+    stages = ["unsupervised", "learning", "learned"]
+    result = {stage: None for stage in stages}
+
     for mouse_name in SESSIONS_KEEP.keys():
-        mouse_sessions = get_mouse_sessions(mouse_name)
+
+        if mouse_name not in {"JB034", "JB035", "JB036"}:
+            continue
+        for stage in stages:
+            if SESSIONS_KEEP[mouse_name][stage] is None:
+                continue
+
+            ensemble_main(mouse_name, date=SESSIONS_KEEP[mouse_name][stage], plot=False)
 
 
 if __name__ == "__main__":

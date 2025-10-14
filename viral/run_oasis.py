@@ -160,7 +160,8 @@ def process_cell(
         == baseline.shape
         == denoised.shape
         == cell.shape
-    )
+    ), "Shape of deconvolved does not match shape of original cell"
+
     if plot:
         fig = plot_result(raw, baselined, baseline, denoised, spikes)
         plt.title(
@@ -358,12 +359,6 @@ if __name__ == "__main__":
         if (s2p_path / "full_grosmark_oasis_preprocessed.npy").exists():
             print(f"Already processed {mouse_name} {date}, skipping")
             continue
-        if cached_session.wheel_freeze is None:
-            print(
-                f"No wheel freeze info for {mouse_name} {date}, haven't dealt with this in oasis yet so skipping"
-            )
-            continue
-
         try:
             main(s2p_path, cached_session.wheel_freeze, parallel=False, plot=False)
         except Exception as e:

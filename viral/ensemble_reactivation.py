@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Any, List, Tuple
 import numpy as np
 import sys
 import concurrent.futures
@@ -721,6 +721,15 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
     verbose = True
     use_cache = True
 
+    assert (
+        TIFF_UMBRELLA
+        / date
+        / mouse
+        / "suite2p"
+        / "plane0"
+        / "full_grosmark_oasis_preprocessed.npy"
+    ).exists(), f"Correct oasis not run for {mouse} on {date}"
+
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
@@ -751,9 +760,10 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             preactivation_strength_shuffled,
             reactivation,
             preactivation,
-            running_bouts,
             pcc_scores,
         ) = load_data_from_cache(cache_file)
+        if not plot:
+            return
     else:
         print("No cached data found, processing data")
         config = GrosmarkConfig(
@@ -807,7 +817,7 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             reactivation=preactivation, ensemble_matrix=ensemble_matrix
         )
 
-        def compute_shuffled_strength(_):
+        def compute_shuffled_strength(_: Any) -> Tuple[np.ndarray, np.ndarray]:
             ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
             return (
                 offline_reactivation(
@@ -824,14 +834,22 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         reactivation_strength_shuffled = []
         preactivation_strength_shuffled = []
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = list(
-                tqdm(
-                    executor.map(compute_shuffled_strength, range(n_shuffles)),
-                    total=n_shuffles,
+        do_concurrent = False
+        if do_concurrent:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                results = list(
+                    tqdm(
+                        executor.map(compute_shuffled_strength, range(n_shuffles)),
+                        total=n_shuffles,
+                    )
                 )
-            )
-            for reac, preac in results:
+                for reac, preac in results:
+                    reactivation_strength_shuffled.append(reac)
+                    preactivation_strength_shuffled.append(preac)
+
+        else:
+            for _ in tqdm(range(n_shuffles)):
+                reac, preac = compute_shuffled_strength(None)
                 reactivation_strength_shuffled.append(reac)
                 preactivation_strength_shuffled.append(preac)
 
@@ -859,6 +877,8 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             reactivation_strength_shuffled=reactivation_strength_shuffled,
             preactivation_strength=preactivation_strength,
             preactivation_strength_shuffled=preactivation_strength_shuffled,
+            reactivation=reactivation,
+            preactivation=preactivation,
             pcc_scores=pcc_scores,
         )
         if not plot:
@@ -1074,15 +1094,12 @@ def load_data_from_cache(cache_file: Path) -> tuple:
     return (
         cache["pcs_mask"],
         cache["ensemble_matrix"],
-        cache["ensemble_matrix_shuffled_data"],
         cache["reactivation_strength"],
         cache["reactivation_strength_shuffled"],
         cache["preactivation_strength"],
         cache["preactivation_strength_shuffled"],
         cache["reactivation"],
         cache["preactivation"],
-        None,
-        # cache["running_bouts"],
         cache["pcc_scores"],
     )
 
