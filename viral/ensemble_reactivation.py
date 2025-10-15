@@ -14,6 +14,7 @@ from opt_einsum import contract
 import seaborn as sns
 from tqdm import tqdm
 
+
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
@@ -26,6 +27,7 @@ from viral.models import (
     SortedPlaceCells,
     TrialInfo,
 )
+from viral.sessions_keep import SESSIONS_KEEP
 from viral.rastermap_utils import (
     get_frame_position,
     get_speed_frame,
@@ -42,6 +44,7 @@ from viral.utils import (
     split_continuous_chunks,
     threshold_detect,
     threshold_detect_continuous,
+    threshold_detect_edges,
     trial_is_imaged,
 )
 from viral.imaging_utils import (
@@ -930,10 +933,9 @@ def get_reactivation_strength_sum(
     preactivation_strength: np.ndarray,
     plot: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    assert reactivation_strength.shape == preactivation_strength.shape
 
-    total_reactivation = np.nansum(reactivation_strength, axis=1)
-    total_preactivation = np.nansum(preactivation_strength, axis=1)
+    total_reactivation = np.nanmean(reactivation_strength, axis=1)
+    total_preactivation = np.nanmean(preactivation_strength, axis=1)
 
     if plot:
         plt.figure()
@@ -1052,7 +1054,7 @@ def get_reactivation_number_of_events(
             )
             for idx in range(reactivation_strength.shape[0])
         ]
-    )
+    ) / (reactivation_strength.shape[1] / 30)
 
     total_preactivation = np.array(
         [
@@ -1064,7 +1066,7 @@ def get_reactivation_number_of_events(
             )
             for idx in range(preactivation_strength.shape[0])
         ]
-    )
+    ) / (preactivation_strength.shape[1] / 30)
 
     if plot:
         plt.figure()
@@ -1157,20 +1159,21 @@ def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
 def multiple_sessions() -> None:
     """Run ensemble reactivation on multiple cached sessions"""
 
-    cache_files = list(
-        (SERVER_PATH / "viral_caches" / "ensemble_caches").glob(
-            "*_ensemble_reactivation.npz"
-        )
-    )
-    assert cache_files, "No cache files found"
-
     all_mice: List[EnsembleSessionResult] = []
 
-    baseline_multiplier = 1
-    for cache_file in cache_files:
+    baseline_multiplier = 1.5
+    for mouse in SESSIONS_KEEP.keys():
+        if mouse not in {"JB035"}:
+            continue
 
-        mouse, date = cache_file.stem.split("_")[:2]
-        mouse = mouse.strip("suite2p")  # dunno why this is in the path lol
+        date = SESSIONS_KEEP[mouse]["learned"]
+        print(mouse, date)
+        cache_file = (
+            SERVER_PATH
+            / "viral_caches"
+            / "ensemble_caches"
+            / f"{mouse}suite2p_{date}_ensemble_reactivation.npz"
+        )
         data = np.load(cache_file, allow_pickle=True)
         (
             reactivation_strength,
@@ -1206,6 +1209,24 @@ def multiple_sessions() -> None:
         only_significant_reactivation[~significant_reactivation] = np.nan
         only_significant_preactivation[~significant_preactivation] = np.nan
 
+        reactivation_n, preactivation_n = get_three_sd_events(
+            reactivation_strength=reactivation_strength,
+            preactivation_strength=preactivation_strength,
+        )
+        plt.figure()
+        sns.boxplot(reactivation_n - preactivation_n)
+        plt.title(
+            wilcoxon(reactivation_n, preactivation_n, alternative="greater").pvalue
+        )
+
+        plot_example(
+            baseline_multiplier,
+            reactivation_strength,
+            reactivation_strength_shuffled,
+            preactivation_strength,
+            preactivation_strength_shuffled,
+        )
+
         reactivation_number_of_events = get_reactivation_number_of_events(
             reactivation_strength=reactivation_strength,
             preactivation_strength=preactivation_strength,
@@ -1235,18 +1256,155 @@ def multiple_sessions() -> None:
                 reactivation_triggered_response=reactivation_triggered_response,
                 number_of_events=reactivation_number_of_events,
                 sum_values_over_threshold=reactivation_strength_sum_over_threshold,
+                three_sd_events=None,
             )
         )
     all_mice_ensemble_results_plots(all_mice=all_mice)
 
 
+def plot_example(
+    baseline_multiplier: float,
+    reactivation_strength: np.ndarray,
+    reactivation_strength_shuffled: np.ndarray,
+    preactivation_strength: np.ndarray,
+    preactivation_strength_shuffled: np.ndarray,
+) -> None:
+    plt.figure()
+    plt.plot(
+        np.arange(preactivation_strength.shape[1]) / 30,
+        preactivation_strength[0, :] * baseline_multiplier,
+        ".",
+    )
+
+    plt.plot(
+        np.arange(preactivation_strength_shuffled.shape[1]) / 30,
+        preactivation_strength_shuffled[0, :] * baseline_multiplier,
+        linestyle="dotted",
+    )
+    plt.title("Preactivation example")
+
+    plt.figure()
+    plt.plot(
+        np.arange(reactivation_strength.shape[1]) / 30,
+        reactivation_strength[0, :],
+    )
+
+    plt.plot(
+        np.arange(reactivation_strength_shuffled.shape[1]) / 30,
+        reactivation_strength_shuffled[0, :] * baseline_multiplier,
+        linestyle="dotted",
+    )
+    plt.title("reactivation example")
+
+
+def above_threshold_events(
+    arr: np.ndarray, upper_threshold: float, lower_threshold: float
+) -> List[Tuple[int, int]]:
+    upper = threshold_detect(arr, upper_threshold)
+    rising_lower, falling_lower = threshold_detect_edges(arr, lower_threshold)
+
+    events = []
+    for u in upper:
+        lower_befores = rising_lower[rising_lower < u]
+        if len(lower_befores) == 0:
+            continue
+        onset = lower_befores[-1]
+        lower_afters = falling_lower[falling_lower > u]
+        if len(lower_afters) == 0:
+            continue
+        offset = lower_afters[0]
+        assert onset < u < offset
+        events.append((onset, offset))
+
+    return events
+
+
+def get_three_sd_events(
+    reactivation_strength: np.ndarray, preactivation_strength: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    From: www.nature.com/articles/s41467-023-43254-7#Sec10
+    Reactivation events were identified when the reactivation strength exceeds
+        three standard deviations above the mean.
+    The onset and offset of these events were delimited by 25% of this threshold.
+    """
+
+    reactivation_threshold = np.mean(reactivation_strength, axis=1) + 3 * np.std(
+        reactivation_strength, axis=1
+    )
+    preactivation_threshold = np.mean(preactivation_strength, axis=1) + 3 * np.std(
+        preactivation_strength, axis=1
+    )
+
+    reactivation_thresholds = [
+        above_threshold_events(
+            reactivation_strength[i, :],
+            upper_threshold=reactivation_threshold[i],
+            lower_threshold=reactivation_threshold[i] * 0.25,
+        )
+        for i in range(reactivation_strength.shape[0])
+    ]
+
+    preactivation_thresholds = [
+        above_threshold_events(
+            preactivation_strength[i, :],
+            upper_threshold=preactivation_threshold[i],
+            lower_threshold=preactivation_threshold[i] * 0.25,
+        )
+        for i in range(preactivation_strength.shape[0])
+    ]
+
+    preactivation_response = [
+        get_onset_triggered_response(component, events)
+        for component, events in zip(preactivation_strength, preactivation_thresholds)
+    ]
+    plt.plot(
+        np.mean(preactivation_response, axis=0), color="blue", label="preactivation"
+    )
+
+    reactivation_response = [
+        get_onset_triggered_response(component, events)
+        for component, events in zip(reactivation_strength, reactivation_thresholds)
+    ]
+    plt.plot(
+        np.mean(reactivation_response, axis=0), color="orange", label="reactivation"
+    )
+    plt.legend()
+
+    return np.array([len(r) for r in reactivation_thresholds]), np.array(
+        [len(p) for p in preactivation_thresholds]
+    )
+
+
+def get_onset_triggered_response(
+    component: np.ndarray, events: List[Tuple[int, int]]
+) -> np.ndarray:
+
+    responses = []
+    for onset, _ in events:
+        if onset - 30 < 0 or onset + 30 > len(component):
+            continue
+        responses.append(component[onset - 30 : onset + 30])
+    return np.sum(responses, axis=0)
+
+
 def all_mice_ensemble_results_plots(
     all_mice: List[EnsembleSessionResult],
 ) -> None:
-    number_of_events = np.hstack(
-        [mouse.number_of_events[0] - mouse.number_of_events[1] for mouse in all_mice]
+    plt.figure()
+    number_of_events_re = np.hstack([mouse.number_of_events[0] for mouse in all_mice])
+    number_of_events_pre = np.hstack([mouse.number_of_events[1] for mouse in all_mice])
+
+    sns.boxplot(number_of_events_re - number_of_events_pre, showfliers=False)
+    p = wilcoxon(number_of_events_re, number_of_events_pre, alternative="greater")
+
+    plt.title(
+        f"total number events: Wilcoxon result: statistic: {p.statistic} p-value={p.pvalue:.2e},\nmean change={np.mean(number_of_events_re - number_of_events_pre):.3f}"
     )
 
+    sns.stripplot(number_of_events_re - number_of_events_pre)
+
+    plt.figure()
     sum_values_over_threshold_re = np.hstack(
         [mouse.sum_values_over_threshold[0] for mouse in all_mice]
     )
@@ -1256,6 +1414,16 @@ def all_mice_ensemble_results_plots(
     sns.boxplot(
         sum_values_over_threshold_re - sum_values_over_threshold_pre, showfliers=False
     )
+    p = wilcoxon(
+        sum_values_over_threshold_re,
+        sum_values_over_threshold_pre,
+        alternative="greater",
+    )
+    plt.title(
+        f"Sum values: Wilcoxon result: statistic: {p.statistic} p-value={p.pvalue:.2e}\nmean change={np.mean(sum_values_over_threshold_re - sum_values_over_threshold_pre):.3f}"
+    )
+
+    sns.stripplot(sum_values_over_threshold_re - sum_values_over_threshold_pre)
 
     plt.figure()
     response_re = np.vstack(
@@ -1265,15 +1433,19 @@ def all_mice_ensemble_results_plots(
         [mouse.reactivation_triggered_response[1] for mouse in all_mice]
     )
     shaded_line_plot(
-        response_re, x_axis=np.arange(-30, 30) / 30, color="blue", label="reactivation"
-    )
-    shaded_line_plot(
-        response_pre,
+        response_re - response_pre,
         x_axis=np.arange(-30, 30) / 30,
-        color="orange",
-        label="preactivation",
+        color="blue",
+        label="reactivation",
     )
+    # shaded_line_plot(
+    #     response_pre,
+    #     x_axis=np.arange(-30, 30) / 30,
+    #     color="orange",
+    #     label="preactivation",
+    # )
     plt.xlabel("Time (s) from event onset")
+    1 / 0
 
 
 def compare_run_results(W_py: np.ndarray, W_mat: np.ndarray) -> None:
@@ -1348,93 +1520,6 @@ def compare_to_matlab() -> None:
     compare_run_results(matlab_result, python_result)
 
 
-def multiple_sessions() -> None:
-
-    cache_files = list(
-        (SERVER_PATH / "viral_caches" / "ensemble_caches").glob(
-            "*_ensemble_reactivation.npz"
-        )
-    )
-    assert cache_files, "No cache files found"
-
-    all_mice: List[EnsembleSessionResult] = []
-
-    baseline_multiplier = 1
-    for cache_file in cache_files:
-
-        mouse, date = cache_file.stem.split("_")[:2]
-        mouse = mouse.strip("suite2p")  # dunno why this is in the path lol
-        if mouse not in {"JB030", "JB031"}:
-            continue
-        data = np.load(cache_file, allow_pickle=True)
-        (
-            reactivation_strength,
-            reactivation_strength_shuffled,
-            preactivation_strength,
-            preactivation_strength_shuffled,
-            ensemble_matrix,
-        ) = (
-            data["reactivation_strength"],
-            data["reactivation_strength_shuffled"],
-            data["preactivation_strength"],
-            data["preactivation_strength_shuffled"],
-            data["ensemble_matrix"],
-        )
-
-        if ensemble_matrix.shape[1] < 5:
-            print(
-                f"Skipping {mouse} {date} as there are only {ensemble_matrix.shape[1]} components"
-            )
-            continue
-
-        significant_reactivation = (
-            reactivation_strength > reactivation_strength_shuffled * baseline_multiplier
-        )
-        significant_preactivation = (
-            preactivation_strength
-            > preactivation_strength_shuffled * baseline_multiplier
-        )
-
-        only_significant_reactivation = reactivation_strength.copy()
-        only_significant_preactivation = preactivation_strength.copy()
-
-        only_significant_reactivation[~significant_reactivation] = np.nan
-        only_significant_preactivation[~significant_preactivation] = np.nan
-
-        reactivation_number_of_events = get_reactivation_number_of_events(
-            reactivation_strength=reactivation_strength,
-            preactivation_strength=preactivation_strength,
-            reactivation_strength_baseline=reactivation_strength_shuffled
-            * baseline_multiplier,
-            preactivation_strength_baseline=preactivation_strength_shuffled
-            * baseline_multiplier,
-            plot=False,
-        )
-
-        reactivation_strength_sum_over_threshold = get_reactivation_strength_sum(
-            reactivation_strength=only_significant_reactivation,
-            preactivation_strength=only_significant_preactivation,
-        )
-
-        reactivation_triggered_response = get_reactivation_triggered_averages(
-            reactivation_strength=reactivation_strength,
-            reactivation_strength_baseline=reactivation_strength_shuffled
-            * baseline_multiplier,
-            preactivation_strength=preactivation_strength,
-            preactivation_strength_baseline=preactivation_strength_shuffled
-            * baseline_multiplier,
-        )
-
-        all_mice.append(
-            EnsembleSessionResult(
-                reactivation_triggered_response=reactivation_triggered_response,
-                number_of_events=reactivation_number_of_events,
-                sum_values_over_threshold=reactivation_strength_sum_over_threshold,
-            )
-        )
-    all_mouse_plots(all_mice=all_mice)
-
-
 def all_mouse_plots(
     all_mice: List[EnsembleSessionResult],
 ) -> None:
@@ -1474,16 +1559,17 @@ def all_mouse_plots(
 
 if __name__ == "__main__":
     # This is the file that's saved by the full grosmark oasis preprocessing as a flag
-    valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
+    # valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
 
-    for session_idx in range(len(valid_sessions)):
-        session_path = valid_sessions[session_idx]
-        mouse = session_path.parts[-4]
-        date = session_path.parts[-5]
+    # for session_idx in range(len(valid_sessions)):
+    #     session_path = valid_sessions[session_idx]
+    #     mouse = session_path.parts[-4]
+    #     date = session_path.parts[-5]
 
-        # Bad imaging, replace eventually with column
-        # in spreadsheet, or filter by number of place cells
-        if mouse in {"JB033", "JB032"}:
-            continue
+    #     # Bad imaging, replace eventually with column
+    #     # in spreadsheet, or filter by number of place cells
+    #     if mouse in {"JB033", "JB032"}:
+    #         continue
 
-        main(mouse, date, plot=False)
+    #     main(mouse, date, plot=False)
+    multiple_sessions()

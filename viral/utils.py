@@ -450,7 +450,7 @@ def shuffle(x: np.ndarray) -> np.ndarray:
 
 
 def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
-    peak_indices = np.argmax(matrix, axis=1)
+    peak_indices = np.nanargmax(matrix, axis=1)
     sorted_order = np.argsort(peak_indices)
     return matrix[sorted_order]
 

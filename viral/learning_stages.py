@@ -2,10 +2,13 @@ from pathlib import Path
 import sys
 from typing import Dict
 
+import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
 from ensemble_reactivation import main as ensemble_main
+from viral.grosmark_analysis import get_place_cells
+from viral.sessions_keep import SESSIONS_KEEP
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -13,7 +16,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.models import Cached2pSession, Mouse2pSessions
+from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
 from viral.cache_2p_sessions import process_session
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -28,92 +31,6 @@ from viral.single_session import load_data
 
 ## TODO: Do we want to include the first day of learning?
 # There's likely a lot of interesting reactivated activtity there
-
-SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
-    # Imaging of poor quality, dont analyse
-    # "JB011": {
-    #     "unsupervised": "2024-10-22",
-    #     "learning": "2024-10-25",
-    #     "learned": "2024-10-30",
-    # },
-    "JB014": {  # LOOKS GOOD
-        "unsupervised": "2024-10-24",
-        "learning": "2024-10-31",
-        "learned": "2024-11-04",
-    },
-    "JB015": {
-        "unsupervised": "2024-10-24",
-        "learning": "2024-10-31",
-        "learned": "2024-11-19",
-    },
-    "JB016": {
-        "unsupervised": "2024-10-24",
-        "learning": "2024-10-31",
-        "learned": "2024-11-05",
-    },
-    "JB018": {
-        "unsupervised": "2024-11-20",
-        "learning": "2024-11-28",
-        "learned": "2024-12-03",
-    },
-    "JB019": {
-        "unsupervised": "2024-11-19",
-        "learning": "2024-11-20",
-        "learned": "2024-11-22",
-    },
-    "JB020": {
-        "unsupervised": "2024-11-19",
-        "learning": "2024-11-20",
-        "learned": "2024-11-22",
-    },
-    "JB021": {
-        "unsupervised": "2024-11-29",
-        "learning": "2024-12-06",
-        "learned": "2024-12-09",
-    },
-    "JB022": {
-        "unsupervised": "2024-12-04",
-        "learning": "2024-12-10",
-        "learned": "2024-12-12",
-    },
-    "JB026": {
-        "unsupervised": "2024-12-10",
-        "learning": "2024-12-13",
-        "learned": "2024-12-15",
-    },
-    "JB030": {
-        "unsupervised": "2025-03-07",
-        "learning": "2025-03-13",
-        "learned": "2025-03-14",
-    },
-    # Imaging was ok for the first few days but then degraded to become not usable
-    "JB031": {"unsupervised": "2025-03-07", "learning": "2025-03-12", "learned": None},
-    "JB033": {
-        "unsupervised": "2025-03-13",
-        "learning": "2025-03-17",
-        "learned": "2025-03-19",
-    },
-    "JB034": {
-        "unsupervised": "2025-07-04",
-        "learning": "2025-07-07",
-        "learned": "2025-07-08",
-    },
-    "JB035": {
-        "unsupervised": "2025-07-04",
-        "learning": "2025-07-08",
-        "learned": "2025-07-11",
-    },
-    "JB036": {
-        "unsupervised": "2025-07-05",
-        "learning": "2025-07-07",
-        "learned": "2025-07-08",
-    },
-}
-
-
-# 26 is ok, 27 dont use,
-# 30 is ok 33 is good
-# 32 don't use
 
 
 def get_session(
@@ -204,6 +121,31 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
     )
 
 
+def place_cells_plot_learning_stages(mouse_name: str, date: str) -> None:
+    with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
+        session = Cached2pSession.model_validate_json(f.read())
+
+    config = GrosmarkConfig(
+        bin_size=5,
+        start=0,
+        end=170,
+    )
+
+    spks = np.load(
+        TIFF_UMBRELLA
+        / session.date
+        / session.mouse_name
+        / "suite2p"
+        / "plane0"
+        / "oasis_spikes.npy"
+    )
+
+    pcs_mask, _ = get_place_cells(
+        session=session, spks=spks, rewarded=None, config=config, plot=True
+    )
+    1 / 0
+
+
 def main() -> None:
     # for mouse_name in SESSIONS_KEEP.keys():
     #     mouse_sessions = get_mouse_sessions(mouse_name)
@@ -213,13 +155,16 @@ def main() -> None:
 
     for mouse_name in SESSIONS_KEEP.keys():
 
-        if mouse_name not in {"JB034", "JB035", "JB036"}:
+        # if mouse_name not in {"JB034", "JB035", "JB036"}:
+        if mouse_name not in {"JB034"}:
             continue
         for stage in stages:
             if SESSIONS_KEEP[mouse_name][stage] is None:
                 continue
-
-            ensemble_main(mouse_name, date=SESSIONS_KEEP[mouse_name][stage], plot=False)
+            place_cells_plot_learning_stages(
+                mouse_name, date=SESSIONS_KEEP[mouse_name][stage]
+            )
+            # ensemble_main(mouse_name, date=SESSIONS_KEEP[mouse_name][stage], plot=False)
 
 
 if __name__ == "__main__":

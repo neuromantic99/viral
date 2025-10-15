@@ -161,8 +161,10 @@ def get_place_cells(
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
     )
     if use_cache and cache_file.exists():
+        print("Found cached shuffled matrices")
         shuffled_matrices = np.load(cache_file)
     else:
+        print("No cached shuffled matrices, calculating")
         # Create array of shape (n_shuffles, n_cells, n_bins)
         # where each (n_cells x bins) matrix is trial averaged but shuffled on a per-trial basis (as in Grosmark)
         # You can then apply percentiles along the first dimension to find "real" place cells
@@ -198,8 +200,8 @@ def get_place_cells(
 
     place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
-    if plot:
-        plot_speed(session, rewarded, config)
+    # if plot:
+    #     plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -472,7 +474,7 @@ def plot_place_cells(
 ) -> None:
     plt.figure()
     plt.imshow(
-        zscore(sort_matrix_peak(smoothed_matrix), axis=1),
+        zscore(sort_matrix_peak(smoothed_matrix), axis=1, nan_policy="omit"),
         aspect="auto",
         cmap="bwr",
         vmin=-1,
@@ -606,7 +608,7 @@ if __name__ == "__main__":
     is_unsupervised = session_is_unsupervised(session)
 
     config = GrosmarkConfig(
-        bin_size=2,
+        bin_size=5,
         start=30,
         end=160,
     )
