@@ -212,15 +212,6 @@ def get_place_cells(
     if n_consecutive_trues % 2 == 0:
         n_consecutive_trues += 1
 
-    shuffled_place_cells = np.array(
-        [
-            has_n_consecutive_trues(
-                shuffled_matrices[idx, :, :] > place_threshold, n_consecutive_trues
-            )
-            for idx in range(shuffled_matrices.shape[0])
-        ]
-    )
-
     pcs = has_n_consecutive_trues(
         smoothed_matrix > place_threshold, n_consecutive_trues
     )
@@ -252,10 +243,6 @@ def get_place_cells(
             / "place_cells"
             / f"{session.mouse_name}_{session.date}.png"
         )
-
-    print(
-        f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
-    )
 
     return pcs_combined, smoothed_matrix
 
