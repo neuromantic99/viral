@@ -126,7 +126,7 @@ def place_cells_plot_learning_stages(mouse_name: str, date: str) -> None:
         session = Cached2pSession.model_validate_json(f.read())
 
     config = GrosmarkConfig(
-        bin_size=5,
+        bin_size=2,
         start=0,
         end=170,
     )
@@ -143,7 +143,6 @@ def place_cells_plot_learning_stages(mouse_name: str, date: str) -> None:
     pcs_mask, _ = get_place_cells(
         session=session, spks=spks, rewarded=None, config=config, plot=True
     )
-    1 / 0
 
 
 def main() -> None:
@@ -154,9 +153,7 @@ def main() -> None:
     result = {stage: None for stage in stages}
 
     for mouse_name in SESSIONS_KEEP.keys():
-
-        # if mouse_name not in {"JB034", "JB035", "JB036"}:
-        if mouse_name not in {"JB034"}:
+        if mouse_name not in {"JB034", "JB035", "JB036"}:
             continue
         for stage in stages:
             if SESSIONS_KEEP[mouse_name][stage] is None:
@@ -164,7 +161,6 @@ def main() -> None:
             place_cells_plot_learning_stages(
                 mouse_name, date=SESSIONS_KEEP[mouse_name][stage]
             )
-            # ensemble_main(mouse_name, date=SESSIONS_KEEP[mouse_name][stage], plot=False)
 
 
 if __name__ == "__main__":

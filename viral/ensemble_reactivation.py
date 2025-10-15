@@ -770,7 +770,7 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
     else:
         print("No cached data found, processing data")
         config = GrosmarkConfig(
-            bin_size=5,
+            bin_size=2,
             start=0,
             end=170,
         )

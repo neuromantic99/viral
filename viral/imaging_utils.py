@@ -202,11 +202,13 @@ def get_online_position_and_frames(
         speed, threshold=speed_threshold, n_samples=3 * 30
     )
 
+    # Taken this out for now as it doesn't seem to be such a big
+    # issue with the new smoothing. Keep and eye on the place cells
+    # plots though
+
     # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
-    # TODO: Not sure this is working correctly
-    trial_onset = frame_position < frame_position[0] + 60
-    # TODO: Make sure this works
-    idx_keep = idx_keep & ~trial_onset
+    # trial_onset = frame_position < frame_position[0] + 60
+    # idx_keep = idx_keep & ~trial_onset
 
     position = position[idx_keep]
     frame_position = frame_position[idx_keep]
@@ -220,7 +222,6 @@ def activity_trial_position(
     trial: TrialInfo,
     flu: np.ndarray,
     wheel_circumference: float,
-    smoothing_sigma: float | None,
     bin_size: int = 1,
     start: int = 10,
     max_position: int = 170,
@@ -257,13 +258,9 @@ def activity_trial_position(
             print(f"bin_end: {bin_start + bin_size}")
             print(f"n_frames in bin: {len(frame_idx_bin)}")
 
-        # Does this answer David's question? We're averaging over the frames in the bin. So does this constitute controlling for speed?
         dff_position_list.append(np.mean(dff_bin, axis=1))
 
     dff_position = np.array(dff_position_list).T
-
-    if smoothing_sigma is not None:
-        dff_position = gaussian_filter1d(dff_position, sigma=smoothing_sigma, axis=1)
 
     if do_shuffle:
         return shuffle_rows(dff_position)
