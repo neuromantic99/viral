@@ -286,31 +286,29 @@ def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
     if f"{session_sync.mouse_name}_{session_sync.date}" in manual_wheel_freeze.keys():
         print("Using a manually set WheelFreeze object")
         return manual_wheel_freeze[f"{session_sync.mouse_name}_{session_sync.date}"]
-    else:
-        frozen_wheel_chunks = extract_frozen_wheel_chunks(
-            stack_lengths_tiffs=session_sync.stack_lengths_tiffs,
-            valid_frame_times=session_sync.valid_frame_times,
-            behaviour_times=session_sync.behaviour_times,
-            sampling_rate=session_sync.sampling_rate,
-            check_first_chunk=session_sync.offset_after_pre_epoch == 0,
+    frozen_wheel_chunks = extract_frozen_wheel_chunks(
+        stack_lengths_tiffs=session_sync.stack_lengths_tiffs,
+        valid_frame_times=session_sync.valid_frame_times,
+        behaviour_times=session_sync.behaviour_times,
+        sampling_rate=session_sync.sampling_rate,
+        check_first_chunk=session_sync.offset_after_pre_epoch == 0,
+    )
+    if session_sync.offset_after_pre_epoch > 0:
+        return WheelFreeze(
+            pre_training_start_frame=0,
+            pre_training_end_frame=session_sync.offset_after_pre_epoch,
+            post_training_start_frame=frozen_wheel_chunks[1][0]
+            + session_sync.offset_after_pre_epoch,
+            post_training_end_frame=frozen_wheel_chunks[1][1]
+            + session_sync.offset_after_pre_epoch,
         )
-        if session_sync.offset_after_pre_epoch > 0:
-            return WheelFreeze(
-                pre_training_start_frame=0,
-                pre_training_end_frame=session_sync.offset_after_pre_epoch,
-                post_training_start_frame=frozen_wheel_chunks[1][0]
-                + session_sync.offset_after_pre_epoch,
-                post_training_end_frame=frozen_wheel_chunks[1][1]
-                + session_sync.offset_after_pre_epoch,
-            )
-        else:
-            assert frozen_wheel_chunks[0] is not None
-            return WheelFreeze(
-                pre_training_start_frame=frozen_wheel_chunks[0][0],
-                pre_training_end_frame=frozen_wheel_chunks[0][1],
-                post_training_start_frame=frozen_wheel_chunks[1][0],
-                post_training_end_frame=frozen_wheel_chunks[1][1],
-            )
+    assert frozen_wheel_chunks[0] is not None
+    return WheelFreeze(
+        pre_training_start_frame=frozen_wheel_chunks[0][0],
+        pre_training_end_frame=frozen_wheel_chunks[0][1],
+        post_training_start_frame=frozen_wheel_chunks[1][0],
+        post_training_end_frame=frozen_wheel_chunks[1][1],
+    )
 
 
 def add_imaging_info_to_trials(
@@ -582,7 +580,7 @@ def extract_metadata(tiff: ScanImageTiffReader) -> Tuple[int, List[float], List[
     return stack_length, epoch, tiff_timestamps
 
 
-def check_no_dropped_frames(tiff_timestamps) -> None:
+def check_no_dropped_frames(tiff_timestamps: List[float]) -> None:
     diffed = np.diff(tiff_timestamps)
     # Check no dropped frames in the middle
     assert (
@@ -675,7 +673,6 @@ def process_session(
         trials=trials,
         imaging_crashed=imaging_crashed,
     )
-
     wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze, daq_crashed)
 
@@ -690,18 +687,6 @@ def process_session(
             ).model_dump(),
             f,
         )
-
-    # if wheel_freeze is not None:
-    #     from viral.run_oasis import main as oasis_main
-
-    #     s2p_path = tiff_directory / "suite2p" / "plane0"
-    #     if not (s2p_path / "oasis_spikes.npy").exists():
-    #         oasis_main(
-    #             s2p_path=s2p_path,
-    #             wheel_freeze=wheel_freeze,
-    #             parallel=True,
-    #             plot=False,
-    #         )
 
     print(f"Done for {mouse_name} {date} {session_type}")
 
