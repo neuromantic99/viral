@@ -1,21 +1,21 @@
 from pathlib import Path
 import sys
-from typing import Dict
+from typing import Dict, List, Literal
 
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
-from ensemble_reactivation import main as ensemble_main
-from viral.grosmark_analysis import get_place_cells
-from viral.sessions_keep import SESSIONS_KEEP
-from viral.utils import shaded_line_plot
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
+
+from viral.grosmark_analysis import get_place_cells
+from viral.sessions_keep import SESSIONS_KEEP
+from viral.utils import shaded_line_plot
 
 
 from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
@@ -23,6 +23,7 @@ from viral.cache_2p_sessions import process_session
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
     CACHE_PATH,
+    SERVER_PATH,
     SPREADSHEET_ID,
     SYNC_FILE_PATH,
     TIFF_UMBRELLA,
@@ -123,9 +124,7 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
     )
 
 
-def place_cells_plot_learning_stages(
-    mouse_name: str, date: str, config: GrosmarkConfig
-) -> np.ndarray | None:
+def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) -> None:
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
@@ -142,61 +141,134 @@ def place_cells_plot_learning_stages(
         pcs_mask, smoothed_matrix, place_threshold = get_place_cells(
             session=session, spks=spks, rewarded=rewarded, config=config, plot=False
         )
-    if pcs_mask is None:
-        return None
-
-    return collapse_smoothed_matrix(smoothed_matrix, pcs_mask)
 
 
-def collapse_smoothed_matrix(
-    smoothed_matrix: np.ndarray, pcs_mask: np.ndarray
-) -> np.ndarray:
-    return smoothed_matrix[pcs_mask, :].mean(axis=0)
+class PlaceCellResults:
+    def __init__(self, cache_umbrella: Path) -> None:
 
-
-def main() -> None:
-    # for mouse_name in SESSIONS_KEEP.keys():
-    #     mouse_sessions = get_mouse_sessions(mouse_name)
-
-    stages = ["unsupervised", "learning", "learned"]
-
-    config = GrosmarkConfig(
-        bin_size=2,
-        start=0,
-        end=180,
-    )
-
-    all_collapsed_stages = {stage: [] for stage in stages}
-
-    for mouse_name in SESSIONS_KEEP.keys():
-        if mouse_name not in {"JB034", "JB035", "JB036"}:
-            continue
-        for stage in stages:
-            if SESSIONS_KEEP[mouse_name][stage] is None:
-                continue
-            collapsed = place_cells_plot_learning_stages(
-                mouse_name, date=SESSIONS_KEEP[mouse_name][stage], config=config
-            )
-            if collapsed is not None:
-                all_collapsed_stages[stage].append(collapsed)
-
-    colors = ["green", "blue", "orange"]
-    color_idx = 0
-    for stage_name, data in all_collapsed_stages.items():
-
-        data_matrix = np.vstack(data)
-        shaded_line_plot(
-            arr=data_matrix,
-            x_axis=np.linspace(config.start, config.end, data_matrix.shape[1]),
-            color=colors[color_idx],
-            label=stage_name,
+        self.smoothed_matrix_files = list(
+            (cache_umbrella / "smoothed_matrix").glob("*npy")
         )
-        color_idx += 1
+        self.pcs_combined_files = list((cache_umbrella / "pcs_combined").glob("*npy"))
+        self.place_threshold_files = list(
+            (cache_umbrella / "place_threshold").glob("*npy")
+        )
+        self.unsupervised: Dict[str, List] = {"rewarded": [], "unrewarded": []}
+        self.learning: Dict[str, List] = {"rewarded": [], "unrewarded": []}
+        self.learned: Dict[str, List] = {"rewarded": [], "unrewarded": []}
+
+    def load_file(
+        self, file_list: List[Path], date: str, mouse: str, rewarded: bool | None
+    ) -> np.ndarray:
+        files_match = [
+            file
+            for file in file_list
+            if f"{mouse}_{date}" in file.name and f"rewarded_{rewarded}" in file.name
+        ]
+        if not files_match:
+            raise FileNotFoundError(
+                f"No file found for {mouse} {date} rewarded {rewarded}"
+            )
+
+        assert (
+            len(files_match) == 1
+        ), f"more than one file found for {mouse} {date} rewarded {rewarded}"
+        return np.load(files_match[0])
+
+    def collapsed_matrix_result(
+        self, mouse_name: str, stage: str, rewarded: bool | None
+    ) -> np.ndarray:
+        date = SESSIONS_KEEP[mouse_name][stage]
+
+        smoothed_matrix = self.load_file(
+            self.smoothed_matrix_files,
+            date=date,
+            mouse=mouse_name,
+            rewarded=rewarded,
+        )
+
+        pcs_combined = self.load_file(
+            self.pcs_combined_files,
+            date=date,
+            mouse=mouse_name,
+            rewarded=rewarded,
+        )
+        place_threshold = self.load_file(
+            self.place_threshold_files,
+            date=date,
+            mouse=mouse_name,
+            rewarded=rewarded,
+        )
+        mask = smoothed_matrix[pcs_combined, :] > place_threshold[pcs_combined, :]
+        return np.sum(mask, axis=0) / mask.shape[0]
+
+        # return smoothed_matrix[pcs_combined, :].mean(axis=0)
+
+    def driver(self) -> None:
+
+        for stage, store in zip(
+            ["unsupervised", "learning", "learned"],
+            [self.unsupervised, self.learning, self.learned],
+        ):
+            for mouse_name in SESSIONS_KEEP.keys():
+                if mouse_name not in {"JB034", "JB035", "JB036"}:
+                    continue
+
+                for rewarded in [False, True]:
+                    try:
+                        result = self.collapsed_matrix_result(
+                            mouse_name, stage=stage, rewarded=rewarded
+                        )
+                    except FileNotFoundError:
+                        continue
+                    store["rewarded" if rewarded else "unrewarded"].append(result)
+
+    def plot_result(
+        self,
+        stage_data: List,
+        label: str,
+        color: str,
+    ) -> None:
+
+        matrix = np.vstack(stage_data)
+        shaded_line_plot(
+            arr=matrix,
+            x_axis=np.linspace(0, 180, matrix.shape[1]),
+            color=color,
+            label=label,
+        )
         for landmark_center in [45, 90, 135]:
             plt.axvspan(
                 landmark_center - 2.5, landmark_center + 2.5, color="red", alpha=0.5
             )
 
+
+def main() -> None:
+    place_cell_result = PlaceCellResults(SERVER_PATH / "viral_caches" / "place_cells")
+    place_cell_result.driver()
+
+    for data, name in zip(
+        [
+            place_cell_result.unsupervised,
+            place_cell_result.learning,
+            place_cell_result.learned,
+        ],
+        ["unsupervised", "learning", "learned"],
+    ):
+
+        plt.figure()
+        place_cell_result.plot_result(
+            data["unrewarded"],
+            "unrewarded",
+            "green",
+        )
+        place_cell_result.plot_result(data["rewarded"], "rewarded", "blue")
+        plt.ylim(0, 0.4)
+        plt.legend()
+        plt.xlabel("Corridor position (cm)")
+        plt.ylabel("Proportion place cells\nsignificantly active")
+        plt.title(name.capitalize())
+        plt.tight_layout()
     1 / 0
 
 

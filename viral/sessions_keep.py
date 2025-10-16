@@ -1,7 +1,8 @@
 from typing import Dict
 
 
-SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
+# TODO: Deal with the None case
+SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
     # Imaging of poor quality, dont analyse
     # "JB011": {
     #     "unsupervised": "2024-10-22",
