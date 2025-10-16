@@ -142,6 +142,39 @@ def threshold_detect(signal: np.ndarray, threshold: float) -> np.ndarray:
     return times[0]
 
 
+def threshold_detect_continuous(
+    signal: np.ndarray, threshold: np.ndarray
+) -> np.ndarray:
+    """
+    Detect threshold crossings where signal > threshold (elementwise).
+    Suppresses consecutive detections to only return first index of each crossing.
+
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal.
+    threshold : np.ndarray
+        Threshold array of same shape as signal.
+
+    Returns
+    -------
+    np.ndarray
+        Indices where signal crosses threshold.
+    """
+    if signal.shape != threshold.shape:
+        raise ValueError("signal and threshold must have the same shape")
+
+    # Compare elementwise
+    thresh_signal = signal > threshold
+
+    # Keep only rising edge detections
+    thresh_signal[1:][thresh_signal[:-1] & thresh_signal[1:]] = False
+
+    # Return indices
+    times = np.where(thresh_signal)
+    return times[0]
+
+
 def pade_approx_norminv(p: float) -> float:
     q = (
         math.sqrt(2 * math.pi) * (p - 1 / 2)
@@ -174,7 +207,7 @@ def threshold_detect_edges(
 
 
 def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
-    return list(directory.glob("*.tif"))
+    return list(directory.glob("*.tif*"))
 
 
 def extract_TTL_chunks(
@@ -506,3 +539,42 @@ def uk_to_utc(dt: datetime) -> datetime:
         .astimezone(ZoneInfo("UTC"))
         .replace(tzinfo=None)
     )
+
+
+def above_threshold_for_n_consecutive_samples(
+    arr: np.ndarray,
+    threshold: float,
+    n_samples: int,
+) -> np.ndarray:
+    """
+    Returns a boolean mask where True indicates the array element is within a bout of being
+    above threshold for n_samples length (all elements in any qualifying window are True).
+
+    Returns:
+        np.ndarray: Boolean mask, same length as arr.
+    """
+    above = arr > threshold
+    # Rolling sum to find windows of n_samples above threshold
+    run_lengths = np.convolve(
+        above.astype(int), np.ones(n_samples, dtype=int), mode="valid"
+    )
+    # Find start indices of valid runs
+    valid_starts = np.where(run_lengths >= n_samples)[0]
+    mask = np.zeros_like(arr, dtype=bool)
+    for start in valid_starts:
+        mask[start : start + n_samples] = True
+    return mask
+
+
+def split_continuous_chunks(arr: np.ndarray) -> List[np.ndarray]:
+    """Split an array into continuous chunks"""
+    split_indices = np.where(np.diff(arr) != 1)[0] + 1
+    return np.split(arr, split_indices)
+
+
+def check_trial_file_sorting(trial_files: List[Path]) -> None:
+    """Check that trials are sorted by trial number"""
+    for trial, next_trial in zip(trial_files[:-1], trial_files[1:], strict=True):
+        this_number = int(trial.stem.split("trial")[-1])
+        next_number = int(next_trial.stem.split("trial")[-1])
+        assert next_number == this_number + 1

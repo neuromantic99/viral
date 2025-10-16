@@ -5,12 +5,15 @@ from typing import List, Tuple
 import numpy as np
 from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
+    above_threshold_for_n_consecutive_samples,
     array_bin_mean,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
+    has_n_consecutive_trues,
     shuffle_rows,
     threshold_detect,
 )
+from deprecated import deprecated
 
 from viral.constants import TIFF_UMBRELLA
 
@@ -31,12 +34,7 @@ def load_imaging_data(
     print(f"Suite 2p path is {s2p_path}")
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
-    if not (s2p_path / "oasis_spikes.npy").exists():
-        from viral.run_oasis import main as run_oasis
-
-        run_oasis(mouse=mouse, date=date, grosmark=False)
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
 
@@ -112,6 +110,9 @@ def extract_TTL_chunks(
     return frame_times, np.diff(chunk_starts)
 
 
+@deprecated(
+    "Use compute_speed_grosmark instead. See test_utils/test_compare_speed_functions for demo"
+)
 def compute_windowed_speed_1d(
     positions: np.ndarray, window_duration: float
 ) -> np.ndarray:
@@ -121,7 +122,6 @@ def compute_windowed_speed_1d(
 
     Args:
         positions (np.ndarray): 1D array of positions.
-        sampling_rate (float): Samples per second (Hz), e.g., 30.
         window_duration (float): Duration of the window in seconds.
 
     Returns:
@@ -139,16 +139,70 @@ def compute_windowed_speed_1d(
             start, end = i, min(i + full_window, n - 1)
         elif i > n - half_window - 1:
             # backward difference
-            start, end = max(i - full_window, 0), i
+            start, end = max(n - full_window - 1, 0), n - 1
         else:
             # central difference
             start, end = i - half_window, i + half_window
 
+        assert end - start == full_window
         displacement = positions[end] - positions[start]
         duration = (end - start) / sampling_rate
         speeds[i] = abs(displacement) / duration if duration > 0 else 0.0
 
     return speeds
+
+
+def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
+    speed = np.diff(position)
+    # Keep the lengths the same
+    speed = np.append(speed, (speed[-1]))
+    speed = speed * 30
+    speed = gaussian_filter1d(speed, sigma=0.5 * 30)
+    assert speed.shape == position.shape
+    return speed
+
+
+def get_online_position_and_frames(
+    trial: TrialInfo, wheel_circumference: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
+    for at least 3 consecutive seconds."""
+
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
+    )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+    assert len(position) == len(frame_position)
+
+    speed = compute_speed_grosmark(position)
+
+    speed_threshold = 5
+    idx_keep = above_threshold_for_n_consecutive_samples(
+        speed, threshold=speed_threshold, n_samples=3 * 30
+    )
+
+    # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
+    # TODO: Not sure this is working correctly
+    trial_onset = frame_position < frame_position[0] + 60
+    # TODO: Make sure this works
+    idx_keep = idx_keep & ~trial_onset
+
+    position = position[idx_keep]
+    frame_position = frame_position[idx_keep]
+
+    assert len(position) == len(frame_position)
+
+    return position, frame_position
 
 
 def activity_trial_position(
@@ -173,30 +227,9 @@ def activity_trial_position(
     verbose: if True, print the binning information
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
-
-    position = degrees_to_cm(
-        np.array(trial.rotary_encoder_position), wheel_circumference
+    position, frame_position = get_online_position_and_frames(
+        trial, wheel_circumference
     )
-
-    frame_position = np.array(
-        [
-            state.closest_frame_start
-            for state in trial.states_info
-            if state.name
-            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
-        ]
-    )
-
-    # compute rolling speed across the position
-    speed = compute_windowed_speed_1d(position, window_duration=1)
-    # 1000 % review this
-    speed_threshold = 5
-    idx_keep = speed > speed_threshold
-    idx_keep[:30] = False
-    position = position[idx_keep]
-    frame_position = frame_position[idx_keep]
-
-    assert len(position) == len(frame_position)
 
     dff_position_list = []
 
@@ -212,6 +245,8 @@ def activity_trial_position(
             print(f"bin_start: {bin_start}")
             print(f"bin_end: {bin_start + bin_size}")
             print(f"n_frames in bin: {len(frame_idx_bin)}")
+
+        # Does this answer David's question? We're averaging over the frames in the bin. So does this constitute controlling for speed?
         dff_position_list.append(np.mean(dff_bin, axis=1))
 
     dff_position = np.array(dff_position_list).T
@@ -281,12 +316,8 @@ def get_resting_chunks(
             distance_travelled = max(positions[start:end]) - min(positions[start:end])
             speed = distance_travelled / (chunk_size_frames / 30)
 
-            if (
-                speed < speed_threshold
-                and len(
-                    set(lick_frames).intersection(set(range(frame_start, frame_end)))
-                )
-                == 0
+            if speed < speed_threshold and not set(lick_frames).intersection(
+                set(range(frame_start, frame_end))
             ):
 
                 all_chunks.append(
@@ -354,14 +385,23 @@ def get_ITI_matrix(
     return np.array(matrices)
 
 
-def get_frozen_wheel_flu(
+def split_fluoresence_online_freeze(
     flu: np.ndarray, wheel_freeze: WheelFreeze
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return sliced flu array: offline epochs before and after behaviour session."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Split the fluorescence data three chunks:
+    pre-training freeze
+    online
+    post-training freeze
+    """
     return (
         flu[
             :,
             wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame,
+        ],
+        flu[
+            :,
+            wheel_freeze.pre_training_end_frame : wheel_freeze.post_training_start_frame,
         ],
         flu[
             :,
@@ -376,5 +416,13 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
         ("JB011", "2024-10-22"),
         ("JB011", "2024-10-25"),
         ("JB031", "2025-03-10"),
+        ("JB034", "2025-07-04"),
+    ]
+
+
+def get_daq_crashed(mouse_name: str, date: str) -> bool:
+    """Manually define if DAQ crashed during session. Currently only used to loosen assertion in `check_timestamps`."""
+    # TODO: If occuring more often, think of a better fix.
+    return (mouse_name, date) in [
         ("JB034", "2025-07-04"),
     ]

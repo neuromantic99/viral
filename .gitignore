@@ -1,7 +1,9 @@
+OASIS/  
 *.pkl
-*.npy
 *.npz
+*.npy
 constants.py
+nohup
 
 *.png
 *.jpeg
@@ -19,6 +21,8 @@ data/
 OASIS/
 
 .DS_store
+
+nohup.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
