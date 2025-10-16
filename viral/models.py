@@ -164,6 +164,9 @@ class SortedPlaceCells:
 
 @dataclass
 class SessionImagingInfo:
+    # these variables are needed for sessions when DAQ crashed
+    mouse_name: str
+    date: str
     # 2p / ScanImage info
     stack_lengths_tiffs: np.ndarray
     epochs: np.ndarray

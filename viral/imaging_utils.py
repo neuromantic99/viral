@@ -417,3 +417,11 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
         ("JB011", "2024-10-25"),
         ("JB034", "2025-07-04"),
     ]
+
+
+def get_daq_crashed(mouse_name: str, date: str) -> bool:
+    """Manually define if DAQ crashed during session. Currently only used to loosen assertion in `check_timestamps`."""
+    # TODO: If occuring more often, think of a better fix.
+    return (mouse_name, date) in [
+        ("JB034", "2025-07-04"),
+    ]

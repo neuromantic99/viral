@@ -207,7 +207,7 @@ def threshold_detect_edges(
 
 
 def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
-    return list(directory.glob("*.tif"))
+    return list(directory.glob("*.tif*"))
 
 
 def extract_TTL_chunks(
