@@ -138,9 +138,10 @@ def place_cells_plot_learning_stages(
         / "oasis_spikes.npy"
     )
 
-    pcs_mask, smoothed_matrix, place_threshold = get_place_cells(
-        session=session, spks=spks, rewarded=None, config=config, plot=False
-    )
+    for rewarded in [False, True]:
+        pcs_mask, smoothed_matrix, place_threshold = get_place_cells(
+            session=session, spks=spks, rewarded=rewarded, config=config, plot=False
+        )
     if pcs_mask is None:
         return None
 

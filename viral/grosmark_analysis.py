@@ -241,7 +241,7 @@ def get_place_cells(
             SERVER_PATH
             / "viral_plots"
             / "place_cells"
-            / f"{session.mouse_name}_{session.date}.png"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}.png"
         )
 
     return pcs_combined, smoothed_matrix, place_threshold
