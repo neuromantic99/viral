@@ -12,10 +12,16 @@ from pydantic import ValidationError
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
+from viral.imaging_utils import trial_is_imaged
 
 from viral.grosmark_analysis import get_place_cells
 from viral.sessions_keep import SESSIONS_KEEP
-from viral.utils import shaded_line_plot
+from viral.utils import (
+    degrees_to_cm,
+    get_speed_positions,
+    get_wheel_circumference_from_rig,
+    shaded_line_plot,
+)
 
 
 from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
@@ -31,6 +37,7 @@ from viral.constants import (
 from viral.gsheets_importer import gsheet2df
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import load_data
+from viral.ensemble_reactivation import main as ensemble_main
 
 ## TODO: Do we want to include the first day of learning?
 # There's likely a lot of interesting reactivated activtity there
@@ -243,6 +250,33 @@ class PlaceCellResults:
             )
 
 
+def get_speed_summary(
+    session: Cached2pSession, rewarded: bool | None, config: GrosmarkConfig
+) -> np.ndarray:
+    return np.array(
+        [
+            np.array(
+                [
+                    speed.speed
+                    for speed in get_speed_positions(
+                        degrees_to_cm(
+                            np.array(trial.rotary_encoder_position),
+                            get_wheel_circumference_from_rig("2P"),
+                        ),
+                        config.start,
+                        config.end,
+                        config.bin_size,
+                        sampling_rate=30,
+                    )
+                ]
+            )
+            for trial in session.trials
+            if trial_is_imaged(trial)
+            and (rewarded is None or trial.texture_rewarded == rewarded)
+        ]
+    )
+
+
 def main() -> None:
     place_cell_result = PlaceCellResults(SERVER_PATH / "viral_caches" / "place_cells")
     place_cell_result.driver()
@@ -272,5 +306,40 @@ def main() -> None:
     1 / 0
 
 
+def plot_speed_summary() -> None:
+
+    config = GrosmarkConfig(
+        start=0,
+        end=180,
+        bin_size=2,
+    )
+
+    result = {
+        stage: {"rewarded": [], "unrewarded": []}
+        for stage in ["unsupervised", "learning", "learned"]
+    }
+
+    for mouse_name, dates in SESSIONS_KEEP.items():
+        if mouse_name not in {"JB034", "JB035", "JB036"}:
+            continue
+
+        for stage, date in dates.items():
+            with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
+                session = Cached2pSession.model_validate_json(f.read())
+                for rewarded in [False, True]:
+                    speed = get_speed_summary(session, rewarded=rewarded, config=config)
+                    result[stage]["rewarded" if rewarded else "unrewarded"].append(
+                        speed
+                    )
+
+
 if __name__ == "__main__":
-    main()
+
+    for mouse in SESSIONS_KEEP.keys():
+        if mouse not in {"JB034", "JB035", "JB036"}:
+            continue
+
+        for date in SESSIONS_KEEP[mouse].values():
+            for rewarded in [True, False, None]:
+                print(f"Starting {mouse} {date} rewarded {rewarded}")
+                ensemble_main(mouse, date, rewarded=rewarded, plot=False)

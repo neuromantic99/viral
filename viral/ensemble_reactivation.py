@@ -718,11 +718,11 @@ def get_ssp_vectors(
     return np.hstack(ssp_vectors)
 
 
-def main(mouse: str, date: str, plot: bool = True) -> None:
+def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> None:
     print(f"Processing mouse {mouse}, date {date}")
 
     verbose = True
-    use_cache = True
+    use_cache = False
 
     assert (
         TIFF_UMBRELLA
@@ -746,11 +746,17 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         SERVER_PATH / "viral_caches" / "ensemble_caches"
     ).exists(), "Cache path does not exist, please create it"
 
+    config = GrosmarkConfig(
+        bin_size=2,
+        start=0,
+        end=180,
+    )
+
     cache_file = (
         SERVER_PATH
         / "viral_caches"
         / "ensemble_caches"
-        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation.npz"
+        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation_{config}_rewarded_{rewarded}.npz"
     )
 
     if use_cache and cache_file.exists():
@@ -769,11 +775,6 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             return
     else:
         print("No cached data found, processing data")
-        config = GrosmarkConfig(
-            bin_size=2,
-            start=0,
-            end=170,
-        )
 
         spks = np.load(
             TIFF_UMBRELLA
@@ -786,7 +787,7 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
 
         t1 = time.time()
         pcs_mask, _, _ = get_place_cells(
-            session=session, spks=spks, rewarded=None, config=config, plot=True
+            session=session, spks=spks, rewarded=rewarded, config=config, plot=False
         )
 
         print(f"Time to get place cells: {time.time() - t1}")
@@ -796,7 +797,13 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             flu=place_cells, wheel_freeze=session.wheel_freeze
         )
 
-        trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+        trials = [
+            trial
+            for trial in session.trials
+            if trial_is_imaged(trial)
+            and (rewarded is None)
+            or trial.texture_rewarded == rewarded
+        ]
 
         ssp_vectors = get_ssp_vectors(
             trials=trials,
@@ -1559,17 +1566,16 @@ def all_mouse_plots(
 
 if __name__ == "__main__":
     # This is the file that's saved by the full grosmark oasis preprocessing as a flag
-    # valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
+    valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
 
-    # for session_idx in range(len(valid_sessions)):
-    #     session_path = valid_sessions[session_idx]
-    #     mouse = session_path.parts[-4]
-    #     date = session_path.parts[-5]
+    for session_idx in range(len(valid_sessions)):
+        session_path = valid_sessions[session_idx]
+        mouse = session_path.parts[-4]
+        date = session_path.parts[-5]
 
-    #     # Bad imaging, replace eventually with column
-    #     # in spreadsheet, or filter by number of place cells
-    #     if mouse in {"JB033", "JB032"}:
-    #         continue
+        if mouse not in {"JB034", "JB035", "JB036"}:
+            continue
 
-    #     main(mouse, date, plot=False)
-    multiple_sessions()
+        for rewarded in [True, False, None]:
+            print(f"Starting {session_idx+1}/{len(valid_sessions)}: {mouse} {date}")
+            main(mouse, date, rewarded=rewarded, plot=True)
