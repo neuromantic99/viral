@@ -481,27 +481,6 @@ def jb032_2025_04_04(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-@register_correction("JB032", "2025-04-07")
-def jb032_2025_04_07(c: SessionCorrection) -> SessionCorrection:
-    # stack_lengths_tiffs array([27000, 16964, 79227, 16714, 27000])
-    # chunk_lengths_daq array([27000, 16966, 79229,   190, 16716, 27000])
-    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [3])
-    c.frame_times_daq = np.concatenate(
-        [
-            c.frame_times_daq[: sum([27000, 16966, 79229])],
-            c.frame_times_daq[sum([27000, 16966, 79229, 190]) :],
-        ]
-    )
-    return SessionCorrection(
-        epochs=c.epochs,
-        all_tiff_timestamps=c.all_tiff_timestamps,
-        stack_lengths_tiffs=c.stack_lengths_tiffs,
-        chunk_lengths_daq=c.chunk_lengths_daq,
-        frame_times_daq=c.frame_times_daq,
-        offset_after_pre_epoch=0,
-    )
-
-
 @register_correction("JB032", "2025-04-08")
 def jb032_2025_04_08(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs array([ 27000, 116293,  27000])
@@ -519,28 +498,6 @@ def jb032_2025_04_08(c: SessionCorrection) -> SessionCorrection:
                     ]
                 ) :
             ],
-        ]
-    )
-    return SessionCorrection(
-        epochs=c.epochs,
-        all_tiff_timestamps=c.all_tiff_timestamps,
-        stack_lengths_tiffs=c.stack_lengths_tiffs,
-        chunk_lengths_daq=c.chunk_lengths_daq,
-        frame_times_daq=c.frame_times_daq,
-        offset_after_pre_epoch=0,
-    )
-
-
-@register_correction("JB032", "2025-04-10")
-def jb032_2025_04_10(c: SessionCorrection) -> SessionCorrection:
-    # stack_lengths_tiffs array([27000, 45307, 64626,    59, 27000])
-    # chunk_lengths_daq array([27000, 45309,   655, 64628,    61, 27000])
-    # TODO: leave that one tiff with 59 frames still? no notes on looking for another focal plane
-    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [2])
-    c.frame_times_daq = np.concatenate(
-        [
-            c.frame_times_daq[: sum([27000, 45309])],
-            c.frame_times_daq[sum([27000, 45309, 655]) :],
         ]
     )
     return SessionCorrection(
