@@ -132,17 +132,18 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
 
 
 def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) -> None:
+
+    print("Processing", mouse_name, date)
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
+    spks_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
 
-    spks = np.load(
-        TIFF_UMBRELLA
-        / session.date
-        / session.mouse_name
-        / "suite2p"
-        / "plane0"
-        / "oasis_spikes.npy"
+    assert (
+        spks_path / "full_grosmark_oasis_preprocessed.npy"
+    ).exists(), (
+        f"File {spks_path / 'full_grosmark_oasis_preprocessed.npy'} does not exist"
     )
+    spks = np.load(spks_path / "oasis_spikes.npy")
 
     for rewarded in [False, True]:
         pcs_mask, smoothed_matrix, place_threshold = get_place_cells(

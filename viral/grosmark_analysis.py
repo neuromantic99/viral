@@ -600,9 +600,9 @@ if __name__ == "__main__":
     is_unsupervised = session_is_unsupervised(session)
 
     config = GrosmarkConfig(
-        bin_size=5,
-        start=30,
-        end=160,
+        bin_size=2,
+        start=0,
+        end=180,
     )
 
     grosmark_place_field(
