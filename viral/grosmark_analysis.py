@@ -154,17 +154,19 @@ def get_place_cells(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
 
-    # Probably delete cache logic once we're all sorted
     use_cache = True
-    cache_file = (
+
+    get_cache_path = lambda variable_name: (
         SERVER_PATH
         / "viral_caches"
         / "place_cells"
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_place_threshold.npy"
+        / variable_name
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
     )
-    if use_cache and cache_file.exists():
+
+    if use_cache and get_cache_path("place_threshold").exists():
         print("Found cached place threshold")
-        place_threshold = np.load(cache_file)
+        place_threshold = np.load(get_cache_path("place_threshold"))
     else:
         print("No cached place threshold, calculating")
         # Create array of shape (n_shuffles, n_cells, n_bins)
@@ -202,7 +204,7 @@ def get_place_cells(
             shuffled_matrices[shuffle_idx, :, :] = smoothed_shuffle
 
         place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
-        np.save(cache_file, place_threshold)
+        np.save(get_cache_path("place_threshold"), place_threshold)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -244,6 +246,8 @@ def get_place_cells(
             / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}.png"
         )
 
+    np.save(get_cache_path("smoothed_matrix"), smoothed_matrix)
+    np.save(get_cache_path("pcs_combined"), pcs_combined)
     return pcs_combined, smoothed_matrix, place_threshold
 
 
