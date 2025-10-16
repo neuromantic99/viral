@@ -257,7 +257,7 @@ def jb031_2025_04_04(c: SessionCorrection) -> SessionCorrection:
 
 
 @register_correction("JB031", "2025-04-07")
-def jb032_2025_04_07(c: SessionCorrection) -> SessionCorrection:
+def jb031_2025_04_07(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs array([ 27000,    506,    319, 164379,  27000])
     # chunk_lengths_daq array([   508,   3127,    321, 164381,    324,    424,   1299,  27000])
     # "Forgot to start the DAQami before pre-trial wheel blocking.[...]
