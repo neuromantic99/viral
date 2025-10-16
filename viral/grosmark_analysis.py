@@ -68,7 +68,7 @@ def grosmark_place_field(
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
         assert spks_raw.shape == spks.shape
 
-    pcs, smoothed_matrix = get_place_cells(
+    pcs, smoothed_matrix, _ = get_place_cells(
         session=session, spks=spks, rewarded=rewarded, config=config, plot=plot
     )
 
@@ -100,7 +100,7 @@ def get_place_cells(
     config: GrosmarkConfig,
     rewarded: bool | None,
     plot: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     From Grosmark et al.:
     The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
@@ -244,7 +244,7 @@ def get_place_cells(
             / f"{session.mouse_name}_{session.date}.png"
         )
 
-    return pcs_combined, smoothed_matrix
+    return pcs_combined, smoothed_matrix, place_threshold
 
 
 def plot_speed(

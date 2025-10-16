@@ -785,7 +785,7 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         )
 
         t1 = time.time()
-        pcs_mask, _ = get_place_cells(
+        pcs_mask, _, _ = get_place_cells(
             session=session, spks=spks, rewarded=None, config=config, plot=True
         )
 
