@@ -27,10 +27,10 @@ def shaded_line_plot(
     x_axis: np.ndarray | List[float],
     color: str,
     label: str,
-    moving_average: bool = False,
+    do_moving_average: bool = False,
 ) -> None:
 
-    if moving_average:
+    if do_moving_average:
         mean = moving_average(np.nanmean(arr, 0), 5)
         sem = moving_average(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), 5)
         x_axis = x_axis[1 : len(mean) + 1]  # Adjust x_axis to match the mean length
@@ -312,7 +312,9 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
     return np.nanmean(data, axis=0)
 
 
-def get_genotype(mouse_name: str) -> Literal["Oligo-BACE1-KO", "NLGF", "WT"]:
+def get_genotype(
+    mouse_name: str,
+) -> Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
     elif mouse_name in {"JB034", "JB035"}:
