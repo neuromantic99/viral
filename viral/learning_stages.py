@@ -18,6 +18,7 @@ from viral.grosmark_analysis import get_place_cells
 from viral.sessions_keep import SESSIONS_KEEP
 from viral.utils import (
     degrees_to_cm,
+    get_genotype,
     get_speed_positions,
     get_wheel_circumference_from_rig,
     shaded_line_plot,
@@ -152,7 +153,9 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
 
 
 class PlaceCellResults:
-    def __init__(self, cache_umbrella: Path) -> None:
+    def __init__(
+        self, cache_umbrella: Path, genotype: str, verbose: bool = False
+    ) -> None:
 
         self.smoothed_matrix_files = list(
             (cache_umbrella / "smoothed_matrix").glob("*npy")
@@ -164,6 +167,8 @@ class PlaceCellResults:
         self.unsupervised: Dict[str, List] = {"rewarded": [], "unrewarded": []}
         self.learning: Dict[str, List] = {"rewarded": [], "unrewarded": []}
         self.learned: Dict[str, List] = {"rewarded": [], "unrewarded": []}
+        self.genotype = genotype
+        self.verbose = verbose
 
     def load_file(
         self, file_list: List[Path], date: str, mouse: str, rewarded: bool | None
@@ -181,12 +186,18 @@ class PlaceCellResults:
         assert (
             len(files_match) == 1
         ), f"more than one file found for {mouse} {date} rewarded {rewarded}"
+        if self.verbose:
+            print("These files matched is :", files_match[0])
         return np.load(files_match[0])
 
     def collapsed_matrix_result(
         self, mouse_name: str, stage: str, rewarded: bool | None
     ) -> np.ndarray:
         date = SESSIONS_KEEP[mouse_name][stage]
+        if self.verbose:
+            print(
+                f"Loading {mouse_name} stage {stage} rewarded {rewarded}. Date is {date}"
+            )
 
         smoothed_matrix = self.load_file(
             self.smoothed_matrix_files,
@@ -219,8 +230,14 @@ class PlaceCellResults:
             [self.unsupervised, self.learning, self.learned],
         ):
             for mouse_name in SESSIONS_KEEP.keys():
-                if mouse_name not in {"JB034", "JB035", "JB036"}:
+                if get_genotype(mouse_name) != self.genotype:
+                    if self.verbose:
+                        print(
+                            f"Skipping {mouse_name} as genotype is not {self.genotype}"
+                        )
                     continue
+                if self.verbose:
+                    print(f"Mouse is {self.genotype} genotype, processing {mouse_name}")
 
                 for rewarded in [False, True]:
                     try:
@@ -278,11 +295,16 @@ def get_speed_summary(
     )
 
 
-def main() -> None:
-    place_cell_result = PlaceCellResults(SERVER_PATH / "viral_caches" / "place_cells")
+def plot_place_cell_results(genotype: str) -> None:
+    place_cell_result = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells", genotype=genotype
+    )
     place_cell_result.driver()
 
-    for data, name in zip(
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+
+    for ax, data, name in zip(
+        axes,
         [
             place_cell_result.unsupervised,
             place_cell_result.learning,
@@ -290,21 +312,28 @@ def main() -> None:
         ],
         ["unsupervised", "learning", "learned"],
     ):
-
-        plt.figure()
+        plt.sca(ax)
         place_cell_result.plot_result(
             data["unrewarded"],
             "unrewarded",
             "green",
         )
         place_cell_result.plot_result(data["rewarded"], "rewarded", "blue")
-        plt.ylim(0, 0.4)
-        plt.legend()
-        plt.xlabel("Corridor position (cm)")
-        plt.ylabel("Proportion place cells\nsignificantly active")
-        plt.title(name.capitalize())
-        plt.tight_layout()
-    1 / 0
+        ax.set_ylim(0, 0.5)
+        ax.set_xlabel("Corridor position (cm)")
+        if ax is axes[0]:
+            ax.set_ylabel("Proportion place cells\nsignificantly active")
+            ax.legend()
+        ax.set_title(name.capitalize())
+
+    plt.suptitle(genotype)
+    plt.tight_layout()
+    plt.savefig(
+        SERVER_PATH / "viral_plots" / "visual_tuning" / f"visual_tuning_{genotype}.png",
+        dpi=300,
+    )
+
+    # plt.show()
 
 
 def plot_speed_summary() -> None:
@@ -334,7 +363,7 @@ def plot_speed_summary() -> None:
                     )
 
 
-if __name__ == "__main__":
+def run_ensembles() -> None:
 
     for mouse in SESSIONS_KEEP.keys():
         if mouse not in {"JB034", "JB035", "JB036"}:
@@ -344,3 +373,8 @@ if __name__ == "__main__":
             for rewarded in [True, False, None]:
                 print(f"Starting {mouse} {date} rewarded {rewarded}")
                 ensemble_main(mouse, date, rewarded=rewarded, plot=False)
+
+
+if __name__ == "__main__":
+    for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
+        plot_place_cell_results(genotype=genotype)
