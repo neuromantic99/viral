@@ -1,11 +1,12 @@
 from pathlib import Path
 import sys
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Tuple
 
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
+import seaborn as sns
 
 
 # Allow you to run the file directly, remove if exporting as a proper module
@@ -34,6 +35,7 @@ from viral.constants import (
     SPREADSHEET_ID,
     SYNC_FILE_PATH,
     TIFF_UMBRELLA,
+    grosmark_config,
 )
 from viral.gsheets_importer import gsheet2df
 from viral.multiple_sessions import parse_session_number
@@ -153,8 +155,15 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
 
 
 class PlaceCellResults:
+    LANDMARK_LOCATIONS = [45, 90, 135]
+    LANDMARK_WIDTH = 5
+
     def __init__(
-        self, cache_umbrella: Path, genotype: str, verbose: bool = False
+        self,
+        cache_umbrella: Path,
+        genotype: str,
+        plot_type: Literal["corridor_activity", "tuning"],
+        verbose: bool = False,
     ) -> None:
 
         self.smoothed_matrix_files = list(
@@ -167,6 +176,7 @@ class PlaceCellResults:
         self.unsupervised: Dict[str, List] = {"rewarded": [], "unrewarded": []}
         self.learning: Dict[str, List] = {"rewarded": [], "unrewarded": []}
         self.learned: Dict[str, List] = {"rewarded": [], "unrewarded": []}
+        self.plot_type = plot_type
         self.genotype = genotype
         self.verbose = verbose
 
@@ -192,7 +202,7 @@ class PlaceCellResults:
 
     def collapsed_matrix_result(
         self, mouse_name: str, stage: str, rewarded: bool | None
-    ) -> np.ndarray:
+    ) -> np.ndarray | float:
         date = SESSIONS_KEEP[mouse_name][stage]
         if self.verbose:
             print(
@@ -219,9 +229,49 @@ class PlaceCellResults:
             rewarded=rewarded,
         )
         mask = smoothed_matrix[pcs_combined, :] > place_threshold[pcs_combined, :]
-        return np.sum(mask, axis=0) / mask.shape[0]
+        if self.plot_type == "corridor_activity":
+            return np.sum(mask, axis=0) / mask.shape[0]
+        return self.landmark_tuning(mask)
 
         # return smoothed_matrix[pcs_combined, :].mean(axis=0)
+
+    def landmark_tuning(self, mask: np.ndarray) -> float:
+        n_bins = mask.shape[1]
+        assert (
+            n_bins
+            == (grosmark_config.end - grosmark_config.start) / grosmark_config.bin_size
+        )
+        bin_to_cm_scaling_factor = (
+            grosmark_config.end - grosmark_config.start
+        ) / n_bins
+        result = []
+
+        for landmark_center in self.LANDMARK_LOCATIONS:
+            landmark_bin_center = int(landmark_center / bin_to_cm_scaling_factor)
+            start_inside = landmark_bin_center - (5 / bin_to_cm_scaling_factor)
+            end_inside = landmark_bin_center + (5 / bin_to_cm_scaling_factor)
+            n_cells_in = np.mean(
+                np.sum(mask[:, int(start_inside) : int(end_inside)], axis=0)
+            )
+            start_outside_left = landmark_bin_center - int(
+                10 / bin_to_cm_scaling_factor
+            )
+            end_outside_right = landmark_bin_center + int(10 / bin_to_cm_scaling_factor)
+            n_cells_out = np.mean(
+                np.concatenate(
+                    (
+                        np.sum(
+                            mask[:, int(start_outside_left) : int(start_inside)], axis=0
+                        ),
+                        np.sum(
+                            mask[:, int(end_inside) : int(end_outside_right)], axis=0
+                        ),
+                    )
+                )
+            )
+            result.append(n_cells_in / n_cells_out)
+
+        return np.mean(result)
 
     def driver(self) -> None:
 
@@ -295,9 +345,13 @@ def get_speed_summary(
     )
 
 
-def plot_place_cell_results(genotype: str) -> None:
+def plot_place_cell_results(
+    genotype: str, plot_type: Literal["corridor_activity", "tuning"]
+) -> None:
     place_cell_result = PlaceCellResults(
-        SERVER_PATH / "viral_caches" / "place_cells", genotype=genotype
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype=genotype,
+        plot_type=plot_type,
     )
     place_cell_result.driver()
 
@@ -313,23 +367,52 @@ def plot_place_cell_results(genotype: str) -> None:
         ["unsupervised", "learning", "learned"],
     ):
         plt.sca(ax)
-        place_cell_result.plot_result(
-            data["unrewarded"],
-            "unrewarded",
-            "green",
-        )
-        place_cell_result.plot_result(data["rewarded"], "rewarded", "blue")
-        ax.set_ylim(0, 0.5)
-        ax.set_xlabel("Corridor position (cm)")
-        if ax is axes[0]:
-            ax.set_ylabel("Proportion place cells\nsignificantly active")
-            ax.legend()
-        ax.set_title(name.capitalize())
+        if plot_type == "tuning":
+            sns.boxplot(
+                data={
+                    "rewarded": data["rewarded"],
+                    "unrewarded": data["unrewarded"],
+                },
+                palette={"rewarded": "blue", "unrewarded": "green"},
+                showfliers=False,
+            )
+
+            sns.stripplot(
+                data={
+                    "rewarded": data["rewarded"],
+                    "unrewarded": data["unrewarded"],
+                },
+                palette={"rewarded": "blue", "unrewarded": "green"},
+                edgecolor="black",
+                linewidth=1,
+            )
+
+            plt.axhline(1)
+            plt.ylim(0.9, 1.7)
+            if ax is axes[0]:
+                plt.ylabel("Landmark tuning index")
+
+        if plot_type == "corridor_activity":
+            place_cell_result.plot_result(
+                data["unrewarded"],
+                "unrewarded",
+                "green",
+            )
+            place_cell_result.plot_result(data["rewarded"], "rewarded", "blue")
+            ax.set_ylim(0, 0.5)
+            ax.set_xlabel("Corridor position (cm)")
+            if ax is axes[0]:
+                ax.set_ylabel("Proportion place cells\nsignificantly active")
+                ax.legend()
+            ax.set_title(name.capitalize())
 
     plt.suptitle(genotype)
     plt.tight_layout()
     plt.savefig(
-        SERVER_PATH / "viral_plots" / "visual_tuning" / f"visual_tuning_{genotype}.png",
+        SERVER_PATH
+        / "viral_plots"
+        / "visual_tuning"
+        / f"visual_tuning_{genotype}_{plot_type}.png",
         dpi=300,
     )
 
@@ -337,12 +420,6 @@ def plot_place_cell_results(genotype: str) -> None:
 
 
 def plot_speed_summary() -> None:
-
-    config = GrosmarkConfig(
-        start=0,
-        end=180,
-        bin_size=2,
-    )
 
     result = {
         stage: {"rewarded": [], "unrewarded": []}
@@ -357,7 +434,9 @@ def plot_speed_summary() -> None:
             with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
                 session = Cached2pSession.model_validate_json(f.read())
                 for rewarded in [False, True]:
-                    speed = get_speed_summary(session, rewarded=rewarded, config=config)
+                    speed = get_speed_summary(
+                        session, rewarded=rewarded, config=grosmark_config
+                    )
                     result[stage]["rewarded" if rewarded else "unrewarded"].append(
                         speed
                     )
@@ -377,4 +456,6 @@ def run_ensembles() -> None:
 
 if __name__ == "__main__":
     for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-        plot_place_cell_results(genotype=genotype)
+        plot_place_cell_results(genotype=genotype, plot_type="tuning")
+
+    plt.show()
