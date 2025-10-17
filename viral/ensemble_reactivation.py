@@ -801,8 +801,7 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
             trial
             for trial in session.trials
             if trial_is_imaged(trial)
-            and (rewarded is None)
-            or trial.texture_rewarded == rewarded
+            and ((rewarded is None) or trial.texture_rewarded == rewarded)
         ]
 
         ssp_vectors = get_ssp_vectors(
