@@ -16,7 +16,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import CACHE_PATH, HERE, SERVER_PATH
+from viral.constants import CACHE_PATH, HERE, SERVER_PATH, grosmark_config
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
@@ -599,12 +599,9 @@ if __name__ == "__main__":
 
     is_unsupervised = session_is_unsupervised(session)
 
-    config = GrosmarkConfig(
-        bin_size=2,
-        start=0,
-        end=180,
-    )
-
     grosmark_place_field(
-        session, spks, rewarded=None if is_unsupervised else False, config=config
+        session,
+        spks,
+        rewarded=None if is_unsupervised else False,
+        config=grosmark_config,
     )

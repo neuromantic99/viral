@@ -19,7 +19,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA
+from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA, grosmark_config
 from viral.models import (
     Cached2pSession,
     EnsembleSessionResult,
@@ -746,17 +746,11 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
         SERVER_PATH / "viral_caches" / "ensemble_caches"
     ).exists(), "Cache path does not exist, please create it"
 
-    config = GrosmarkConfig(
-        bin_size=2,
-        start=0,
-        end=180,
-    )
-
     cache_file = (
         SERVER_PATH
         / "viral_caches"
         / "ensemble_caches"
-        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation_{config}_rewarded_{rewarded}.npz"
+        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation_{grosmark_config}_rewarded_{rewarded}.npz"
     )
 
     if use_cache and cache_file.exists():
@@ -787,7 +781,11 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
 
         t1 = time.time()
         pcs_mask, _, _ = get_place_cells(
-            session=session, spks=spks, rewarded=rewarded, config=config, plot=False
+            session=session,
+            spks=spks,
+            rewarded=rewarded,
+            config=grosmark_config,
+            plot=False,
         )
 
         print(f"Time to get place cells: {time.time() - t1}")
