@@ -8,6 +8,7 @@ from scipy.stats import zscore, pearsonr
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
+from tqdm import tqdm
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -15,7 +16,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import CACHE_PATH, HERE, SERVER_PATH
+from viral.constants import CACHE_PATH, HERE, SERVER_PATH, grosmark_config
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
@@ -67,7 +68,7 @@ def grosmark_place_field(
         spks = np.hstack([offline_spks_pre, online_spks, offline_spks_post])
         assert spks_raw.shape == spks.shape
 
-    pcs, smoothed_matrix = get_place_cells(
+    pcs, smoothed_matrix, _ = get_place_cells(
         session=session, spks=spks, rewarded=rewarded, config=config, plot=plot
     )
 
@@ -99,7 +100,7 @@ def get_place_cells(
     config: GrosmarkConfig,
     rewarded: bool | None,
     plot: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     From Grosmark et al.:
     The position of the animal during online running epochs on the 2-m-long run belts was binned into 100,
@@ -142,7 +143,6 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
-                smoothing_sigma=sigma_bins,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
@@ -150,56 +150,61 @@ def get_place_cells(
         ]
     )
 
-    smoothed_matrix = np.nanmean(all_trials, 0)
+    smoothed_matrix = gaussian_filter1d(
+        np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
+    )
 
-    # Probably delete cache logic once we're all sorted
     use_cache = True
-    cache_file = (
+
+    get_cache_path = lambda variable_name: (
         SERVER_PATH
         / "viral_caches"
         / "place_cells"
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
+        / variable_name
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
     )
-    if use_cache and cache_file.exists():
-        shuffled_matrices = np.load(cache_file)
+
+    if use_cache and get_cache_path("place_threshold").exists():
+        print("Found cached place threshold")
+        place_threshold = np.load(get_cache_path("place_threshold"))
     else:
+        print("No cached place threshold, calculating")
         # Create array of shape (n_shuffles, n_cells, n_bins)
         # where each (n_cells x bins) matrix is trial averaged but shuffled on a per-trial basis (as in Grosmark)
         # You can then apply percentiles along the first dimension to find "real" place cells
-        shuffled_matrices = np.array(
-            [
-                np.nanmean(
-                    np.array(
-                        [
-                            activity_trial_position(
-                                trial=trial,
-                                flu=spks,
-                                wheel_circumference=get_wheel_circumference_from_rig(
-                                    "2P"
-                                ),
-                                bin_size=config.bin_size,
-                                start=config.start,
-                                max_position=config.end,
-                                verbose=False,
-                                do_shuffle=True,
-                                smoothing_sigma=sigma_bins,
-                            )
-                            for trial in session.trials
-                            if trial_is_imaged(trial)
-                            and (rewarded is None or trial.texture_rewarded == rewarded)
-                        ]
-                    ),
-                    0,
-                )
-                for _ in range(n_shuffles)
-            ]
+        shuffled_matrices = np.empty(
+            (n_shuffles, n_cells_total, smoothed_matrix.shape[1])
         )
-        np.save(cache_file, shuffled_matrices)
+        for shuffle_idx in tqdm(
+            range(n_shuffles), desc="Calculating shuffled place fields"
+        ):
+            shuffle_result = np.nanmean(
+                np.array(
+                    [
+                        activity_trial_position(
+                            trial=trial,
+                            flu=spks,
+                            wheel_circumference=get_wheel_circumference_from_rig("2P"),
+                            bin_size=config.bin_size,
+                            start=config.start,
+                            max_position=config.end,
+                            verbose=False,
+                            do_shuffle=True,
+                        )
+                        for trial in session.trials
+                        if trial_is_imaged(trial)
+                        and (rewarded is None or trial.texture_rewarded == rewarded)
+                    ]
+                ),
+                0,
+            )
+            smoothed_shuffle = gaussian_filter1d(
+                shuffle_result, sigma=sigma_bins, axis=1
+            )
+            shuffled_matrices[shuffle_idx, :, :] = smoothed_shuffle
 
-    place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
-
-    if plot:
-        plot_speed(session, rewarded, config)
+        place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
+        np.save(get_cache_path("place_threshold"), place_threshold)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -208,15 +213,6 @@ def get_place_cells(
     # don't have a center. Probably fine to do this but not ideal
     if n_consecutive_trues % 2 == 0:
         n_consecutive_trues += 1
-
-    shuffled_place_cells = np.array(
-        [
-            has_n_consecutive_trues(
-                shuffled_matrices[idx, :, :] > place_threshold, n_consecutive_trues
-            )
-            for idx in range(shuffled_matrices.shape[0])
-        ]
-    )
 
     pcs = has_n_consecutive_trues(
         smoothed_matrix > place_threshold, n_consecutive_trues
@@ -233,9 +229,7 @@ def get_place_cells(
 
     # Cells that pass both the original and additional checks
     pcs_combined = pcs.copy()
-    pcs_combined[pcs] = pcs[pcs] & pcs_additional
-    # TODO: should it be
-    # pcs_combined[pcs] = pcs_additional???
+    pcs_combined[pcs] = pcs_additional
 
     print(
         f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"
@@ -245,12 +239,16 @@ def get_place_cells(
             smoothed_matrix=smoothed_matrix[pcs_combined, :],
             config=config,
         )
+        plt.savefig(
+            SERVER_PATH
+            / "viral_plots"
+            / "place_cells"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}.png"
+        )
 
-    print(
-        f"percent place cells shuffled {np.mean(np.sum(shuffled_place_cells, axis=1) / n_cells_total)}"
-    )
-
-    return pcs_combined, smoothed_matrix
+    np.save(get_cache_path("smoothed_matrix"), smoothed_matrix)
+    np.save(get_cache_path("pcs_combined"), pcs_combined)
+    return pcs_combined, smoothed_matrix, place_threshold
 
 
 def plot_speed(
@@ -472,14 +470,13 @@ def plot_place_cells(
 ) -> None:
     plt.figure()
     plt.imshow(
-        zscore(sort_matrix_peak(smoothed_matrix), axis=1),
+        zscore(sort_matrix_peak(smoothed_matrix), axis=1, nan_policy="omit"),
         aspect="auto",
         cmap="bwr",
         vmin=-1,
         vmax=2,
     )
 
-    plt.title("Real")
     plt.xlabel("Corridor position (cm)")
     plt.ylabel("Cell number")
 
@@ -489,6 +486,7 @@ def plot_place_cells(
     )
 
     plt.colorbar()
+    plt.tight_layout()
 
 
 def filter_additional_check(
@@ -500,10 +498,6 @@ def filter_additional_check(
     """Runs the following check from the Grosmark paper:
     As an additional control, only those putative PFs in which the cell had a greater within-PF than outside-of-PF firing rates
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
-
-    Currently have made the threshold more conservative (40%) as 15% does not filter any cells out, but review.
-
-    TODO: I think lots of things are being dropped here due to the blanking
     """
 
     centers = find_n_consecutive_trues_center(
@@ -605,12 +599,9 @@ if __name__ == "__main__":
 
     is_unsupervised = session_is_unsupervised(session)
 
-    config = GrosmarkConfig(
-        bin_size=2,
-        start=30,
-        end=160,
-    )
-
     grosmark_place_field(
-        session, spks, rewarded=None if is_unsupervised else False, config=config
+        session,
+        spks,
+        rewarded=None if is_unsupervised else False,
+        config=grosmark_config,
     )
