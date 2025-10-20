@@ -174,7 +174,7 @@ def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
 
 
 def get_online_position_and_frames(
-    trial: TrialInfo, wheel_circumference: float
+    trial: TrialInfo, wheel_circumference: float, threshold_speed: bool = True
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
     smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
@@ -195,23 +195,14 @@ def get_online_position_and_frames(
     )
     assert len(position) == len(frame_position)
 
-    speed = compute_speed_grosmark(position)
-
-    speed_threshold = 5
-    idx_keep = above_threshold_for_n_consecutive_samples(
-        speed, threshold=speed_threshold, n_samples=3 * 30
-    )
-
-    # Taken this out for now as it doesn't seem to be such a big
-    # issue with the new smoothing. Keep and eye on the place cells
-    # plots though
-
-    # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
-    # trial_onset = frame_position < frame_position[0] + 60
-    # idx_keep = idx_keep & ~trial_onset
-
-    position = position[idx_keep]
-    frame_position = frame_position[idx_keep]
+    if threshold_speed:
+        speed = compute_speed_grosmark(position)
+        speed_threshold = 5
+        idx_keep = above_threshold_for_n_consecutive_samples(
+            speed, threshold=speed_threshold, n_samples=3 * 30
+        )
+        position = position[idx_keep]
+        frame_position = frame_position[idx_keep]
 
     assert len(position) == len(frame_position)
 
@@ -227,6 +218,7 @@ def activity_trial_position(
     max_position: int = 170,
     verbose: bool = False,
     do_shuffle: bool = False,
+    threshold_speed: bool = True,
 ) -> np.ndarray:
     """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
     trial: TrialInfo
@@ -240,7 +232,7 @@ def activity_trial_position(
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
     position, frame_position = get_online_position_and_frames(
-        trial, wheel_circumference
+        trial, wheel_circumference, threshold_speed
     )
 
     dff_position_list = []

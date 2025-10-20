@@ -94,6 +94,14 @@
       "program": "viral/fix_tiff.py",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "rep drift",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/representational_drift.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ]
 }
