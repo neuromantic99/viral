@@ -607,3 +607,10 @@ def test_code_rabbit() -> None:
 
     expected = np.array([1, 5])
     assert np.array_equal(result, expected)
+
+
+def test_flatten() -> None:
+    # n_trials x time shape
+    arr = np.array([[1, 2, 3], [4, 5, 6]])
+    result = arr.flatten()
+    assert np.array_equal(result, np.array([1, 2, 3, 4, 5, 6]))

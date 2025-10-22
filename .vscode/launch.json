@@ -101,6 +101,7 @@
       "request": "launch",
       "program": "viral/representational_drift.py",
       "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "100" },
       "justMyCode": true
     }
   ]

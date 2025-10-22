@@ -231,6 +231,7 @@ def activity_trial_position(
     verbose: if True, print the binning information
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
+    assert trial_is_imaged(trial), "Trial does not have imaging data"
     position, frame_position = get_online_position_and_frames(
         trial, wheel_circumference, threshold_speed
     )
