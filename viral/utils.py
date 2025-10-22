@@ -8,6 +8,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
 import pandas as pd
+from scipy.ndimage import gaussian_filter1d
 
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import (
@@ -28,18 +29,20 @@ def shaded_line_plot(
     color: str,
     label: str,
     do_moving_average: bool = False,
+    axis: plt.Axes | None = None,
 ) -> None:
 
+    plotter = axis if axis is not None else plt
+
     if do_moving_average:
-        mean = moving_average(np.nanmean(arr, 0), 5)
-        sem = moving_average(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), 5)
-        x_axis = x_axis[1 : len(mean) + 1]  # Adjust x_axis to match the mean length
+        mean = gaussian_filter1d(np.nanmean(arr, 0), sigma=1)
+        sem = gaussian_filter1d(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), sigma=1)
     else:
         mean = np.nanmean(arr, 0)
         sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[1])
 
-    plt.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
-    plt.fill_between(
+    plotter.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
+    plotter.fill_between(
         x_axis,
         np.subtract(
             mean,
@@ -591,3 +594,12 @@ def check_trial_file_sorting(trial_files: List[Path]) -> None:
         this_number = int(trial.stem.split("trial")[-1])
         next_number = int(next_trial.stem.split("trial")[-1])
         assert next_number == this_number + 1
+
+
+def basic_normalise(data: np.ndarray) -> np.ndarray:
+    return (data - np.min(data)) / (np.max(data) - np.min(data))
+
+
+def imshow(matrix: np.ndarray) -> None:
+    """Wrapper with the settings we use everytime"""
+    plt.imshow(matrix, aspect="auto", interpolation="none")
