@@ -8,8 +8,10 @@ from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
 import pandas as pd
+from scipy import stats
 from scipy.ndimage import gaussian_filter1d
 
+from scipy.linalg import issymmetric
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import (
     Cached2pSession,
@@ -600,10 +602,34 @@ def basic_normalise(data: np.ndarray) -> np.ndarray:
     return (data - np.min(data)) / (np.max(data) - np.min(data))
 
 
-def imshow(matrix: np.ndarray) -> None:
+def imshow(matrix: np.ndarray, vmax: float | None = None) -> None:
     """Wrapper with the settings we use everytime"""
-    plt.imshow(matrix, aspect="auto", interpolation="none")
+    plt.imshow(matrix, aspect="auto", interpolation="none", vmax=vmax)
 
 
 def exp_model(t: np.ndarray, A: float, tau: float, C: float) -> np.ndarray:
     return A * np.exp(-t / tau) + C
+
+
+def corr_vs_distance(A: np.ndarray) -> np.ndarray:
+    assert A.shape[0] == A.shape[1]
+    assert issymmetric(A, atol=0.01), "Input matrix must be symmetric"
+    n = A.shape[0]
+    return np.array([np.diag(A, k).mean() for k in range(n)])
+
+
+def round_up_to_base(x: float, base: int) -> int:
+    return base * math.ceil(x / base)
+
+
+def compute_linear_slope(
+    x: np.ndarray, y: np.ndarray, plot: bool = False, title: str = ""
+) -> float:
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    if plot:
+        plt.figure()
+        plt.plot(x, y, label="data")
+        plt.plot(x, slope * x + intercept, label="fit")
+        plt.title(f"{title} slope: {slope:.4f}, p: {p_value:.4f}")
+        plt.legend()
+    return slope

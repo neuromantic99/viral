@@ -33,15 +33,20 @@ from viral.utils import (
     get_genotype,
     get_speed_positions,
     get_wheel_circumference_from_rig,
+    round_up_to_base,
     shaded_line_plot,
     basic_normalise,
     imshow,
     exp_model,
+    corr_vs_distance,
 )
 from viral.sessions_keep import SESSIONS_KEEP
 
+from viral.grosmark_analysis import correlations_vs_peak_distance
+
 
 from sklearn.linear_model import LogisticRegression
+
 
 import seaborn as sns
 
@@ -260,18 +265,17 @@ def get_trial_speeds(
 
 def speed_control(
     trial_speed: np.ndarray,
-    trial_group_size: int,
 ) -> np.ndarray:
+    n_trials = trial_speed.shape[0]
+    speed_result = np.empty((n_trials, n_trials))
 
-    base_speed = np.mean(trial_speed[:trial_group_size, :], axis=0)
-    speed_result = []
-    for trial_idx in range(trial_speed.shape[0] - trial_group_size):
-        speed_response = np.mean(
-            trial_speed[trial_idx : trial_idx + trial_group_size, :], axis=0
-        )
-        speed_result.append(stats.spearmanr(speed_response, base_speed).correlation)
+    for i in range(trial_speed.shape[0]):
+        for j in range(trial_speed.shape[0]):
+            speed_result[i, j] = stats.pearsonr(
+                trial_speed[i, :], trial_speed[j, :]
+            ).correlation
 
-    return np.array(speed_result)
+    return speed_result
 
 
 def speed_modulation(
@@ -295,7 +299,6 @@ def correlation_drift(
     bin_size = 5
     start = 0
     max_position = 180
-    trial_group_size = 3
 
     trial_speeds = get_trial_speeds(
         session=session,
@@ -307,7 +310,6 @@ def correlation_drift(
 
     speed_correlation = speed_control(
         trial_speed=trial_speeds,
-        trial_group_size=trial_group_size,
     )
 
     trial_array = np.array(
@@ -337,27 +339,25 @@ def correlation_drift(
 
     trial_array = trial_array[:, ~modulated_cells, :]
 
-    population_result = []
-    base = trial_array[:trial_group_size, :, :].mean((0, 1))
-    for trial_idx in range(trial_array.shape[0] - trial_group_size):
-        population_response = trial_array[
-            trial_idx : trial_idx + trial_group_size, :, :
-        ].mean((0, 1))
-        population_result.append(stats.spearmanr(population_response, base).correlation)
+    population_response = trial_array.mean(1)
+    n_trials = trial_array.shape[0]
+    n_cells = trial_array.shape[1]
 
-    population_result = np.array(population_result)
-    all_cell_results = []
-    for neuron_idx in range(trial_array.shape[1]):
-        cell_result = []
-        base = trial_array[:trial_group_size, neuron_idx, :].mean(0)
-        for trial_idx in range(trial_array.shape[0] - trial_group_size):
-            cell_response = trial_array[
-                trial_idx : trial_idx + trial_group_size, neuron_idx, :
-            ].mean(0)
-            cell_result.append(stats.spearmanr(cell_response, base).correlation)
-        all_cell_results.append(cell_result)
+    population_correlation = np.empty((n_trials, n_trials))
+    for i in range(trial_array.shape[0]):
+        for j in range(trial_array.shape[0]):
+            population_correlation[i, j] = stats.pearsonr(
+                population_response[i, :], population_response[j, :]
+            ).correlation
 
-    decay = np.nanmean(np.array(all_cell_results), axis=0)
+    cell_by_cell_correlation = np.empty((n_cells, n_trials, n_trials))
+
+    for neuron_idx in range(n_cells):
+        for i in range(trial_array.shape[0]):
+            for j in range(trial_array.shape[0]):
+                cell_by_cell_correlation[neuron_idx, i, j] = stats.pearsonr(
+                    trial_array[i, neuron_idx, :], trial_array[j, neuron_idx, :]
+                ).correlation
 
     if plot:
         plt.plot(
@@ -371,13 +371,13 @@ def correlation_drift(
             color="blue",
         )
         plt.plot(
-            basic_normalise(population_result[trial_group_size:]),
+            basic_normalise(population_correlation[trial_group_size:]),
             label="population",
             color="red",
         )
         plt.legend()
 
-    return decay, population_result, speed_correlation
+    return cell_by_cell_correlation, population_correlation, speed_correlation
 
 
 def interpolate_nans(all_trials_matrix: np.ndarray) -> np.ndarray:
@@ -407,6 +407,7 @@ def main() -> None:
 
     for mouse_name in tqdm(SESSIONS_KEEP.keys()):
         for stage in ["unsupervised", "learning", "learned"]:
+            print(f"Doing {mouse_name} at {stage} stage")
             date = SESSIONS_KEEP[mouse_name][stage]
             if date is None:
                 continue
@@ -422,8 +423,8 @@ def main() -> None:
                     / f"{mouse_name}_{date}_drift_correlation_rewarded_{rewarded}.npz"
                 )
 
-                if save_path.exists():
-                    continue
+                # if save_path.exists():
+                #     continue
 
                 mask_files = [
                     file
@@ -457,6 +458,7 @@ def main() -> None:
                     and (rewarded is None or trial.texture_rewarded == rewarded)
                 ]
 
+                print("Saving results to ", save_path.name)
                 np.savez(
                     save_path,
                     cell_wise=cell_wise,
@@ -580,48 +582,46 @@ def plot_drift_correlation_results(
             cell_wise = data["cell_wise"]
             population_wise = data["population_wise"]
             speed_wise = data["speed_wise"]
-            assert len(cell_wise) == len(population_wise)
-            if len(cell_wise) < 15:
+            cell_wise = np.nanmean(cell_wise, 0)
+            try:
+                assert len(cell_wise) == len(population_wise)
+            except TypeError:
                 continue
 
-            all_population.append(population_wise)
-            all_cell.append(cell_wise)
-            all_speed.append(speed_wise)
+            # correlations_vs_peak_distance function has the same logic as a grosmark plot, so
+            # hijack. But some of the argument names don't make sense here
 
-        # Needs to match correlation_drift
-        trial_group_size = 3
+            trial_times = data["x_axis"] - data["x_axis"][0]
+            # 1 minute bins
+            # Round up to nearest minute
+            bin_width = 60 * 5
+            max_time = round_up_to_base(trial_times.max(), bin_width)
+            bin_edges = np.arange(0, max_time, bin_width)
 
-        # TODO: make this the delta time from the first trial
-        taus = [
-            compute_linear_slope(
-                cell[trial_group_size:] / cell[trial_group_size:][0],
-                plot=False,
-                title=genotype,
-            )
-            for cell in all_cell
-        ]
-        result[stage] = taus
+            population_distance_corr = correlations_vs_peak_distance(
+                population_wise,
+                trial_times,
+                bin_edges,
+                label=f"{mouse_name}_population",
+            )[0]
+            cell_distance_corr = correlations_vs_peak_distance(
+                cell_wise, trial_times, bin_edges, label=f"{mouse_name}_cell"
+            )[0]
+            speed_distance_corr = correlations_vs_peak_distance(
+                speed_wise, trial_times, bin_edges, label=f"{mouse_name}_speed"
+            )[0]
+            all_population.append(population_distance_corr)
+            all_cell.append(cell_distance_corr)
+            all_speed.append(speed_distance_corr)
+
+        result[stage] = all_population
 
     plt.figure()
     sns.boxplot(result, showfliers=False)
     sns.stripplot(result, color="black", alpha=0.5)
     plt.title(f"{genotype}")
     plt.tight_layout()
-    plt.ylim(-0.05, 0.05)
-
-
-def compute_linear_slope(
-    to_fit: np.ndarray, plot: bool = False, title: str = ""
-) -> float:
-    t = np.arange(len(to_fit))
-    slope, intercept, r_value, p_value, std_err = stats.linregress(t, to_fit)
-    if plot:
-        plt.figure()
-        plt.plot(t, to_fit, label="data")
-        plt.plot(t, slope * t + intercept, label="fit")
-        plt.title(f"{title} slope: {slope:.4f}, p: {p_value:.4f}")
-        plt.legend()
-    return slope
+    plt.ylim(-0.1, 0.1)
 
 
 def compute_tau(to_fit: np.ndarray, plot: bool = False) -> float:
@@ -644,8 +644,8 @@ def compute_tau(to_fit: np.ndarray, plot: bool = False) -> float:
 if __name__ == "__main__":
     # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     #     plot_overall_scores(genotype)
-    # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-    #     plot_drift_correlation_results(genotype, None)
+    for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
+        plot_drift_correlation_results(genotype, False)
 
-    # 1 / 0
-    main()
+    1 / 0
+    # main()

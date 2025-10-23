@@ -28,6 +28,7 @@ from viral.imaging_utils import (
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 
 from viral.utils import (
+    compute_linear_slope,
     cross_correlation_pandas,
     degrees_to_cm,
     find_n_consecutive_trues_center,
@@ -410,9 +411,10 @@ def get_offline_correlation_matrix(
 def correlations_vs_peak_distance(
     corrs: np.ndarray,
     peak_position_cm: np.ndarray,
+    bin_edges: np.ndarray,
     colour: str | None = None,
     label: str | None = None,
-    plot: bool = True,
+    plot: bool = False,
 ) -> tuple[float, float]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
     distance between their place field peaks.
@@ -442,17 +444,24 @@ def correlations_vs_peak_distance(
     x = []
     y = []
 
-    for bin_start in np.arange(0, 100):
+    bin_width = bin_edges[1] - bin_edges[0]
+    for bin_start in bin_edges:
         in_bin = np.logical_and(
-            peak_distances >= bin_start, peak_distances < bin_start + 20
+            peak_distances >= bin_start, peak_distances < bin_start + bin_width
         )
         x.append(bin_start)
         y.append(np.mean(cell_corrs[in_bin]))
 
     if plot:
-        plt.plot(x, y, color=colour, label=label)
-    r, p = pearsonr(x, y)
-    return r, p
+        plt.figure()
+        plt.plot(np.array(x) / 60, y, color=colour, label=label)
+        plt.legend()
+
+    # Need to put this back if grosmarking
+    # r, p = pearsonr(x, y)
+    # return r, p
+    m = compute_linear_slope((np.array(x) / 60 / 60), np.array(y))
+    return m, 0.0
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:

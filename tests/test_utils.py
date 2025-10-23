@@ -10,10 +10,11 @@ from viral.models import SpeedPosition
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
-    exponential_decay,
     get_speed_positions,
+    corr_vs_distance,
     has_n_consecutive_trues,
     remove_consecutive_ones,
+    round_up_to_base,
     shuffle_rows,
     split_continuous_chunks,
     threshold_detect_continuous,
@@ -626,3 +627,23 @@ def test_get_tau() -> None:
     data_with_noise = exponential_decay(x, tau=tau) + np.random.normal(0, 0.1, size=99)
     fit = curve_fit(f=exponential_decay, xdata=x, ydata=data_with_noise, p0=(1))
     assert int(fit[0][0]) == tau
+
+
+def test_corr_vs_distance() -> None:
+
+    A = np.array([[1, 2, 3], [2, 1, 4], [3, 4, 1]])
+    result = corr_vs_distance(A)
+
+    expected = np.array([1.0, 3.0, 3.0])
+
+    np.testing.assert_array_almost_equal(result, expected)
+
+
+def test_round_up_to_base() -> None:
+    assert round_up_to_base(3, base=5) == 5
+    assert round_up_to_base(5, base=5) == 5
+    assert round_up_to_base(7, base=5) == 10
+    assert round_up_to_base(12, base=3) == 12
+    assert round_up_to_base(0, base=5) == 0
+    assert round_up_to_base(-3, base=5) == 0
+    assert round_up_to_base(-7, base=5) == -5
