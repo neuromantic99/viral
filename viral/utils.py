@@ -603,3 +603,7 @@ def basic_normalise(data: np.ndarray) -> np.ndarray:
 def imshow(matrix: np.ndarray) -> None:
     """Wrapper with the settings we use everytime"""
     plt.imshow(matrix, aspect="auto", interpolation="none")
+
+
+def exp_model(t: np.ndarray, A: float, tau: float, C: float) -> np.ndarray:
+    return A * np.exp(-t / tau) + C

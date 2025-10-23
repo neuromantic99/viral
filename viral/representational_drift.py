@@ -16,6 +16,7 @@ import numpy as np
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from scipy.stats import zscore
 
+from scipy.optimize import curve_fit
 
 from viral.learning_stages import PlaceCellResults
 
@@ -35,6 +36,7 @@ from viral.utils import (
     shaded_line_plot,
     basic_normalise,
     imshow,
+    exp_model,
 )
 from viral.sessions_keep import SESSIONS_KEEP
 
@@ -293,8 +295,8 @@ def correlation_drift(
     bin_size = 5
     start = 0
     max_position = 180
+    trial_group_size = 3
 
-    trial_group_size = 5
     trial_speeds = get_trial_speeds(
         session=session,
         start=start,
@@ -343,6 +345,7 @@ def correlation_drift(
         ].mean((0, 1))
         population_result.append(stats.spearmanr(population_response, base).correlation)
 
+    population_result = np.array(population_result)
     all_cell_results = []
     for neuron_idx in range(trial_array.shape[1]):
         cell_result = []
@@ -400,65 +403,67 @@ def interpolate_nans(all_trials_matrix: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
+    cache_umbrella = SERVER_PATH / "viral_caches" / "drift_correlation"
 
     for mouse_name in tqdm(SESSIONS_KEEP.keys()):
         for stage in ["unsupervised", "learning", "learned"]:
-
             date = SESSIONS_KEEP[mouse_name][stage]
-
             if date is None:
                 continue
 
-            save_path = (
-                SERVER_PATH
-                / "viral_caches"
-                / "drift_correlation"
-                / f"{mouse_name}_{date}_drift_correlation.npz"
-            )
-
-            if save_path.exists():
-                continue
-
-            path = CACHE_PATH / f"{mouse_name}_{date}.json"
-
-            mask_files = [
-                file
-                for file in list(
-                    (
-                        SERVER_PATH / "viral_caches" / "place_cells" / "pcs_combined"
-                    ).glob("*.npy")
-                )
-                if mouse_name in file.name and date in file.name and "None" in file.name
-            ]
-            assert len(mask_files) == 1
-            pc_mask = np.load(mask_files[0])
-
             spks_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
-            session = Cached2pSession.model_validate_json(path.read_text())
-            spks = np.load(spks_path / "oasis_spikes.npy")
-            spks = spks[pc_mask, :]
+            spks_all = np.load(spks_path / "oasis_spikes.npy")
+            session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
+            session = Cached2pSession.model_validate_json(session_path.read_text())
 
-            print(f"Processing {mouse_name} on {date} for {stage} stage.")
+            for rewarded in [True, False, None]:
+                save_path = (
+                    cache_umbrella
+                    / f"{mouse_name}_{date}_drift_correlation_rewarded_{rewarded}.npz"
+                )
 
-            cell_wise, population_wise, speed_wise = correlation_drift(
-                session, spks, rewarded=True
-            )
-            np.savez(
-                save_path,
-                cell_wise=cell_wise,
-                population_wise=population_wise,
-                speed_wise=speed_wise,
-            )
+                if save_path.exists():
+                    continue
 
-            # landmark_drift(session, spks)
+                mask_files = [
+                    file
+                    for file in list(
+                        (
+                            SERVER_PATH
+                            / "viral_caches"
+                            / "place_cells"
+                            / "pcs_combined"
+                        ).glob("*.npy")
+                    )
+                    if mouse_name in file.name
+                    and date in file.name
+                    and f"rewarded_{rewarded}" in file.name
+                ]
+                assert len(mask_files) == 1
+                pc_mask = np.load(mask_files[0])
 
-            # drift_score, scores = do_classify(session, spks)
+                spks = spks_all[pc_mask, :]
 
-            # np.savez(
-            #     save_path,
-            #     drift_score=drift_score,
-            #     scores=scores,
-            # )
+                print(f"Processing {mouse_name} on {date} for {stage} stage.")
+
+                cell_wise, population_wise, speed_wise = correlation_drift(
+                    session, spks, rewarded=rewarded, plot=False
+                )
+
+                x_axis = [
+                    trial.trial_start_time
+                    for trial in session.trials
+                    if trial_is_imaged(trial)
+                    and (rewarded is None or trial.texture_rewarded == rewarded)
+                ]
+
+                np.savez(
+                    save_path,
+                    cell_wise=cell_wise,
+                    population_wise=population_wise,
+                    speed_wise=speed_wise,
+                    x_axis=x_axis,
+                )
 
 
 def plot_overall_scores(genotype: str) -> None:
@@ -549,8 +554,10 @@ def plot_overall_scores(genotype: str) -> None:
 
 def plot_drift_correlation_results(
     genotype: Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"],
+    rewarded: bool | None,
 ) -> None:
-    _, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+    # _, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+    result = {"unsupervised": [], "learning": [], "learned": []}
     for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
         all_population = []
         all_cell = []
@@ -566,17 +573,14 @@ def plot_drift_correlation_results(
                 SERVER_PATH
                 / "viral_caches"
                 / "drift_correlation"
-                / f"{mouse_name}_{date}_drift_correlation.npz"
+                / f"{mouse_name}_{date}_drift_correlation_rewarded_{rewarded}.npz"
             )
-
-            if not cache_path.exists():
-                continue
-
+            assert cache_path.exists()
             data = np.load(cache_path)
             cell_wise = data["cell_wise"]
             population_wise = data["population_wise"]
             speed_wise = data["speed_wise"]
-            assert len(cell_wise) == len(population_wise) == len(speed_wise)
+            assert len(cell_wise) == len(population_wise)
             if len(cell_wise) < 15:
                 continue
 
@@ -584,74 +588,64 @@ def plot_drift_correlation_results(
             all_cell.append(cell_wise)
             all_speed.append(speed_wise)
 
-        smallest_len = min(len(arr) for arr in all_population)
         # Needs to match correlation_drift
-        trial_group_size = 5
+        trial_group_size = 3
 
-        population_matrix = np.array(
-            [pop[trial_group_size:smallest_len] for pop in all_population]
-        )
-        cell_matrix = np.array(
-            [cell[trial_group_size:smallest_len] for cell in all_cell]
-        )
-        speed_matrix = np.array(
-            [speed[trial_group_size:smallest_len] for speed in all_speed]
-        )
+        # TODO: make this the delta time from the first trial
+        taus = [
+            compute_linear_slope(
+                cell[trial_group_size:] / cell[trial_group_size:][0],
+                plot=False,
+                title=genotype,
+            )
+            for cell in all_cell
+        ]
+        result[stage] = taus
 
-        x_axis = np.arange(smallest_len - trial_group_size)
-        population_matrix = np.apply_along_axis(basic_normalise, 1, population_matrix)
-        cell_matrix = np.apply_along_axis(basic_normalise, 1, cell_matrix)
-        speed_matrix = np.apply_along_axis(basic_normalise, 1, speed_matrix)
-
-        shaded_line_plot(
-            arr=population_matrix,
-            x_axis=x_axis,
-            color="blue",
-            label="Population drift",
-            do_moving_average=False,
-            axis=axes[idx],
-        )
-
-        shaded_line_plot(
-            arr=cell_matrix,
-            x_axis=x_axis,
-            color="red",
-            do_moving_average=False,
-            label="Cell drift",
-            axis=axes[idx],
-        )
-
-        shaded_line_plot(
-            arr=speed_matrix,
-            x_axis=x_axis,
-            color="green",
-            do_moving_average=False,
-            label="Speed drift",
-            axis=axes[idx],
-        )
-
-        axes[idx].set_title(stage)
-
-        if idx == 0:
-            axes[idx].set_ylabel("Correlation with first 5 trials")
-            axes[idx].legend()
-
-        if idx == 1:
-            axes[idx].set_xlabel("Trial number")
-
-    plt.suptitle(genotype)
+    plt.figure()
+    sns.boxplot(result, showfliers=False)
+    sns.stripplot(result, color="black", alpha=0.5)
+    plt.title(f"{genotype}")
     plt.tight_layout()
-    plt.savefig(
-        SERVER_PATH
-        / "viral_plots"
-        / "correlation_drift"
-        / f"{genotype}_representational_drift_correlation.png",
-        dpi=300,
+    plt.ylim(-0.05, 0.05)
+
+
+def compute_linear_slope(
+    to_fit: np.ndarray, plot: bool = False, title: str = ""
+) -> float:
+    t = np.arange(len(to_fit))
+    slope, intercept, r_value, p_value, std_err = stats.linregress(t, to_fit)
+    if plot:
+        plt.figure()
+        plt.plot(t, to_fit, label="data")
+        plt.plot(t, slope * t + intercept, label="fit")
+        plt.title(f"{title} slope: {slope:.4f}, p: {p_value:.4f}")
+        plt.legend()
+    return slope
+
+
+def compute_tau(to_fit: np.ndarray, plot: bool = False) -> float:
+
+    # TODO: this should be the time of the trial
+    t = np.arange(len(to_fit))
+    popt, _ = curve_fit(
+        f=exp_model,
+        xdata=t,
+        ydata=to_fit,
+        p0=(to_fit[0], 10, 0),
     )
+    if plot:
+        plt.figure()
+        plt.plot(to_fit, label="data")
+        plt.plot(t, exp_model(t, *popt), label="fit")
+    return popt[1]
 
 
 if __name__ == "__main__":
     # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     #     plot_overall_scores(genotype)
-    # plot_drift_correlation_results("Oligo-BACE1-KO")
+    # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
+    #     plot_drift_correlation_results(genotype, None)
+
+    # 1 / 0
     main()

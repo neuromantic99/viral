@@ -10,6 +10,7 @@ from viral.models import SpeedPosition
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
+    exponential_decay,
     get_speed_positions,
     has_n_consecutive_trues,
     remove_consecutive_ones,
@@ -19,6 +20,7 @@ from viral.utils import (
     threshold_detect_edges,
     get_session_type,
 )
+from scipy.optimize import curve_fit
 
 
 def compare_pydantic_models(
@@ -614,3 +616,13 @@ def test_flatten() -> None:
     arr = np.array([[1, 2, 3], [4, 5, 6]])
     result = arr.flatten()
     assert np.array_equal(result, np.array([1, 2, 3, 4, 5, 6]))
+
+
+def test_get_tau() -> None:
+    import matplotlib.pyplot as plt
+
+    x = np.arange(1, 100)
+    tau = 5
+    data_with_noise = exponential_decay(x, tau=tau) + np.random.normal(0, 0.1, size=99)
+    fit = curve_fit(f=exponential_decay, xdata=x, ydata=data_with_noise, p0=(1))
+    assert int(fit[0][0]) == tau
