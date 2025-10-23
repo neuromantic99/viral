@@ -75,7 +75,6 @@ def find_pse_events(
 
     peak_indices = np.where(peaks)[0]
 
-    # TODO: test, is the edge 1 SD or below then??
     # find event edges above 1 SD
     events = list()
     for peak_idx in peak_indices:
@@ -214,7 +213,6 @@ def offline_sequence_bayesian_decoding(
     Cr = Cr * bin_length_time_offline
     rate_map = place_fields.T + (10 ** (-10))
 
-    # TODO start looking here!!
     term2 = (-bin_length_time_offline) * np.sum(rate_map, axis=1)
 
     Pr = np.zeros((n_time_bins, n_spatial_bins))
@@ -251,7 +249,7 @@ def shuffle_pse_event(
     the principal shuffle used in the main figures involved the random re-ordering (resampling without replacement)
     of the bins observed within a given event."
     "'timeBinPermutation': permutes (resamples without replacement)"
-    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m time bin permutation
+    # TODO Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m time bin permutation
     """
     # TODO: check actual shape
     # TODO: make this an empirical P value function?
@@ -290,16 +288,19 @@ def main() -> None:
     Only PSE events lasting between 0.2 s (12 frames) and 1 s (60 frames), and during which at least 5 distinct PCs each fired at least one estimated spike,
     were kept for further analysis.
     """
-    # mouse = "JB036"
-    # date = "2025-07-05"
+    mouse = "JB036"
+    date = "2025-07-05"
     # mouse = "JB030"
     # date = "2025-03-25"
 
     # mouse = "JB034"
     # date = "2025-07-08"
 
-    mouse = "JB035"
-    date = "2025-07-11"
+    # mouse = "JB035"
+    # date = "2025-07-11"
+
+    # mouse = "JB034"
+    # date = "2025-07-04"
 
     # TODO: implement doing this on ITI as well
     # use_ITI = True
@@ -350,7 +351,7 @@ def main() -> None:
         place_cells = spks[pcs_mask, :]
     else:
         t0 = time.time()
-        pcs_mask, place_fields = get_place_cells(
+        pcs_mask, place_fields, place_threshold = get_place_cells(
             session=session,
             spks=spks,
             rewarded=None,
@@ -429,5 +430,5 @@ def test_against_matlab() -> None:
 
 
 if __name__ == "__main__":
-    # main()
-    test_against_matlab()
+    main()
+    # test_against_matlab()
