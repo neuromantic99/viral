@@ -154,7 +154,8 @@ def get_place_cells(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
 
-    use_cache = True
+    # TODO: change back
+    use_cache = False
 
     get_cache_path = lambda variable_name: (
         SERVER_PATH
@@ -204,7 +205,8 @@ def get_place_cells(
             shuffled_matrices[shuffle_idx, :, :] = smoothed_shuffle
 
         place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
-        np.save(get_cache_path("place_threshold"), place_threshold)
+        if use_cache:
+            np.save(get_cache_path("place_threshold"), place_threshold)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -246,8 +248,9 @@ def get_place_cells(
             / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}.png"
         )
 
-    np.save(get_cache_path("smoothed_matrix"), smoothed_matrix)
-    np.save(get_cache_path("pcs_combined"), pcs_combined)
+    if use_cache:
+        np.save(get_cache_path("smoothed_matrix"), smoothed_matrix)
+        np.save(get_cache_path("pcs_combined"), pcs_combined)
     return pcs_combined, smoothed_matrix, place_threshold
 
 

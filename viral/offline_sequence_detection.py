@@ -28,6 +28,7 @@ from viral.imaging_utils import (
     split_fluoresence_online_freeze,
 )
 from viral.grosmark_analysis import get_place_cells
+from ensemble_reactivation import get_ssp_vectors
 
 
 # TODO: is this the "right Ssp"? This is hard to understand
@@ -98,8 +99,7 @@ def find_pse_events(
 
     print(f"Found {len(events)} events")
     if len(events) == 0:
-        print("No events found")
-        exit()
+        return events
 
     # merge events that are too close together (< 0.2s, i.e. 6 frames)
     events = sorted(events, key=lambda x: x[0])  # events sorted by start time
@@ -121,11 +121,13 @@ def find_pse_events(
     # filter events by duration e.g. (0.2s - 1s) -> (6 - 30 frames)
     filtered_events = list()
     for start_idx, end_idx in merged_events:
-        duration = end_idx - start_idx
+        duration = end_idx - start_idx + 1
         if config.event_duration[0] <= duration <= config.event_duration[1]:
             filtered_events.append((start_idx, end_idx))
 
     print(f"Filtered to {len(filtered_events)} events by duration")
+    if len(filtered_events) == 0:
+        return filtered_events
 
     # TODO: ssp is estimated spikes, right?
     # perform additional check: at least 5 distinct PCs each fired at least one estimated spike
@@ -185,7 +187,7 @@ def offline_sequence_bayesian_decoding(
     For cross-day position reconstruction, only registered cells that were found to be PCs on both the training and testing days were included,
     and only pairs of sessions containing at least five such PCs were included in the decoding analysis."
 
-    #Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/placeBayesLogBuffered.m
+    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/placeBayesLogBuffered.m
 
     Args:
         offline_activity_binned (np.ndarray):   Offline activity binned by time (shape: (n_cells, n_time_bins)).
@@ -260,22 +262,29 @@ def plot_pse_event(
     posterior_probability_matrix: np.ndarray,
     pr_max: np.ndarray,
     idx: int,
+    session: Cached2pSession,
+    grosmark_config: GrosmarkConfig,
     bayesian_config: BayesianDecodingConfig,
 ) -> None:
     plt.figure(figsize=(5, 4))
     plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.05, aspect="auto")
     plt.colorbar()
-    plt.xlabel("Time (seconds)")
-    xtick_bins = np.linspace(0, posterior_probability_matrix.shape[0] - 1, 2)
-    xtick_labels = np.round(xtick_bins * bayesian_config.bin_size_time_offline / 30, 2)
-    plt.xticks(xtick_bins, xtick_labels)
-    plt.ylabel("Position (centimetres)")
-    ytick_bins = np.linspace(0, posterior_probability_matrix.shape[1] - 1, 15)
-    ytick_labels = np.round(ytick_bins * bayesian_config.bin_size_spatial, 0)
-    plt.yticks(ytick_bins, ytick_labels)
+    # plt.xlabel("Time (seconds)")
+    # xtick_bins = np.linspace(0, posterior_probability_matrix.shape[0] - 1, 2)
+    # xtick_labels = np.round(xtick_bins * bayesian_config.bin_size_time_offline / 30, 2)
+    # plt.xticks(xtick_bins, xtick_labels)
+    # plt.ylabel("Position (centimetres)")
+    # plt.yticks(
+    #     np.linspace(0, posterior_probability_matrix.shape[1], 5),
+    #     [
+    #         str(x)
+    #         for x in np.linspace(grosmark_config.start, grosmark_config.end, 5).astype(
+    #             int
+    #         )
+    #     ],
+    # )
     plt.tight_layout()
-    plt.savefig(f"plots/pse_events/event{idx}.svg")
-    print(pr_max)
+    plt.savefig(f"plots/pse_events/{session.mouse_name}_{session.date}_event{idx}.png")
 
 
 def main() -> None:
@@ -288,6 +297,9 @@ def main() -> None:
     Only PSE events lasting between 0.2 s (12 frames) and 1 s (60 frames), and during which at least 5 distinct PCs each fired at least one estimated spike,
     were kept for further analysis.
     """
+    use_cache = False
+
+    # did show a little bit
     mouse = "JB036"
     date = "2025-07-05"
     # mouse = "JB030"
@@ -296,22 +308,28 @@ def main() -> None:
     # mouse = "JB034"
     # date = "2025-07-08"
 
+    # saw "landmarks"?
     # mouse = "JB035"
     # date = "2025-07-11"
 
+    # TODO: done this
+    # looks like landmarks???????
     # mouse = "JB034"
     # date = "2025-07-04"
 
     # TODO: implement doing this on ITI as well
     # use_ITI = True
 
+    # TODO: time bin 2, spatial bin 5 or 10 cm
+
+    # CAUTION: spatial bin size in GrosmarkConfig!
     bayesian_config = BayesianDecodingConfig(
         peak_threshold=3.5,
         edge_threshold=1,
         event_duration=(6, 30),
         bin_size_time_online=10,
-        bin_size_time_offline=1,
-        bin_size_spatial=2,
+        bin_size_time_offline=2,
+        bin_size_spatial=5,
     )
 
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
@@ -329,9 +347,9 @@ def main() -> None:
     )
 
     grosmark_config = GrosmarkConfig(
-        bin_size=2,
+        bin_size=5,
         start=0,
-        end=170,
+        end=180,
     )
     spks = np.load(
         TIFF_UMBRELLA
@@ -342,7 +360,7 @@ def main() -> None:
         / "oasis_spikes.npy"
     )
 
-    if os.path.exists(cache_file):
+    if os.path.exists(cache_file) and use_cache:
         print("Loading from cache")
         pcs_mask = np.load(cache_file)["pcs_mask"]
         preactivation = np.load(cache_file)["preactivation"]
@@ -374,14 +392,20 @@ def main() -> None:
     population_vector = get_population_vector(reactivation)
     pse_events = find_pse_events(population_vector, reactivation, bayesian_config)
 
-    pse_activity = [
-        array_bin_mean(
-            arr=reactivation[:, start:end],
-            bin_size=bayesian_config.bin_size_time_offline,
-            axis=1,
-        )
-        for start, end in pse_events
-    ]
+    if len(pse_events) == 0:
+        print("No PSE events found, exiting")
+        return
+
+    # TODO: whoops, isn't this like binning twice (it is in the bayesian decoding function as well?)?
+    # pse_activity = [
+    #     array_bin_mean(
+    #         arr=reactivation[:, start:end],
+    #         bin_size=bayesian_config.bin_size_time_offline,
+    #         axis=1,
+    #     )
+    #     for start, end in pse_events
+    # ]
+    pse_activity = [reactivation[:, start:end] for start, end in pse_events]
 
     # TODO: should we do this?
     # "[...] and only bins with non-zero firing rates were used for offline Bayesian decoding.""
@@ -402,11 +426,18 @@ def main() -> None:
             place_fields=place_fields[pcs_mask, :],
             config=bayesian_config,
         )
-        plot_pse_event(posterior_probability_matrix, pr_max, idx, bayesian_config)
-        if idx == 0:
-            np.savetxt(f"{mouse}_{date}_Cr.txt", event)
-            np.savetxt(f"{mouse}_{date}_rateMap.txt", place_fields[pcs_mask, :])
-            np.savetxt(f"{mouse}_{date}_result.txt", posterior_probability_matrix)
+        plot_pse_event(
+            posterior_probability_matrix,
+            pr_max,
+            idx,
+            session,
+            grosmark_config,
+            bayesian_config,
+        )
+        # if idx == 0:
+        #     np.savetxt(f"{mouse}_{date}_Cr.txt", event)
+        #     np.savetxt(f"{mouse}_{date}_rateMap.txt", place_fields[pcs_mask, :])
+        #     np.savetxt(f"{mouse}_{date}_result.txt", posterior_probability_matrix)
 
 
 def test_against_matlab() -> None:
