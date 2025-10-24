@@ -411,11 +411,11 @@ def get_offline_correlation_matrix(
 def correlations_vs_peak_distance(
     corrs: np.ndarray,
     peak_position_cm: np.ndarray,
-    bin_edges: np.ndarray,
+    bin_starts: np.ndarray,
     colour: str | None = None,
     label: str | None = None,
     plot: bool = False,
-) -> tuple[float, float]:
+) -> tuple[float, tuple[np.ndarray, np.ndarray]]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
     distance between their place field peaks.
 
@@ -444,8 +444,8 @@ def correlations_vs_peak_distance(
     x = []
     y = []
 
-    bin_width = bin_edges[1] - bin_edges[0]
-    for bin_start in bin_edges:
+    bin_width = bin_starts[1] - bin_starts[0]
+    for bin_start in bin_starts:
         in_bin = np.logical_and(
             peak_distances >= bin_start, peak_distances < bin_start + bin_width
         )
@@ -460,8 +460,8 @@ def correlations_vs_peak_distance(
     # Need to put this back if grosmarking
     # r, p = pearsonr(x, y)
     # return r, p
-    m = compute_linear_slope((np.array(x) / 60 / 60), np.array(y))
-    return m, 0.0
+    m = compute_linear_slope((np.array(x) / 60), np.array(y) / y[0])
+    return m, (np.array(x), np.array(y))
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:

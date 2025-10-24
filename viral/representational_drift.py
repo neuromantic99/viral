@@ -592,36 +592,49 @@ def plot_drift_correlation_results(
             # hijack. But some of the argument names don't make sense here
 
             trial_times = data["x_axis"] - data["x_axis"][0]
-            # 1 minute bins
+            # 2 minute bins
+            bin_width = 60 * 2
             # Round up to nearest minute
-            bin_width = 60 * 5
             max_time = round_up_to_base(trial_times.max(), bin_width)
-            bin_edges = np.arange(0, max_time, bin_width)
+            bin_starts = np.arange(0, max_time, bin_width)
 
-            population_distance_corr = correlations_vs_peak_distance(
+            population_distance_corr, (x_pop, y_pop) = correlations_vs_peak_distance(
                 population_wise,
                 trial_times,
-                bin_edges,
+                bin_starts,
                 label=f"{mouse_name}_population",
-            )[0]
-            cell_distance_corr = correlations_vs_peak_distance(
-                cell_wise, trial_times, bin_edges, label=f"{mouse_name}_cell"
-            )[0]
-            speed_distance_corr = correlations_vs_peak_distance(
-                speed_wise, trial_times, bin_edges, label=f"{mouse_name}_speed"
-            )[0]
-            all_population.append(population_distance_corr)
-            all_cell.append(cell_distance_corr)
-            all_speed.append(speed_distance_corr)
+            )
+            cell_distance_corr, (x_cell, y_cell) = correlations_vs_peak_distance(
+                cell_wise, trial_times, bin_starts, label=f"{mouse_name}_cell"
+            )
+            speed_distance_corr, (x_speed, y_speed) = correlations_vs_peak_distance(
+                speed_wise, trial_times, bin_starts, label=f"{mouse_name}_speed"
+            )
+            all_population.append((population_distance_corr, x_pop, y_pop))
+            all_cell.append((cell_distance_corr, x_cell, y_cell))
+            all_speed.append((speed_distance_corr, x_speed, y_speed))
 
         result[stage] = all_population
 
     plt.figure()
-    sns.boxplot(result, showfliers=False)
-    sns.stripplot(result, color="black", alpha=0.5)
+    sns.boxplot({k: [x[0] for x in v] for k, v in result.items()}, showfliers=False)
+    sns.stripplot(
+        {k: [x[0] for x in v] for k, v in result.items()}, color="black", alpha=0.5
+    )
+
     plt.title(f"{genotype}")
     plt.tight_layout()
-    plt.ylim(-0.1, 0.1)
+    plt.ylim(-0.2, 0.2)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
+        for mouse in result[stage]:
+            axes[idx].plot(mouse[1], mouse[2])
+        axes[idx].set_title(stage)
+    plt.ylim(-1, 1)
+
+    plt.tight_layout()
+    plt.suptitle(genotype)
 
 
 def compute_tau(to_fit: np.ndarray, plot: bool = False) -> float:
@@ -645,7 +658,6 @@ if __name__ == "__main__":
     # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     #     plot_overall_scores(genotype)
     for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-        plot_drift_correlation_results(genotype, False)
+        plot_drift_correlation_results(genotype, True)
 
     1 / 0
-    # main()
