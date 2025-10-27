@@ -33,7 +33,6 @@ from viral.utils import (
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
-    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -99,6 +98,7 @@ def get_place_cells(
     spks: np.ndarray,
     config: GrosmarkConfig,
     rewarded: bool | None,
+    use_cache: bool = True,
     plot: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -117,8 +117,9 @@ def get_place_cells(
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
 
     Returns:
-    - place_cell_mask: boolean mask of shape (n_cells,) where True indicates a place cell
-    - smoothed_matrix: smoothed firing rate by position matrix of shape (n_cells, n_bins)
+    - pcs_combined:     boolean mask of shape (n_cells,) where True indicates a place cell
+    - smoothed_matrix:  smoothed firing rate by position matrix of shape (n_cells, n_bins)
+    - place_threshold:  place threshold matrix of shape (n_cells, n_bins)
     """
 
     n_cells_total = spks.shape[0]
@@ -154,15 +155,20 @@ def get_place_cells(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
 
-    # TODO: change back
-    use_cache = False
+    # TODO: change back!
+    # get_cache_path = lambda variable_name: (
+    #     SERVER_PATH
+    #     / "viral_caches"
+    #     / "place_cells"
+    #     / variable_name
+    #     / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
+    # )
 
     get_cache_path = lambda variable_name: (
-        SERVER_PATH
-        / "viral_caches"
-        / "place_cells"
+        Path("data")
+        / "cache"
         / variable_name
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
+        / f"{session.mouse_name}_{session.date}_debugcache_rewarded_{rewarded}_{config}_{variable_name}.npy"
     )
 
     if use_cache and get_cache_path("place_threshold").exists():

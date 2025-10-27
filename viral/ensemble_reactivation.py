@@ -35,6 +35,7 @@ from viral.rastermap_utils import (
 )
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
+    below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     shaded_line_plot,
@@ -660,6 +661,9 @@ def plot_grosmark_panel(
 def get_ssp_vectors(
     trials: List[TrialInfo],
     place_cells: np.ndarray,
+    speed_threshold: float = 5,
+    n_consecutive_samples: int = 3 * 30,
+    above: bool = True,
 ) -> np.ndarray:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
@@ -692,10 +696,14 @@ def get_ssp_vectors(
 
         speed = compute_speed_grosmark(position)
 
-        speed_threshold = 5
-        idx_keep = above_threshold_for_n_consecutive_samples(
-            speed, threshold=speed_threshold, n_samples=3 * 30
-        )
+        if above:
+            idx_keep = above_threshold_for_n_consecutive_samples(
+                speed, threshold=speed_threshold, n_samples=n_consecutive_samples
+            )
+        else:
+            idx_keep = below_threshold_for_n_consecutive_samples(
+                speed, threshold=speed_threshold, n_samples=n_consecutive_samples
+            )
         # Take the ITI out
         idx_keep = idx_keep & (position < 180)
         frames_keep = np.unique(frame_position[idx_keep])
