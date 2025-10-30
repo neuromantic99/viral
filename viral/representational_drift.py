@@ -1,3 +1,5 @@
+from collections import defaultdict
+from math import ceil, floor
 import sys
 from pathlib import Path
 from typing import Literal
@@ -154,13 +156,14 @@ def do_classify(
 def get_landmark_boolean(max_position: int, start: int, bin_size: int) -> np.ndarray:
     n_bins = int((max_position - start) / bin_size)
     bin_to_cm_scaling_factor = (grosmark_config.end - grosmark_config.start) / n_bins
-
+    # bin_centers = np.arange(start, max_position, bin_size) + (bin_size / 2)
     in_landmark = np.array([False] * n_bins)
 
     for landmark_center in PlaceCellResults.LANDMARK_LOCATIONS:
-        landmark_bin_center = int(landmark_center / bin_to_cm_scaling_factor)
-        start_inside = landmark_bin_center - (5 / bin_to_cm_scaling_factor)
-        end_inside = landmark_bin_center + (5 / bin_to_cm_scaling_factor)
+        landmark_bin_center = landmark_center / bin_to_cm_scaling_factor
+        start_inside = floor(landmark_bin_center - (5 / bin_to_cm_scaling_factor))
+        end_inside = floor(landmark_bin_center + (5 / bin_to_cm_scaling_factor))
+        print(landmark_bin_center, start_inside, end_inside)
         in_landmark[int(start_inside) : int(end_inside)] = True
 
     return in_landmark
@@ -402,6 +405,73 @@ def interpolate_nans(all_trials_matrix: np.ndarray) -> np.ndarray:
     return all_trials_matrix
 
 
+def landmark_correlation_drift(
+    session: Cached2pSession,
+    spks: np.ndarray,
+    pcs_mask: np.ndarray,
+    rewarded: bool | None,
+    save_path: Path,
+) -> tuple[np.ndarray, np.ndarray]:
+    bin_size = 2
+    start = 0
+    max_position = 180
+    data_matrix = np.array(
+        [
+            activity_trial_position(
+                trial=trial,
+                flu=spks,
+                wheel_circumference=get_wheel_circumference_from_rig("2P"),
+                bin_size=bin_size,
+                start=start,
+                max_position=max_position,
+                verbose=False,
+                do_shuffle=False,
+                threshold_speed=False,
+            )
+            for trial in session.trials
+            if trial_is_imaged(trial)
+            and (rewarded is None or trial.texture_rewarded == rewarded)
+        ]
+    )
+
+    place_threshold = np.load(save_path)
+    place_threshold = place_threshold[pcs_mask, :]
+    responding = np.greater(data_matrix, place_threshold)
+    in_landmark = get_landmark_boolean(max_position, start, bin_size)
+    has_landmark_response = responding[:, :, in_landmark].sum(2) > 4
+
+    trial_times = np.array(
+        [
+            trial.trial_start_time
+            for trial in session.trials
+            if trial_is_imaged(trial)
+            and (rewarded is None or trial.texture_rewarded == rewarded)
+        ]
+    )
+    trial_times = trial_times - trial_times[0]
+    bin_width = 60 * 2
+    # Round up to nearest bin_width
+    max_time = round_up_to_base(trial_times.max(), bin_width)
+    bin_starts = np.arange(0, max_time, bin_width)
+
+    m, (x_corr, y_corr) = correlations_vs_peak_distance(
+        np.corrcoef(has_landmark_response.astype(int)),
+        trial_times,
+        bin_starts=bin_starts,
+        plot=False,
+    )
+    np.savez(
+        SERVER_PATH
+        / "viral_caches"
+        / "landmark_drift_correlation"
+        / f"{session.mouse_name}_{session.date}_landmark_drift_correlation_rewarded_{rewarded}.npz",
+        x_corr=x_corr,
+        y_corr=y_corr,
+    )
+
+    return np.array([]), np.array([])
+
+
 def main() -> None:
     cache_umbrella = SERVER_PATH / "viral_caches" / "drift_correlation"
 
@@ -419,13 +489,13 @@ def main() -> None:
 
             for rewarded in [True, False, None]:
                 save_path = (
-                    cache_umbrella
-                    / f"{mouse_name}_{date}_drift_correlation_rewarded_{rewarded}.npz"
+                    SERVER_PATH
+                    / "viral_caches"
+                    / "place_cells"
+                    / "place_threshold"
+                    / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{grosmark_config}_place_threshold.npy"
                 )
-
-                # if save_path.exists():
-                #     continue
-
+                print(f"Processing {mouse_name} on {date} for {stage} stage.")
                 mask_files = [
                     file
                     for file in list(
@@ -439,33 +509,57 @@ def main() -> None:
                     if mouse_name in file.name
                     and date in file.name
                     and f"rewarded_{rewarded}" in file.name
+                    and str(grosmark_config) in file.name
                 ]
-                assert len(mask_files) == 1
-                pc_mask = np.load(mask_files[0])
+                assert (
+                    len(mask_files) == 1
+                ), f"Should find one mask file, found {mask_files}"
 
+                pc_mask = np.load(mask_files[0])
                 spks = spks_all[pc_mask, :]
 
-                print(f"Processing {mouse_name} on {date} for {stage} stage.")
-
-                cell_wise, population_wise, speed_wise = correlation_drift(
-                    session, spks, rewarded=rewarded, plot=False
+                landmark_correlation_drift(
+                    session=session,
+                    spks=spks,
+                    pcs_mask=pc_mask,
+                    rewarded=rewarded,
+                    save_path=save_path,
                 )
 
-                x_axis = [
-                    trial.trial_start_time
-                    for trial in session.trials
-                    if trial_is_imaged(trial)
-                    and (rewarded is None or trial.texture_rewarded == rewarded)
-                ]
+                # whole_trial_correlation(
+                #     spks=spks,
+                #     session=session,
+                #     rewarded=rewarded,
+                #     save_path=save_path,
+                # )
 
-                print("Saving results to ", save_path.name)
-                np.savez(
-                    save_path,
-                    cell_wise=cell_wise,
-                    population_wise=population_wise,
-                    speed_wise=speed_wise,
-                    x_axis=x_axis,
-                )
+
+def whole_trial_correlation(
+    spks: np.ndarray,
+    session: Cached2pSession,
+    rewarded: bool | None,
+    save_path: Path,
+) -> None:
+
+    cell_wise, population_wise, speed_wise = correlation_drift(
+        session, spks, rewarded=rewarded, plot=False
+    )
+
+    x_axis = [
+        trial.trial_start_time
+        for trial in session.trials
+        if trial_is_imaged(trial)
+        and (rewarded is None or trial.texture_rewarded == rewarded)
+    ]
+
+    print("Saving results to ", save_path.name)
+    np.savez(
+        save_path,
+        cell_wise=cell_wise,
+        population_wise=population_wise,
+        speed_wise=speed_wise,
+        x_axis=x_axis,
+    )
 
 
 def plot_overall_scores(genotype: str) -> None:
@@ -488,8 +582,8 @@ def plot_overall_scores(genotype: str) -> None:
                 / f"{mouse_name}_{date}_drift.npz"
             )
 
-            if not cache_path.exists():
-                continue
+            # if not cache_path.exists():
+            #     continue
 
             data = np.load(cache_path)
             drift_score = data["drift_score"]
@@ -654,10 +748,81 @@ def compute_tau(to_fit: np.ndarray, plot: bool = False) -> float:
     return popt[1]
 
 
+def plot_landmark_drift_correlation_results(
+    genotype: Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"],
+    rewarded: bool | None,
+) -> None:
+    # _, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+    result = {"unsupervised": [], "learning": [], "learned": []}
+    result_mean = {"unsupervised": [], "learning": [], "learned": []}
+    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
+        all_results = []
+        mean_result = defaultdict(list)
+        for mouse_name in SESSIONS_KEEP.keys():
+            if get_genotype(mouse_name) != genotype:
+                continue
+            date = SESSIONS_KEEP[mouse_name][stage]
+            if date is None:
+                continue
+
+            cache_path = (
+                SERVER_PATH
+                / "viral_caches"
+                / "landmark_drift_correlation"
+                / f"{mouse_name}_{date}_landmark_drift_correlation_rewarded_{rewarded}.npz"
+            )
+            assert cache_path.exists()
+            data = np.load(cache_path)
+            x_corr = data["x_corr"]
+            y_corr = data["y_corr"]
+            assert len(x_corr) == len(y_corr)
+            all_results.append((x_corr, y_corr))
+
+            for x_val, y_val in zip(x_corr, y_corr):
+                mean_result[x_val].append(y_val)
+
+        result[stage] = all_results
+        result_mean[stage] = (
+            np.array(sorted(mean_result.keys())),
+            np.array([np.nanmean(mean_result[k]) for k in sorted(mean_result.keys())]),
+        )
+
+    # plt.figure()
+    # sns.boxplot({k: [x[0] for x in v] for k, v in result.items()}, showfliers=False)
+    # sns.stripplot(
+    #     {k: [x[0] for x in v] for k, v in result.items()}, color="black", alpha=0.5
+    # )
+
+    # plt.title(f"{genotype}")
+    # plt.tight_layout()
+    # plt.ylim(-0.2, 0.2)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
+        for mouse in result[stage]:
+            axes[idx].plot(mouse[0] / 60, mouse[1], color="lightgray", alpha=0.5)
+
+        axes[idx].plot(
+            result_mean[stage][0] / 60,
+            result_mean[stage][1],
+            color="blue",
+            linewidth=2,
+            label="Mean",
+        )
+        axes[idx].set_title(stage)
+        axes[idx].set_xlim(0, 50)
+
+    plt.ylim(-0.1, 0.5)
+
+    plt.tight_layout()
+    plt.suptitle(genotype)
+
+
 if __name__ == "__main__":
     # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     #     plot_overall_scores(genotype)
-    for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-        plot_drift_correlation_results(genotype, True)
+    # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
+    #     plot_landmark_drift_correlation_results(genotype, None)
+    main()
 
     1 / 0

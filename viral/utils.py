@@ -322,9 +322,9 @@ def get_genotype(
 ) -> Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
-    elif mouse_name in {"JB034", "JB035"}:
+    if mouse_name in {"JB034", "JB035"}:
         return "Neuronal-BACE1-KO"
-    elif mouse_name in {
+    if mouse_name in {
         "JB011",
         "JB012",
         "JB013",
@@ -337,7 +337,7 @@ def get_genotype(
     }:
         return "NLGF"
 
-    elif mouse_name in {
+    if mouse_name in {
         "JB024",
         "JB025",
         "JB026",
@@ -348,8 +348,8 @@ def get_genotype(
         "JB033",
     }:
         return "WT"
-    else:
-        raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
+
+    raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
 
 
 def get_sex(mouse_name: str) -> str:
