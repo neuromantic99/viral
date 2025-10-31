@@ -51,7 +51,10 @@ def get_population_vector(ssp: np.ndarray) -> np.ndarray:
 
 
 def find_pse_events(
-    population_vector: np.ndarray, ssp: np.ndarray, config: BayesianDecodingConfig
+    population_vector: np.ndarray,
+    ssp: np.ndarray,
+    config: BayesianDecodingConfig,
+    duration_filter: bool = True,
 ) -> List[Tuple[int, int]]:
     """
     Putative PSEs were defined as epochs during which the z-scored population activity vector reached a peak of at least 3.5 s.d.
@@ -116,20 +119,20 @@ def find_pse_events(
 
     print(f"Merged into {len(merged_events)} events")
 
-    # TODO: put back in!
-    # filter events by duration e.g. (0.2s - 1s) -> (6 - 30 frames)
-    # filtered_events = list()
-    # for start_idx, end_idx in merged_events:
-    #     duration = end_idx - start_idx + 1
-    #     if config.event_duration[0] <= duration <= config.event_duration[1]:
-    #         filtered_events.append((start_idx, end_idx))
+    if duration_filter:
+        # filter events by duration e.g. (0.2s - 1s) -> (6 - 30 frames)
+        filtered_events = list()
+        for start_idx, end_idx in merged_events:
+            duration = end_idx - start_idx + 1
+            if config.event_duration[0] <= duration <= config.event_duration[1]:
+                filtered_events.append((start_idx, end_idx))
 
-    # print(f"Filtered to {len(filtered_events)} events by duration")
-    # if len(filtered_events) == 0:
-    #     return filtered_events
-
-    filtered_events = merged_events
-    print("No duration filtering at the moment")
+        print(f"Filtered to {len(filtered_events)} events by duration")
+        if len(filtered_events) == 0:
+            return filtered_events
+    else:
+        filtered_events = merged_events
+        print("No duration filtering at the moment")
 
     # TODO: ssp is estimated spikes, right?
     # perform additional check: at least 5 distinct PCs each fired at least one estimated spike
@@ -264,7 +267,9 @@ def plot_pse_event(
     #     ],
     # )
     plt.tight_layout()
-    plt.savefig(f"plots/pse_events/{session.mouse_name}_{session.date}_event{idx}.png")
+    plt.savefig(
+        f"plots/pse_events/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_event{idx}.png"
+    )
 
 
 def main() -> None:
@@ -305,6 +310,8 @@ def main() -> None:
     # TODO: time bin 2, spatial bin 5 or 10 cm
     # CAUTION: spatial bin size in GrosmarkConfig!
     bayesian_config = BayesianDecodingConfig(
+        en_bloc=True,
+        online=False,
         # peak_threshold=3.5,
         peak_threshold=2,
         edge_threshold=0.5,
@@ -314,7 +321,11 @@ def main() -> None:
         bin_size_spatial=5,
     )
 
-    # TODO: change back
+    # can't use cached place cell threshold when doing a train/test split
+    use_cache = False if bayesian_config.online else True
+
+    train_size = 0.5  # fraction of trials used to get place cells (online only)
+
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
         start=0,  # 0
@@ -330,10 +341,8 @@ def main() -> None:
         print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
         return
 
-    cache_file = (
-        HERE.parent
-        / f"{session.mouse_name}suite2p_{session.date}_offline_sequence_detection.npz"
-    )
+    print(f"Analysing {"online" if bayesian_config.online else "offline"} activity")
+    print(f"Decoding {"en bloc" if bayesian_config.en_bloc else "per PSE event"}")
 
     spks = np.load(
         TIFF_UMBRELLA
@@ -344,117 +353,120 @@ def main() -> None:
         / "oasis_spikes.npy"
     )
 
-    if os.path.exists(cache_file) and use_cache:
-        print("Loading from cache")
-        pcs_mask = np.load(cache_file)["pcs_mask"]
-        preactivation = np.load(cache_file)["preactivation"]
-        reactivation = np.load(cache_file)["reactivation"]
-        place_fields = np.load(cache_file)["place_fields"]
-        place_cells = spks[pcs_mask, :]
-    else:
-        t0 = time.time()
-        pcs_mask, place_fields, place_threshold = get_place_cells(
-            session=session,
-            spks=spks,
-            rewarded=None,
-            use_cache=use_cache,
-            config=grosmark_config,
-            plot=False,
-        )
-        place_cells = spks[pcs_mask, :]
-        print(f"Time to get place cells: {time.time() - t0}")
-        preactivation, _, reactivation = split_fluoresence_online_freeze(
-            flu=place_cells, wheel_freeze=session.wheel_freeze
-        )
-        np.savez(
-            cache_file,
-            pcs_mask=pcs_mask,
-            preactivation=preactivation,
-            reactivation=reactivation,
-            place_fields=place_fields,
-        )
+    if bayesian_config.en_bloc:
+        trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-    population_vector = get_population_vector(reactivation)
+        if bayesian_config.online:
+            trials_train, trials_test = train_test_split(
+                trials, train_size=train_size, random_state=42
+            )
+            # phases of mobility
+            # ssp_test = get_ssp_vectors(trials_test, spks)
 
-    pse_events = find_pse_events(population_vector, reactivation, bayesian_config)
+            # phases of immobility
+            ssp_test = get_ssp_vectors(
+                trials=trials_test,
+                place_cells=spks,
+                above=False,
+                speed_threshold=1,
+                n_consecutive_samples=3 * 30,
+            )
+        else:
+            trials_train = trials
+            # getting just the post-session wheel freeze
+            _, _, offline = split_fluoresence_online_freeze(
+                flu=spks, wheel_freeze=session.wheel_freeze
+            )
+            sigma = 30
+            ssp_test = gaussian_filter1d(
+                input=offline,
+                sigma=sigma,
+                axis=1,
+            )
 
-    if len(pse_events) == 0:
-        print("No PSE events found, exiting")
-        return
+        # do the place cell template only on the training data!
+        session.trials = trials_train
 
-    # TODO: just for debugging, remove eventually
-    plt.figure()
-    plt.plot(population_vector)
-    for event_start, event_end in pse_events:
-        plt.vlines(
-            event_start,
-            ymin=min(population_vector),
-            ymax=max(population_vector),
-            colors="r",
-        )
-        plt.vlines(
-            event_end,
-            ymin=min(population_vector),
-            ymax=max(population_vector),
-            colors="b",
-        )
-    plt.savefig(
-        f"plots/{session.date}_{session.mouse_name}_population_vector_offline.png"
+    t0 = time.time()
+    pcs_mask, place_fields, place_threshold = get_place_cells(
+        session=session,
+        spks=spks,
+        rewarded=None,
+        use_cache=use_cache,
+        config=grosmark_config,
+        plot=False,
+    )
+    place_cells = spks[pcs_mask, :]
+    print(f"Time to get place cells: {time.time() - t0}")
+    _, online, reactivation = split_fluoresence_online_freeze(
+        flu=place_cells, wheel_freeze=session.wheel_freeze
     )
 
-    # TODO: whoops, isn't this like binning twice (it is in the bayesian decoding function as well?)?
-    # pse_activity = [
-    #     array_bin_mean(
-    #         arr=reactivation[:, start:end],
-    #         bin_size=bayesian_config.bin_size_time_offline,
-    #         axis=1,
-    #     )
-    #     for start, end in pse_events
-    # ]
-    pse_activity = [reactivation[:, start:end] for start, end in pse_events]
+    if not bayesian_config.en_bloc:
+        ssp = online if bayesian_config.online else reactivation
+        population_vector = get_population_vector(ssp)
 
-    # TODO: should we do this?
-    # "[...] and only bins with non-zero firing rates were used for offline Bayesian decoding.""
-    # offline_activity_binned = [
-    #     np.delete(
-    #         event_activity,
-    #         np.where(~event_activity.any(axis=0))[0],
-    #         axis=1,
-    #     )
-    #     for event_activity in pse_activity
-    # ]
+        pse_events = find_pse_events(population_vector, ssp, bayesian_config)
 
-    # TODO: why can place_fields contain NaNs???
+        if len(pse_events) == 0:
+            print("No PSE events found, exiting")
+            return
 
-    for idx, event in enumerate(pse_activity):
+        # TODO: just for debugging, remove eventually
+        plt.figure()
+        plt.plot(population_vector)
+        for event_start, event_end in pse_events:
+            plt.vlines(
+                event_start,
+                ymin=min(population_vector),
+                ymax=max(population_vector),
+                colors="r",
+            )
+            plt.vlines(
+                event_end,
+                ymin=min(population_vector),
+                ymax=max(population_vector),
+                colors="b",
+            )
+        plt.savefig(
+            f"plots/{session.date}_{session.mouse_name}_population_vector_{"online" if bayesian_config.online else "offline"}.png"
+        )
+
+        pse_activity = [reactivation[:, start:end] for start, end in pse_events]
+
+        # TODO: why can place_fields contain NaNs???
+
+        for idx, event in enumerate(pse_activity):
+            posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
+                event,
+                place_fields=place_fields[pcs_mask, :],
+                config=bayesian_config,
+            )
+            plot_pse_event(
+                posterior_probability_matrix,
+                pr_max,
+                idx,
+                session,
+                grosmark_config,
+                bayesian_config,
+            )
+
+    else:
+        ssp_test = ssp_test[pcs_mask, :]
         posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
-            event,
+            ssp_test,
             place_fields=place_fields[pcs_mask, :],
             config=bayesian_config,
         )
-        plot_pse_event(
-            posterior_probability_matrix,
-            pr_max,
-            idx,
-            session,
-            grosmark_config,
-            bayesian_config,
+        plt.figure(figsize=(10, 4))
+        plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.07, aspect="auto")
+        plt.colorbar()
+        plt.tight_layout()
+        plt.savefig(
+            f"plots/pse_events/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
         )
-        # if idx == 0:
-        #     np.savetxt(f"{mouse}_{date}_Cr.txt", event)
-        #     np.savetxt(f"{mouse}_{date}_rateMap.txt", place_fields[pcs_mask, :])
-        #     np.savetxt(f"{mouse}_{date}_result.txt", posterior_probability_matrix)
 
-    # TODO: just for debugging, remove eventually
-    import json
-
-    pse_events_dict = {
-        idx: (int(start), int(end)) for idx, (start, end) in enumerate(pse_events)
-    }
-    with open(
-        f"data/cache/{session.mouse_name}_{session.date}_pse_events.json", "w"
-    ) as f:
-        json.dump(pse_events_dict, f)
+    print(f"Done for {session.mouse_name} on {session.date}")
 
 
 def test_against_matlab() -> None:
@@ -475,169 +487,6 @@ def test_against_matlab() -> None:
     plt.savefig("matlab_result")
 
     assert np.all(np.isclose(python_result, matlab_result, rtol=1e-04))
-
-
-def decode_en_bloc() -> None:
-    """Same as `main` but decodes either the entire online or offline activity in one go without detecting PSEs."""
-    online = False
-    train_size = 0.5  # fraction of trials used to get place cells (online only)
-
-    # mouse = "JB034"
-    # date = "2025-07-04"
-
-    # mouse = "JB036"
-    # date = "2025-07-05"
-
-    mouse = "JB036"
-    date = "2025-07-11"
-
-    # CAUTION: spatial bin size in GrosmarkConfig!
-    # "bin_size_time_offline" is our actual bin size!!!!
-    # bayesian_config = BayesianDecodingConfig(
-    #     peak_threshold=3.5,
-    #     edge_threshold=1,
-    #     event_duration=(6, 30),
-    #     bin_size_time_online=10,
-    #     bin_size_time_offline=10,
-    #     bin_size_spatial=10,
-    # )
-
-    # grosmark_config = GrosmarkConfig(
-    #     bin_size=bayesian_config.bin_size_spatial,
-    #     start=0,
-    #     end=180,
-    # )
-
-    bayesian_config = BayesianDecodingConfig(
-        peak_threshold=3.5,
-        edge_threshold=1,
-        event_duration=(6, 30),
-        bin_size_time_online=10,
-        bin_size_time_offline=2,
-        bin_size_spatial=5,
-    )
-
-    # TODO: change back
-    grosmark_config = GrosmarkConfig(
-        bin_size=bayesian_config.bin_size_spatial,
-        start=15,  # 0
-        end=180,
-    )
-
-    with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
-        session = Cached2pSession.model_validate_json(f.read())
-
-    print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
-    print(f"Decoding {'online' if online else 'offline'} activity en bloc")
-
-    if not session.wheel_freeze:
-        print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
-        return
-
-    spks = np.load(
-        TIFF_UMBRELLA
-        / session.date
-        / session.mouse_name
-        / "suite2p"
-        / "plane0"
-        / "oasis_spikes.npy"
-    )
-
-    trials = [trial for trial in session.trials if trial_is_imaged(trial)]
-
-    if online:
-        trials_train, trials_test = train_test_split(
-            trials, train_size=train_size, random_state=42
-        )
-        # phases of mobility
-        # ssp_test = get_ssp_vectors(trials_test, spks)
-
-        # phases of immobility
-        ssp_test = get_ssp_vectors(
-            trials=trials_test,
-            place_cells=spks,
-            above=False,
-            speed_threshold=1,
-            n_consecutive_samples=3 * 30,
-        )
-    else:
-        trials_train = trials
-        # getting just the post-session wheel freeze
-        _, _, offline = split_fluoresence_online_freeze(
-            flu=spks, wheel_freeze=session.wheel_freeze
-        )
-        sigma = 30
-        ssp_test = gaussian_filter1d(
-            input=offline,
-            sigma=sigma,
-            axis=1,
-        )
-
-    # do the place cell template only on the training data!
-    session.trials = trials_train
-
-    t0 = time.time()
-    pcs_mask, place_fields, place_threshold = get_place_cells(
-        session=session,
-        spks=spks,
-        rewarded=None,
-        config=grosmark_config,
-        use_cache=False,
-        plot=False,
-    )
-    ssp_test = ssp_test[pcs_mask, :]
-    print(f"Time to get place cells: {time.time() - t0}")
-
-    posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
-        ssp_test,
-        place_fields=place_fields[pcs_mask, :],
-        config=bayesian_config,
-    )
-
-    # TODO: just for debugging, remove eventually
-    ppr_path = (
-        f"data/cache/{session.mouse_name}_{session.date}_online_ppr.npy"
-        if online
-        else f"data/cache/{session.mouse_name}_{session.date}_offline_ppr.npy"
-    )
-    np.save(ppr_path, posterior_probability_matrix)
-
-    plt.figure(figsize=(10, 4))
-    plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.07, aspect="auto")
-    # TODO: just for debugging, remove eventually
-    import json
-
-    pse_events: List[Tuple[int, int]] = list()
-    with open(
-        f"data/cache/{session.mouse_name}_{session.date}_pse_events.json", "r"
-    ) as f:
-        pse_events_dict = json.load(f)
-        for start, end in pse_events_dict.values():
-            pse_events.append((start, end))
-    for event_start, event_end in pse_events:
-        plt.vlines(
-            event_start,
-            ymin=0,
-            ymax=posterior_probability_matrix.shape[1],
-            colors="r",
-        )
-        plt.vlines(
-            event_end,
-            ymin=0,
-            ymax=posterior_probability_matrix.shape[1],
-            colors="b",
-        )
-    plt.colorbar()
-    plt.tight_layout()
-    # plot_path = (
-    #     f"plots/pse_events/{session.mouse_name}_{session.date}_online.png"
-    #     if online
-    #     else f"plots/pse_events/{session.mouse_name}_{session.date}_offline.png"
-    # )
-    plot_path = (
-        f"plots/pse_events/{session.mouse_name}_{session.date}_debug_offline.png"
-    )
-    plt.savefig(plot_path)
 
 
 if __name__ == "__main__":

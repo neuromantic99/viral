@@ -217,8 +217,13 @@ class BayesianDecodingConfig:
     bin_size_time_online: int  # frames
     bin_size_time_offline: int  # frames
     bin_size_spatial: int  # cms
+    en_bloc: bool = True  # whether to decode en bloc or pse event by pse event
+    online: bool = (
+        True  # True for the online epoch, False for the offline post wheel freeze epoch
+    )
 
 
+# TODO: rethink this, currently unused
 @dataclass
 class ReplayEvent:
     start_frame: int
