@@ -1,10 +1,11 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import List, Literal, Tuple, TypeVar, Any
+from typing import Dict, List, Literal, Tuple, TypeVar, Any
 import warnings
 from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
+import seaborn as sns
 import numpy as np
 from enum import Enum
 import pandas as pd
@@ -559,6 +560,31 @@ def uk_to_utc(dt: datetime) -> datetime:
     )
 
 
+def below_threshold_for_n_consecutive_samples(
+    arr: np.ndarray,
+    threshold: float,
+    n_samples: int,
+) -> np.ndarray:
+    """
+    Returns a boolean mask where True indicates the array element is within a bout of being
+    above threshold for n_samples length (all elements in any qualifying window are True).
+
+    Returns:
+        np.ndarray: Boolean mask, same length as arr.
+    """
+    below = arr < threshold
+    # Rolling sum to find windows of n_samples below threshold
+    run_lengths = np.convolve(
+        below.astype(int), np.ones(n_samples, dtype=int), mode="valid"
+    )
+    # Find start indices of valid runs
+    valid_starts = np.where(run_lengths >= n_samples)[0]
+    mask = np.zeros_like(arr, dtype=bool)
+    for start in valid_starts:
+        mask[start : start + n_samples] = True
+    return mask
+
+
 def above_threshold_for_n_consecutive_samples(
     arr: np.ndarray,
     threshold: float,
@@ -605,6 +631,7 @@ def basic_normalise(data: np.ndarray) -> np.ndarray:
 def imshow(matrix: np.ndarray, vmax: float | None = None) -> None:
     """Wrapper with the settings we use everytime"""
     plt.imshow(matrix, aspect="auto", interpolation="none", vmax=vmax)
+    plt.colorbar()
 
 
 def exp_model(t: np.ndarray, A: float, tau: float, C: float) -> np.ndarray:
@@ -633,3 +660,14 @@ def compute_linear_slope(
         plt.title(f"{title} slope: {slope:.4f}, p: {p_value:.4f}")
         plt.legend()
     return slope
+
+
+def boxplot(result: Dict[str, Any]) -> None:
+    sns.boxplot(result, showfliers=False)
+    sns.stripplot(result, edgecolor="black", linewidth=1)
+    plt.tight_layout()
+
+
+def upper_triangle_no_diagonal(matrix: np.ndarray) -> np.ndarray:
+    """Return the upper triangle of a square matrix, excluding the diagonal."""
+    return matrix[np.triu_indices(matrix.shape[0], k=1)]

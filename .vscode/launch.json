@@ -103,6 +103,15 @@
       "console": "integratedTerminal",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "100" },
       "justMyCode": true
+    },
+    {
+      "name": "basic plots",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/basic_plots.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "5"},
+      "justMyCode": true
     }
   ]
 }

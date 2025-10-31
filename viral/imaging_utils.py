@@ -7,6 +7,7 @@ from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
+    below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
@@ -171,6 +172,40 @@ def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
     speed = gaussian_filter1d(speed, sigma=0.5 * 30)
     assert speed.shape == position.shape
     return speed
+
+
+def get_resting_position_and_frames(
+    trial: TrialInfo, wheel_circumference: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
+    for at least 3 consecutive seconds."""
+
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
+    )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+    assert len(position) == len(frame_position)
+
+    speed = compute_speed_grosmark(position)
+    speed_threshold = 1
+    idx_keep = below_threshold_for_n_consecutive_samples(
+        speed, threshold=speed_threshold, n_samples=3 * 30
+    )
+    position = position[idx_keep]
+    frame_position = frame_position[idx_keep]
+    assert len(position) == len(frame_position)
+
+    return position, frame_position
 
 
 def get_online_position_and_frames(
