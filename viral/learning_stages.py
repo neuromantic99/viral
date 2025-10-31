@@ -18,6 +18,7 @@ from viral.imaging_utils import trial_is_imaged
 from viral.grosmark_analysis import get_place_cells
 from viral.sessions_keep import SESSIONS_KEEP
 from viral.utils import (
+    boxplot,
     degrees_to_cm,
     get_genotype,
     get_speed_positions,
@@ -454,8 +455,50 @@ def run_ensembles() -> None:
                 ensemble_main(mouse, date, rewarded=rewarded, plot=False)
 
 
+def plot_reward_discrimination(genotype: str) -> None:
+
+    place_cell_result = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype=genotype,
+        plot_type="corridor_activity",
+    )
+    place_cell_result.driver()
+
+    result = {}
+    for stage, store in zip(
+        ["unsupervised", "learning", "learned"],
+        [
+            place_cell_result.unsupervised,
+            place_cell_result.learning,
+            place_cell_result.learned,
+        ],
+    ):
+        rewarded = np.array(store["rewarded"])
+        unrewarded = np.array(store["unrewarded"])
+        assert rewarded.shape == unrewarded.shape
+
+        reward_zone_size_cm = 10
+        n_bins = reward_zone_size_cm // grosmark_config.bin_size
+        fraction_rewarded = rewarded[:, -n_bins:].mean(axis=1)
+        fraction_unrewarded = unrewarded[:, -n_bins:].mean(axis=1)
+        discrimination_index = fraction_rewarded - fraction_unrewarded
+
+        result[stage] = discrimination_index
+
+    collapsed_result = {
+        "unsupervised": result["unsupervised"],
+        "learned": np.concatenate((result["learning"], result["learned"])),
+    }
+
+    plt.figure()
+    plt.title(f"Reward discrimination index {genotype}")
+    boxplot(collapsed_result)
+    plt.ylim(-0.2, 0.3)
+    plt.axhline(0, color="grey", linestyle="--")
+
+
 if __name__ == "__main__":
     for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-        plot_place_cell_results(genotype=genotype, plot_type="tuning")
+        plot_reward_discrimination(genotype=genotype)
 
     plt.show()
