@@ -682,7 +682,7 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB034"]:
+    for mouse_name in ["JB036"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:

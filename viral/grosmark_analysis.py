@@ -167,7 +167,7 @@ def get_place_cells(
     get_cache_path = lambda variable_name: (
         Path("data")
         / "cache"
-        / variable_name
+        # / variable_name
         / f"{session.mouse_name}_{session.date}_debugcache_rewarded_{rewarded}_{config}_{variable_name}.npy"
     )
 

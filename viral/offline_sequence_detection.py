@@ -18,7 +18,6 @@ from viral.models import (
     Cached2pSession,
     GrosmarkConfig,
     BayesianDecodingConfig,
-    Cached2pSession,
 )
 
 from viral.utils import (
@@ -27,7 +26,7 @@ from viral.utils import (
 )
 from viral.imaging_utils import split_fluoresence_online_freeze, trial_is_imaged
 from viral.grosmark_analysis import get_place_cells
-from ensemble_reactivation import get_ssp_vectors
+from viral.ensemble_reactivation import get_ssp_vectors
 
 
 # TODO: is this the "right Ssp"? This is hard to understand
@@ -117,16 +116,20 @@ def find_pse_events(
 
     print(f"Merged into {len(merged_events)} events")
 
+    # TODO: put back in!
     # filter events by duration e.g. (0.2s - 1s) -> (6 - 30 frames)
-    filtered_events = list()
-    for start_idx, end_idx in merged_events:
-        duration = end_idx - start_idx + 1
-        if config.event_duration[0] <= duration <= config.event_duration[1]:
-            filtered_events.append((start_idx, end_idx))
+    # filtered_events = list()
+    # for start_idx, end_idx in merged_events:
+    #     duration = end_idx - start_idx + 1
+    #     if config.event_duration[0] <= duration <= config.event_duration[1]:
+    #         filtered_events.append((start_idx, end_idx))
 
-    print(f"Filtered to {len(filtered_events)} events by duration")
-    if len(filtered_events) == 0:
-        return filtered_events
+    # print(f"Filtered to {len(filtered_events)} events by duration")
+    # if len(filtered_events) == 0:
+    #     return filtered_events
+
+    filtered_events = merged_events
+    print("No duration filtering at the moment")
 
     # TODO: ssp is estimated spikes, right?
     # perform additional check: at least 5 distinct PCs each fired at least one estimated spike
@@ -266,19 +269,20 @@ def plot_pse_event(
 
 def main() -> None:
     """
-    Offline PSEs were detected by convolving each PC’s (as assessed during that day’s run) offline immobility firing rate vector
+    Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
     mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored.
-    Putative PSEs were defined as epochs during which the z-scored population activity vector reached a peak of at least 3.5 s.d.
-    above the mean with event-edges at 1 s.d. above the mean, with a minimum inter-event time of 0.2 s.
-    Only PSE events lasting between 0.2 s (12 frames) and 1 s (60 frames), and during which at least 5 distinct PCs each fired at least one estimated spike,
+    Putative PSEs were defined as epochs during which the z-scored population activity vector reached a peak of at least 3.5 s.d.
+    above the mean with event-edges at 1 s.d. above the mean, with a minimum inter-event time of 0.2 s.
+    Only PSE events lasting between 0.2 s (12 frames) and 1 s (60 frames), and during which at least 5 distinct PCs each fired at least one estimated spike,
     were kept for further analysis.
     """
-    use_cache = False
+    use_cache = True
 
     # did show a little bit
-    # mouse = "JB036"
+    mouse = "JB036"
     # date = "2025-07-05"
+    date = "2025-07-11"
 
     # mouse = "JB030"
     # date = "2025-03-25"
@@ -292,8 +296,8 @@ def main() -> None:
 
     # TODO: done this
     # looks like landmarks???????
-    mouse = "JB034"
-    date = "2025-07-04"
+    # mouse = "JB034"
+    # date = "2025-07-04"
 
     # TODO: implement doing this on ITI as well
     # use_ITI = True
@@ -301,17 +305,19 @@ def main() -> None:
     # TODO: time bin 2, spatial bin 5 or 10 cm
     # CAUTION: spatial bin size in GrosmarkConfig!
     bayesian_config = BayesianDecodingConfig(
-        peak_threshold=3.5,
-        edge_threshold=1,
+        # peak_threshold=3.5,
+        peak_threshold=2,
+        edge_threshold=0.5,
         event_duration=(6, 30),
         bin_size_time_online=10,
         bin_size_time_offline=2,
         bin_size_spatial=5,
     )
 
+    # TODO: change back
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
-        start=0,
+        start=0,  # 0
         end=180,
     )
 
@@ -351,6 +357,7 @@ def main() -> None:
             session=session,
             spks=spks,
             rewarded=None,
+            use_cache=use_cache,
             config=grosmark_config,
             plot=False,
         )
@@ -368,14 +375,32 @@ def main() -> None:
         )
 
     population_vector = get_population_vector(reactivation)
-    plt.figure()
-    plt.plot(population_vector)
-    plt.savefig("pop_vector_offline.png")
+
     pse_events = find_pse_events(population_vector, reactivation, bayesian_config)
 
     if len(pse_events) == 0:
         print("No PSE events found, exiting")
         return
+
+    # TODO: just for debugging, remove eventually
+    plt.figure()
+    plt.plot(population_vector)
+    for event_start, event_end in pse_events:
+        plt.vlines(
+            event_start,
+            ymin=min(population_vector),
+            ymax=max(population_vector),
+            colors="r",
+        )
+        plt.vlines(
+            event_end,
+            ymin=min(population_vector),
+            ymax=max(population_vector),
+            colors="b",
+        )
+    plt.savefig(
+        f"plots/{session.date}_{session.mouse_name}_population_vector_offline.png"
+    )
 
     # TODO: whoops, isn't this like binning twice (it is in the bayesian decoding function as well?)?
     # pse_activity = [
@@ -420,6 +445,17 @@ def main() -> None:
         #     np.savetxt(f"{mouse}_{date}_rateMap.txt", place_fields[pcs_mask, :])
         #     np.savetxt(f"{mouse}_{date}_result.txt", posterior_probability_matrix)
 
+    # TODO: just for debugging, remove eventually
+    import json
+
+    pse_events_dict = {
+        idx: (int(start), int(end)) for idx, (start, end) in enumerate(pse_events)
+    }
+    with open(
+        f"data/cache/{session.mouse_name}_{session.date}_pse_events.json", "w"
+    ) as f:
+        json.dump(pse_events_dict, f)
+
 
 def test_against_matlab() -> None:
     python_result = np.genfromtxt("JB030_2025-03-25_result.txt")
@@ -443,29 +479,48 @@ def test_against_matlab() -> None:
 
 def decode_en_bloc() -> None:
     """Same as `main` but decodes either the entire online or offline activity in one go without detecting PSEs."""
-    online = True
+    online = False
     train_size = 0.5  # fraction of trials used to get place cells (online only)
 
     # mouse = "JB034"
     # date = "2025-07-04"
 
+    # mouse = "JB036"
+    # date = "2025-07-05"
+
     mouse = "JB036"
-    date = "2025-07-05"
+    date = "2025-07-11"
 
     # CAUTION: spatial bin size in GrosmarkConfig!
     # "bin_size_time_offline" is our actual bin size!!!!
+    # bayesian_config = BayesianDecodingConfig(
+    #     peak_threshold=3.5,
+    #     edge_threshold=1,
+    #     event_duration=(6, 30),
+    #     bin_size_time_online=10,
+    #     bin_size_time_offline=10,
+    #     bin_size_spatial=10,
+    # )
+
+    # grosmark_config = GrosmarkConfig(
+    #     bin_size=bayesian_config.bin_size_spatial,
+    #     start=0,
+    #     end=180,
+    # )
+
     bayesian_config = BayesianDecodingConfig(
         peak_threshold=3.5,
         edge_threshold=1,
         event_duration=(6, 30),
         bin_size_time_online=10,
-        bin_size_time_offline=10,
-        bin_size_spatial=10,
+        bin_size_time_offline=2,
+        bin_size_spatial=5,
     )
 
+    # TODO: change back
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
-        start=0,
+        start=15,  # 0
         end=180,
     )
 
@@ -502,7 +557,7 @@ def decode_en_bloc() -> None:
             trials=trials_test,
             place_cells=spks,
             above=False,
-            speed_threshold=3,
+            speed_threshold=1,
             n_consecutive_samples=3 * 30,
         )
     else:
@@ -520,8 +575,6 @@ def decode_en_bloc() -> None:
 
     # do the place cell template only on the training data!
     session.trials = trials_train
-    # TODO: remove
-    assert len(session.trials) < len(trials)
 
     t0 = time.time()
     pcs_mask, place_fields, place_threshold = get_place_cells(
@@ -551,17 +604,43 @@ def decode_en_bloc() -> None:
 
     plt.figure(figsize=(10, 4))
     plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.07, aspect="auto")
+    # TODO: just for debugging, remove eventually
+    import json
+
+    pse_events: List[Tuple[int, int]] = list()
+    with open(
+        f"data/cache/{session.mouse_name}_{session.date}_pse_events.json", "r"
+    ) as f:
+        pse_events_dict = json.load(f)
+        for start, end in pse_events_dict.values():
+            pse_events.append((start, end))
+    for event_start, event_end in pse_events:
+        plt.vlines(
+            event_start,
+            ymin=0,
+            ymax=posterior_probability_matrix.shape[1],
+            colors="r",
+        )
+        plt.vlines(
+            event_end,
+            ymin=0,
+            ymax=posterior_probability_matrix.shape[1],
+            colors="b",
+        )
     plt.colorbar()
     plt.tight_layout()
+    # plot_path = (
+    #     f"plots/pse_events/{session.mouse_name}_{session.date}_online.png"
+    #     if online
+    #     else f"plots/pse_events/{session.mouse_name}_{session.date}_offline.png"
+    # )
     plot_path = (
-        f"plots/pse_events/{session.mouse_name}_{session.date}_online.png"
-        if online
-        else f"plots/pse_events/{session.mouse_name}_{session.date}_offline.png"
+        f"plots/pse_events/{session.mouse_name}_{session.date}_debug_offline.png"
     )
     plt.savefig(plot_path)
 
 
 if __name__ == "__main__":
-    # main()
+    main()
     # test_against_matlab()
-    decode_en_bloc()
+    # decode_en_bloc()
