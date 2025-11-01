@@ -6,6 +6,7 @@ import warnings
 from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
 import seaborn as sns
+from statsmodels.formula.api import mixedlm
 import numpy as np
 from enum import Enum
 import pandas as pd
@@ -671,3 +672,22 @@ def boxplot(result: Dict[str, Any]) -> None:
 def upper_triangle_no_diagonal(matrix: np.ndarray) -> np.ndarray:
     """Return the upper triangle of a square matrix, excluding the diagonal."""
     return matrix[np.triu_indices(matrix.shape[0], k=1)]
+
+
+def mixed_effects(
+    df: pd.DataFrame,
+    dependent_var: str,
+    independent_var: str,
+    group_name: str,
+) -> pd.Series:
+
+    df[independent_var] = df[independent_var].astype("category")
+
+    md = mixedlm(
+        f"{dependent_var} ~ C({independent_var})",
+        df,
+        groups=df[group_name],
+    )
+    mdf = md.fit(reml=False)
+    assert mdf.converged, "MixedLM did not converge for resting baseline firing rates"
+    return mdf.pvalues

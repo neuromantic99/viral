@@ -28,6 +28,7 @@ from viral.utils import (
     get_genotype,
     get_wheel_circumference_from_rig,
     imshow,
+    mixed_effects,
     remove_diagonal,
     upper_triangle_no_diagonal,
 )
@@ -108,7 +109,94 @@ def get_cell_by_cell_correlation(
     return corr
 
 
-def firing_rates_plot(genotype: str, rewarded: bool | None) -> None:
+def firing_rates_plot(rewarded: bool | None) -> None:
+    wt = get_firing_rates_df("WT", rewarded)
+    nlgf = get_firing_rates_df("NLGF", rewarded)
+
+    all_data = pd.concat([wt, nlgf], ignore_index=True)
+
+    p_values = {}
+
+    for state in ["resting", "running"]:
+        for stage in ["Baseline", "Trained"]:
+            subset = all_data[
+                (all_data["state"] == state) & (all_data["stage"] == stage)
+            ]
+            assert len(subset) > 100, "make sure nothing weird happend"
+            p_value = mixed_effects(
+                df=subset,
+                dependent_var="firing_rate",
+                independent_var="genotype",
+                group_name="mouse_id",
+            ).filter(like="C(genotype)")
+            p_values[f"{state}_{stage}"] = p_value
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    sns.boxplot(
+        data=all_data[all_data["state"] == "resting"],
+        x="stage",
+        y="firing_rate",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+        ax=axes[0],
+    )
+    # add p-value annotations above each stage for the resting axis
+    stages = ["Baseline", "Trained"]
+    # use the axis y-limits (not the raw data max) so extreme outliers don't push the annotation off-screen
+
+    axes[0].set_title("Resting")
+    axes[0].set_ylabel("Transients / second")
+
+    sns.boxplot(
+        data=all_data[all_data["state"] == "running"],
+        x="stage",
+        y="firing_rate",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+        ax=axes[1],
+    )
+    sns.despine()
+    axes[1].set_title("Running")
+    axes[1].set_ylabel("")
+
+    handles, labels = axes[1].get_legend_handles_labels()
+    # remove per-axis legends
+    if axes[0].get_legend() is not None:
+        axes[0].get_legend().remove()
+    if axes[1].get_legend() is not None:
+        axes[1].get_legend().remove()
+    fig.legend(handles, labels, loc="upper center", ncol=2)
+    plt.ylim(None, 2.5)
+
+    for idx, state in enumerate(["resting", "running"]):
+        ymin_plot, ymax_plot = axes[idx].get_ylim()
+        plot_range = ymax_plot - ymin_plot
+        text_y = (
+            ymax_plot - plot_range * 0.02
+        )  # place text just below the top of the axis
+        for i, stage in enumerate(stages):
+            p_text = f"P = {round(p_values[f"{state}_{stage}"].values[0], 2)}"
+
+            axes[idx].text(i, text_y, p_text, ha="center", va="top")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "firing_rates"
+        / f"comparison_firing_rates_rewarded_{rewarded}.png"
+    )
+    1 / 0
+
+
+def get_firing_rates_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
 
     result = {"unsupervised": [], "learning": [], "learned": []}
 
@@ -131,7 +219,11 @@ def firing_rates_plot(genotype: str, rewarded: bool | None) -> None:
             if load_path.exists():
                 result_mouse = np.load(load_path)
                 result[stage].append(
-                    (result_mouse["resting_rates"], result_mouse["running_rates"])
+                    (
+                        mouse_name,
+                        result_mouse["resting_rates"],
+                        result_mouse["running_rates"],
+                    )
                 )
 
     collapsed_result: Dict[str, List] = {
@@ -139,15 +231,21 @@ def firing_rates_plot(genotype: str, rewarded: bool | None) -> None:
         "state": [],
         "firing_rate": [],
         "mouse_id": [],
+        "genotype": [],
     }
     for stage in result.keys():
         for idx, mouse_data in enumerate(result[stage]):
-            resting_rates, running_rates = mouse_data
+            stage_name = "Baseline" if stage == "unsupervised" else "Trained"
+            mouse_name, resting_rates, running_rates = mouse_data
             collapsed_result["stage"].extend(
-                [stage] * (len(resting_rates) + len(running_rates))
+                [stage_name] * (len(resting_rates) + len(running_rates))
+            )
+
+            collapsed_result["genotype"].extend(
+                [genotype] * (len(resting_rates) + len(running_rates))
             )
             collapsed_result["mouse_id"].extend(
-                [idx] * (len(resting_rates) + len(running_rates))
+                [mouse_name] * (len(resting_rates) + len(running_rates))
             )
             collapsed_result["state"].extend(["resting"] * len(resting_rates))
             collapsed_result["firing_rate"].extend(resting_rates)
@@ -155,24 +253,7 @@ def firing_rates_plot(genotype: str, rewarded: bool | None) -> None:
             collapsed_result["state"].extend(["running"] * len(running_rates))
             collapsed_result["firing_rate"].extend(running_rates)
 
-    plt.figure()
-    plt.title(f"{genotype} rewarded={rewarded}")
-    sns.boxplot(
-        pd.DataFrame(collapsed_result),
-        x="stage",
-        y="firing_rate",
-        hue="state",
-        showfliers=False,
-    )
-
-    plt.ylim(-0.1, 2.5)
-    plt.tight_layout()
-    plt.savefig(
-        SERVER_PATH
-        / "viral_plots"
-        / "firing_rates"
-        / f"{genotype}_rewarded_{rewarded}_firing_rates"
-    )
+    return pd.DataFrame(collapsed_result)
 
 
 def save_firing_rates(genotype: str) -> None:
@@ -391,9 +472,11 @@ def plot_correlations(genotype: str, rewarded: bool | None) -> None:
 
 
 if __name__ == "__main__":
-    for genotype in tqdm(
-        ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"], desc="corrleations"
-    ):
-        # for rewarded in [True, False, None]:
-        plot_correlations(genotype, False)
+    firing_rates_plot(None)
+    # for genotype in tqdm(
+    #     ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"], desc="corrleations"
+    # ):
+    #     # for rewarded in [True, False, None]:
+
+    #     plot_correlations(genotype, False)
     1 / 0
