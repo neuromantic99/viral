@@ -6,6 +6,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
+from scipy import stats
 import seaborn as sns
 
 
@@ -163,7 +164,7 @@ class PlaceCellResults:
         self,
         cache_umbrella: Path,
         genotype: str,
-        plot_type: Literal["corridor_activity", "tuning"],
+        plot_type: Literal["corridor_activity", "tuning", "reward_discrimination"],
         verbose: bool = False,
     ) -> None:
 
@@ -234,7 +235,16 @@ class PlaceCellResults:
             return np.sum(mask, axis=0) / mask.shape[0]
         return self.landmark_tuning(mask)
 
-        # return smoothed_matrix[pcs_combined, :].mean(axis=0)
+    def reward_discrimination(
+        self, smoothed_matrix: np.ndarray, pcs_mask: np.ndarray
+    ) -> float:
+        """TODO: doesn't work because it breaks the plot_type logic"""
+
+        reward_zone_size_cm = 10
+        n_bins = reward_zone_size_cm // grosmark_config.bin_size
+        fraction_rewarded = rewarded[:, -n_bins:].mean(axis=1)
+        fraction_unrewarded = unrewarded[:, -n_bins:].mean(axis=1)
+        discrimination_index = fraction_rewarded - fraction_unrewarded
 
     def landmark_tuning(self, mask: np.ndarray) -> float:
         n_bins = mask.shape[1]
@@ -497,8 +507,124 @@ def plot_reward_discrimination(genotype: str) -> None:
     plt.axhline(0, color="grey", linestyle="--")
 
 
-if __name__ == "__main__":
-    for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-        plot_reward_discrimination(genotype=genotype)
+def landmark_comparison_plot() -> None:
+    wt = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="WT",
+        plot_type="tuning",
+    )
+    wt.driver()
+    nlgf = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="NLGF",
+        plot_type="tuning",
+    )
+    nlgf.driver()
 
-    plt.show()
+    result = {"genotype": [], "stage_name": [], "landmark_tuning": [], "rewarded": []}
+
+    for genotype_name, genotype_data in zip(["WT", "NLGF"], [wt, nlgf]):
+        for stage, data in zip(
+            ["unsupervised", "learning", "learned"],
+            [
+                genotype_data.unsupervised,
+                genotype_data.learning,
+                genotype_data.learned,
+            ],
+        ):
+            stage_name = "Baseline" if stage == "unsupervised" else "Trained"
+            result["genotype"].extend(
+                [genotype_name] * (len(data["rewarded"]) + len(data["unrewarded"]))
+            )
+            result["stage_name"].extend(
+                [stage_name] * (len(data["rewarded"]) + len(data["unrewarded"]))
+            )
+            result["landmark_tuning"].extend(data["rewarded"] + data["unrewarded"])
+            result["rewarded"].extend(
+                [True] * len(data["rewarded"]) + [False] * len(data["unrewarded"])
+            )
+    df = pd.DataFrame(result)
+
+    plt.clf()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    for rewarded, ax in zip([True, False], axes):
+        sns.boxplot(
+            data=df[df["rewarded"] == rewarded],
+            x="stage_name",
+            y="landmark_tuning",
+            hue="genotype",
+            hue_order=["WT", "NLGF"],
+            palette=palette,
+            showfliers=False,
+            ax=ax,
+        )
+        sns.stripplot(
+            data=df[df["rewarded"] == rewarded],
+            x="stage_name",
+            y="landmark_tuning",
+            hue="genotype",
+            hue_order=["WT", "NLGF"],
+            palette=palette,
+            dodge=True,
+            linewidth=1,
+            edgecolor="black",
+            ax=ax,
+        )
+        ax.set_title("Rewarded" if rewarded else "Unrewarded")
+        ax.set_xlabel("Stage")
+
+        if ax is axes[0]:
+            ax.set_ylabel("Landmark tuning index")
+
+        ax.axhline(1, color="grey", linestyle="--")
+
+    handles, labels = axes[1].get_legend_handles_labels()
+    # remove per-axis legends
+    if axes[0].get_legend() is not None:
+        axes[0].get_legend().remove()
+    if axes[1].get_legend() is not None:
+        axes[1].get_legend().remove()
+    fig.legend(handles[:2], labels[:2], loc="upper center", ncol=2)
+    sns.despine()
+    plt.ylim(None, 1.6)
+
+    for idx, rewarded in enumerate([True, False]):
+        ymin_plot, ymax_plot = axes[idx].get_ylim()
+        plot_range = ymax_plot - ymin_plot
+        text_y = (
+            ymax_plot - plot_range * 0.02
+        )  # place text just below the top of the axis
+
+        for i, stage in enumerate(["Baseline", "Trained"]):
+            p_value = stats.ttest_ind(
+                df[
+                    (df["stage_name"] == stage)
+                    & (df["genotype"] == "WT")
+                    & (df["rewarded"] == rewarded)
+                ]["landmark_tuning"],
+                df[
+                    (df["stage_name"] == stage)
+                    & (df["genotype"] == "NLGF")
+                    & (df["rewarded"] == rewarded)
+                ]["landmark_tuning"],
+            ).pvalue
+            p_text = f"P = {p_value:.2g}"
+            axes[idx].text(i, text_y, p_text, ha="center", va="top")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "landmark_tuning"
+        / f"landmark_tuning_comparison_plot.png"
+    )
+
+    1 / 0
+
+
+if __name__ == "__main__":
+
+    landmark_comparison_plot()

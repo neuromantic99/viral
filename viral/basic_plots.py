@@ -183,7 +183,6 @@ def firing_rates_plot(rewarded: bool | None) -> None:
         )  # place text just below the top of the axis
         for i, stage in enumerate(stages):
             p_text = f"P = {round(p_values[f"{state}_{stage}"].values[0], 2)}"
-
             axes[idx].text(i, text_y, p_text, ha="center", va="top")
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
@@ -425,9 +424,66 @@ def save_correlations(genotype: str) -> None:
                 )
 
 
-def plot_correlations(genotype: str, rewarded: bool | None) -> None:
+def plot_correlations(rewarded: bool | None) -> None:
+    wt = get_correlation_df("WT", rewarded)
+    nlgf = get_correlation_df("NLGF", rewarded)
+    all_data = pd.concat([wt, nlgf], ignore_index=True)
 
-    result = {"unsupervised": [], "learning": [], "learned": []}
+    fig = plt.figure()
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    p_values = {}
+
+    for stage in ["Baseline", "Trained"]:
+        subset = all_data[all_data["stage"] == stage]
+        assert len(subset) > 100, "make sure nothing weird happend"
+        p_value = mixed_effects(
+            df=subset,
+            dependent_var="correlation",
+            independent_var="genotype",
+            group_name="mouse_id",
+        ).filter(like="C(genotype)")
+        p_values[f"{stage}"] = p_value
+
+    sns.boxplot(
+        data=all_data,
+        x="stage",
+        y="correlation",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+
+    plt.tight_layout()
+    sns.despine()
+    plt.ylim(None, 1.49)
+    ax = plt.gca()
+    ymin_plot, ymax_plot = ax.get_ylim()
+    plot_range = ymax_plot - ymin_plot
+    text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
+    for i, stage in enumerate(["Baseline", "Trained"]):
+        p_text = f"P = {round(p_values[stage].values[0], 2)}"
+        ax.text(i, text_y, p_text, ha="center", va="top")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+        # place legend centered relative to the axes (not the whole figure)
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
+
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "correlations"
+        / f"comparison_correlations_rewarded_{rewarded}.png"
+    )
+
+
+def get_correlation_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
+
+    result = {"stage": [], "correlation": [], "mouse_id": [], "genotype": []}
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
@@ -443,40 +499,20 @@ def plot_correlations(genotype: str, rewarded: bool | None) -> None:
                 / f"{mouse_name}_{date}_rewarded_{rewarded}_correlation.npy"
             )
             correlations = upper_triangle_no_diagonal(data)
-            # result[stage].extend(correlations.tolist())
-            result[stage].append(np.median(correlations))
+            result["correlation"].extend(correlations.tolist())
+            result["mouse_id"].extend([mouse_name] * len(correlations))
+            stage_name = "Baseline" if stage == "unsupervised" else "Trained"
+            result["stage"].extend([stage_name] * len(correlations))
+            result["genotype"].extend([genotype] * len(correlations))
 
-    plt.figure()
-    plt.title(genotype)
-    colors = ["blue", "orange", "green"]
-    boxplot(result)
-    plt.ylim(-0.1, 0.2)
-    # for idx, stage in enumerate(result.keys()):
-    #     plt.hist(
-    #         result[stage],
-    #         bins=50,
-    #         alpha=0.5,
-    #         label=stage,
-    #         density=True,
-    #         color=colors[idx],
-    #     )
-
-    # plt.xlim(-1, 1)
-    plt.legend()
-    plt.savefig(
-        SERVER_PATH
-        / "viral_plots"
-        / "correlations"
-        / f"{genotype}_rewarded_{rewarded}_correlations"
-    )
+    return pd.DataFrame(result)
 
 
 if __name__ == "__main__":
-    firing_rates_plot(None)
+    # firing_rates_plot(None)
     # for genotype in tqdm(
     #     ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"], desc="corrleations"
     # ):
     #     # for rewarded in [True, False, None]:
-
-    #     plot_correlations(genotype, False)
+    firing_rates_plot(False)
     1 / 0
