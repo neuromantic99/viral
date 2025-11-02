@@ -164,7 +164,7 @@ class PlaceCellResults:
         self,
         cache_umbrella: Path,
         genotype: str,
-        plot_type: Literal["corridor_activity", "tuning", "reward_discrimination"],
+        plot_type: Literal["corridor_activity", "tuning"],
         verbose: bool = False,
     ) -> None:
 
@@ -234,17 +234,6 @@ class PlaceCellResults:
         if self.plot_type == "corridor_activity":
             return np.sum(mask, axis=0) / mask.shape[0]
         return self.landmark_tuning(mask)
-
-    def reward_discrimination(
-        self, smoothed_matrix: np.ndarray, pcs_mask: np.ndarray
-    ) -> float:
-        """TODO: doesn't work because it breaks the plot_type logic"""
-
-        reward_zone_size_cm = 10
-        n_bins = reward_zone_size_cm // grosmark_config.bin_size
-        fraction_rewarded = rewarded[:, -n_bins:].mean(axis=1)
-        fraction_unrewarded = unrewarded[:, -n_bins:].mean(axis=1)
-        discrimination_index = fraction_rewarded - fraction_unrewarded
 
     def landmark_tuning(self, mask: np.ndarray) -> float:
         n_bins = mask.shape[1]
@@ -507,6 +496,122 @@ def plot_reward_discrimination(genotype: str) -> None:
     plt.axhline(0, color="grey", linestyle="--")
 
 
+def reward_discrimination(rewarded: np.ndarray, unrewarded: np.ndarray) -> float:
+
+    reward_zone_size_cm = 10
+    n_bins = reward_zone_size_cm // grosmark_config.bin_size
+    fraction_rewarded = rewarded[:, -n_bins:].mean(axis=1)
+    fraction_unrewarded = unrewarded[:, -n_bins:].mean(axis=1)
+    discrimination_index = fraction_rewarded - fraction_unrewarded
+
+    return discrimination_index
+
+
+def reward_discrimination_comparison_plot() -> None:
+    wt = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="WT",
+        plot_type="corridor_activity",
+    )
+    wt.driver()
+    nlgf = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="NLGF",
+        plot_type="corridor_activity",
+    )
+    nlgf.driver()
+
+    result = {"genotype": [], "stage_name": [], "reward_discrimination": []}
+
+    for genotype_name, genotype_data in zip(["WT", "NLGF"], [wt, nlgf]):
+        for stage, data in zip(
+            ["unsupervised", "learning", "learned"],
+            [
+                genotype_data.unsupervised,
+                genotype_data.learning,
+                genotype_data.learned,
+            ],
+        ):
+            rewarded = np.array(data["rewarded"])
+            unrewarded = np.array(data["unrewarded"])
+            assert rewarded.shape == unrewarded.shape
+
+            reward_zone_size_cm = 10
+            n_bins = reward_zone_size_cm // grosmark_config.bin_size
+            fraction_rewarded = rewarded[:, -n_bins:].mean(axis=1)
+            fraction_unrewarded = unrewarded[:, -n_bins:].mean(axis=1)
+            discrimination_index = fraction_rewarded / fraction_unrewarded
+            discrimination_index[np.isinf(discrimination_index)] = 1
+            stage_name = "Baseline" if stage == "unsupervised" else "Trained"
+            result["genotype"].extend([genotype_name] * len(discrimination_index))
+            result["stage_name"].extend([stage_name] * len(discrimination_index))
+            result["reward_discrimination"].extend(discrimination_index)
+
+    df = pd.DataFrame(result)
+
+    fig = plt.figure()
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    p_values = {}
+
+    for stage_name in ["Baseline", "Trained"]:
+        subset = df[df["stage_name"] == stage_name]
+        assert len(subset) > 2, "make sure nothing weird happend"
+        p_values[f"{stage_name}"] = 100
+
+    sns.boxplot(
+        data=df,
+        x="stage_name",
+        y="reward_discrimination",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+
+    sns.stripplot(
+        data=df,
+        x="stage_name",
+        y="reward_discrimination",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        dodge=True,
+        linewidth=1,
+        edgecolor="black",
+    )
+
+    plt.tight_layout()
+    sns.despine()
+    plt.ylim(None, 3.2)
+    ax = plt.gca()
+    ymin_plot, ymax_plot = ax.get_ylim()
+    plot_range = ymax_plot - ymin_plot
+    text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
+    for i, stage_name in enumerate(["Baseline", "Trained"]):
+        subset = df[df["stage_name"] == stage_name]
+        p_value = stats.ttest_ind(
+            subset[subset["genotype"] == "WT"]["reward_discrimination"],
+            subset[subset["genotype"] == "NLGF"]["reward_discrimination"],
+        ).pvalue
+        p_text = f"P = {round(p_value, 2)}"
+        ax.text(i, text_y, p_text, ha="center", va="top")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+    ax.legend(
+        handles[:2], labels[:2], loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2
+    )
+    plt.xlabel("Stage")
+    plt.ylabel("Reward zone discrimination index")
+    plt.axhline(1, color="grey", linestyle="--")
+    plt.ylim(None, 3.2)
+
+    1 / 0
+
+
 def landmark_comparison_plot() -> None:
     wt = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
@@ -627,4 +732,4 @@ def landmark_comparison_plot() -> None:
 
 if __name__ == "__main__":
 
-    landmark_comparison_plot()
+    reward_discrimination_comparison_plot()
