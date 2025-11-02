@@ -664,7 +664,7 @@ def get_ssp_vectors(
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
     above: bool = True,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
     The place cell finding step is run in grosmark_analysis/get_place_cells
@@ -678,6 +678,8 @@ def get_ssp_vectors(
     """
     sigma = 30
     ssp_vectors = []
+    position_vectors = []
+
     for trial in trials:
         position = degrees_to_cm(
             np.array(trial.rotary_encoder_position),
@@ -719,8 +721,10 @@ def get_ssp_vectors(
                     axis=1,
                 )
             )
+            chunk_positions = position[np.searchsorted(frame_position, chunk)]
+            position_vectors.append(chunk_positions)
 
-    return np.hstack(ssp_vectors)
+    return np.hstack(ssp_vectors), np.hstack(position_vectors)
 
 
 def main(mouse: str, date: str, plot: bool = True) -> None:
@@ -793,7 +797,7 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
 
         trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-        ssp_vectors = get_ssp_vectors(
+        ssp_vectors, _ = get_ssp_vectors(
             trials=trials,
             place_cells=place_cells,
         )

@@ -13,7 +13,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.constants import CACHE_PATH, TIFF_UMBRELLA
+from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA
 from viral.models import (
     Cached2pSession,
     GrosmarkConfig,
@@ -274,15 +274,18 @@ def plot_pse_event(
 
 def main() -> None:
     """
-    Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
+    'Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
     mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored.
     Putative PSEs were defined as epochs during which the z-scored population activity vector reached a peak of at least 3.5 s.d.
     above the mean with event-edges at 1 s.d. above the mean, with a minimum inter-event time of 0.2 s.
     Only PSE events lasting between 0.2 s (12 frames) and 1 s (60 frames), and during which at least 5 distinct PCs each fired at least one estimated spike,
-    were kept for further analysis.
+    were kept for further analysis.'
+
+    en bloc decoding:       Decode the entire period (online or offline) at once
+    per PSE event decoding: Detect PSE events, then decode each detected PSE event separately
     """
-    use_cache = True
+    use_cache = False
 
     # did show a little bit
     mouse = "JB036"
@@ -311,10 +314,10 @@ def main() -> None:
     # CAUTION: spatial bin size in GrosmarkConfig!
     bayesian_config = BayesianDecodingConfig(
         en_bloc=True,
-        online=False,
+        online=True,
         # peak_threshold=3.5,
         peak_threshold=2,
-        edge_threshold=0.5,
+        edge_threshold=0,
         event_duration=(6, 30),
         bin_size_time_online=10,
         bin_size_time_offline=2,
@@ -322,7 +325,7 @@ def main() -> None:
     )
 
     # can't use cached place cell threshold when doing a train/test split
-    use_cache = False if bayesian_config.online else True
+    # use_cache = False if bayesian_config.online else True
 
     train_size = 0.5  # fraction of trials used to get place cells (online only)
 
@@ -352,61 +355,80 @@ def main() -> None:
         / "plane0"
         / "oasis_spikes.npy"
     )
+    trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-    if bayesian_config.en_bloc:
-        trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+    if bayesian_config.online:
+        # "training" the decoder (= place cell template) on a subset of trials
+        trials_train, trials_test = train_test_split(
+            trials, train_size=train_size, random_state=42
+        )
+    else:
+        # otherwise just keep all imaged trials
+        trials_train = trials
 
-        if bayesian_config.online:
-            trials_train, trials_test = train_test_split(
-                trials, train_size=train_size, random_state=42
-            )
-            # phases of mobility
-            # ssp_test = get_ssp_vectors(trials_test, spks)
+    # do the place cell template only on the training data!
+    session.trials = trials_train
 
-            # phases of immobility
-            ssp_test = get_ssp_vectors(
-                trials=trials_test,
-                place_cells=spks,
-                above=False,
-                speed_threshold=1,
-                n_consecutive_samples=3 * 30,
-            )
-        else:
-            trials_train = trials
-            # getting just the post-session wheel freeze
-            _, _, offline = split_fluoresence_online_freeze(
-                flu=spks, wheel_freeze=session.wheel_freeze
-            )
-            sigma = 30
-            ssp_test = gaussian_filter1d(
-                input=offline,
-                sigma=sigma,
-                axis=1,
-            )
-
-        # do the place cell template only on the training data!
-        session.trials = trials_train
-
-    t0 = time.time()
-    pcs_mask, place_fields, place_threshold = get_place_cells(
-        session=session,
-        spks=spks,
-        rewarded=None,
-        use_cache=use_cache,
-        config=grosmark_config,
-        plot=False,
+    cache_file = Path(
+        f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{f"online" if bayesian_config.online else "offline"}_{f"en_bloc" if bayesian_config.en_bloc else "per_event"}_place_cells.npz"
     )
+
+    if cache_file.exists():
+        npz = np.load(cache_file)
+        pcs_mask = npz["pcs_mask"]
+        place_fields = npz["place_fields"]
+        place_threshold = npz["place_threshold"]
+        print("Loaded place cells from cache")
+
+    else:
+        t0 = time.time()
+        pcs_mask, place_fields, place_threshold = get_place_cells(
+            session=session,
+            spks=spks,
+            rewarded=None,
+            use_cache=use_cache,
+            config=grosmark_config,
+            plot=False,
+        )
+        print(f"Time to get place cells: {time.time() - t0}")
+        np.savez(
+            cache_file,
+            pcs_mask=pcs_mask,
+            place_fields=place_fields,
+            place_threshold=place_threshold,
+        )
+
     place_cells = spks[pcs_mask, :]
-    print(f"Time to get place cells: {time.time() - t0}")
-    _, online, reactivation = split_fluoresence_online_freeze(
-        flu=place_cells, wheel_freeze=session.wheel_freeze
-    )
+
+    if bayesian_config.online:
+        # use the test trials for decoding
+
+        # phases of mobility
+        ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells)
+
+        # phases of immobility
+        # ssp_test = get_ssp_vectors(
+        #     trials=trials_test,
+        #     place_cells=spks,
+        #     above=False,
+        #     speed_threshold=1,
+        #     n_consecutive_samples=3 * 30,
+        # )
+    else:
+        # getting just the post-session wheel freeze
+        _, _, offline = split_fluoresence_online_freeze(
+            flu=place_cells, wheel_freeze=session.wheel_freeze
+        )
+        sigma = 30
+        ssp_test = gaussian_filter1d(
+            input=offline,
+            sigma=sigma,
+            axis=1,
+        )
 
     if not bayesian_config.en_bloc:
-        ssp = online if bayesian_config.online else reactivation
-        population_vector = get_population_vector(ssp)
-
-        pse_events = find_pse_events(population_vector, ssp, bayesian_config)
+        population_vector = get_population_vector(ssp_test)
+        pse_events = find_pse_events(population_vector, ssp_test, bayesian_config)
 
         if len(pse_events) == 0:
             print("No PSE events found, exiting")
@@ -432,7 +454,7 @@ def main() -> None:
             f"plots/{session.date}_{session.mouse_name}_population_vector_{"online" if bayesian_config.online else "offline"}.png"
         )
 
-        pse_activity = [reactivation[:, start:end] for start, end in pse_events]
+        pse_activity = [ssp_test[:, start:end] for start, end in pse_events]
 
         # TODO: why can place_fields contain NaNs???
 
@@ -450,20 +472,25 @@ def main() -> None:
                 grosmark_config,
                 bayesian_config,
             )
-
     else:
-        ssp_test = ssp_test[pcs_mask, :]
         posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
             ssp_test,
             place_fields=place_fields[pcs_mask, :],
             config=bayesian_config,
         )
         plt.figure(figsize=(10, 4))
-        plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.07, aspect="auto")
+        plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.05, aspect="auto")
         plt.colorbar()
         plt.tight_layout()
         plt.savefig(
             f"plots/pse_events/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
+        )
+
+        plot_decoded_vs_actual_position(
+            positions=positions_test,
+            pr_max=pr_max,
+            session=session,
+            bayesian_config=bayesian_config,
         )
 
     print(f"Done for {session.mouse_name} on {session.date}")
@@ -487,6 +514,48 @@ def test_against_matlab() -> None:
     plt.savefig("matlab_result")
 
     assert np.all(np.isclose(python_result, matlab_result, rtol=1e-04))
+
+
+def plot_decoded_and_actual_position(positions: np.ndarray, pr_max: np.ndarray) -> None:
+    assert positions.shape == pr_max.shape
+    plt.figure(figsize=(10, 4))
+    plt.plot(
+        positions,
+        label="Actual Position",
+        color="b",
+        linestyle="",
+        marker="o",
+        markersize=1,
+    )
+    plt.plot(
+        pr_max * 5,
+        label="Decoded Position",
+        color="r",
+        alpha=0.8,
+        linestyle="",
+        marker="o",
+        markersize=1,
+    )
+    plt.savefig("positions.png")
+
+
+def plot_decoded_vs_actual_position(
+    positions: np.ndarray,
+    pr_max: np.ndarray,
+    session: Cached2pSession,
+    bayesian_config: BayesianDecodingConfig,
+) -> None:
+    assert positions.shape == pr_max.shape
+    plt.figure(figsize=(5, 5))
+    plt.scatter(positions, pr_max * 5, s=5, alpha=0.5)
+    plt.xlabel("Actual Position")
+    plt.ylabel("Decoded Position")
+    plt.title(
+        f"{session.mouse_name} {session.date} - online ({bayesian_config.bin_size_time_offline} frames per bin, {bayesian_config.bin_size_spatial} cm per bin)"
+    )
+    plt.savefig(
+        f"plots/{session.mouse_name}_{session.date}_decoded_vs_actual.png", dpi=300
+    )
 
 
 if __name__ == "__main__":
