@@ -27,6 +27,7 @@ from viral.utils import (
 from viral.imaging_utils import split_fluoresence_online_freeze, trial_is_imaged
 from viral.grosmark_analysis import get_place_cells
 from viral.ensemble_reactivation import get_ssp_vectors
+from viral.sessions_keep import SESSIONS_KEEP
 
 
 # TODO: is this the "right Ssp"? This is hard to understand
@@ -272,7 +273,7 @@ def plot_pse_event(
     )
 
 
-def main() -> None:
+def main(mouse_name: str, date: str) -> None:
     """
     'Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
@@ -288,9 +289,9 @@ def main() -> None:
     use_cache = False
 
     # did show a little bit
-    mouse = "JB036"
+    # mouse = "JB036"
     # date = "2025-07-05"
-    date = "2025-07-11"
+    # date = "2025-07-11"
 
     # mouse = "JB030"
     # date = "2025-03-25"
@@ -320,6 +321,7 @@ def main() -> None:
         edge_threshold=0,
         event_duration=(6, 30),
         bin_size_time_online=10,
+        # TODO: currently bin_size_time_online is unused (bin_size_time_offline is used in every case)
         bin_size_time_offline=2,
         bin_size_spatial=5,
     )
@@ -335,13 +337,14 @@ def main() -> None:
         end=180,
     )
 
-    with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
+    with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
     print(f"Working on {session.mouse_name}: {session.date} - {session.session_type}")
 
-    if not session.wheel_freeze:
-        print(f"Skipping {date} for mouse {mouse} as there was no wheel block")
+    if not bayesian_config.online and not session.wheel_freeze:
+        # Skip session if intended to analyse offline activity but there was no wheel block
+        print(f"Skipping {date} for mouse {mouse_name} as there was no wheel block")
         return
 
     print(f"Analysing {"online" if bayesian_config.online else "offline"} activity")
@@ -486,12 +489,13 @@ def main() -> None:
             f"plots/pse_events/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
         )
 
-        plot_decoded_vs_actual_position(
-            positions=positions_test,
-            pr_max=pr_max,
-            session=session,
-            bayesian_config=bayesian_config,
-        )
+        if bayesian_config.online:
+            plot_decoded_vs_actual_position(
+                positions=positions_test,
+                pr_max=pr_max,
+                session=session,
+                bayesian_config=bayesian_config,
+            )
 
     print(f"Done for {session.mouse_name} on {session.date}")
 
@@ -559,6 +563,7 @@ def plot_decoded_vs_actual_position(
 
 
 if __name__ == "__main__":
-    main()
-    # test_against_matlab()
-    # decode_en_bloc()
+    for mouse_name in SESSIONS_KEEP.keys():
+        for stage, date in SESSIONS_KEEP[mouse_name].items():
+            print(f"Processing {mouse_name} - {stage} - {date}")
+            main(mouse_name, date)
