@@ -412,6 +412,7 @@ class SessionType(Enum):
     RECALL_REVERSAL = "recall_reversal"
     RECALL = "recall"
     LEARNING = "learning"
+    UNSUPERVISED = "unsupervised"
 
 
 def get_session_type(session_name: str) -> str:
@@ -424,6 +425,8 @@ def get_session_type(session_name: str) -> str:
         )
     elif "recall" in session_name:
         return SessionType.RECALL.value
+    elif "unsupervised" in session_name:
+        return SessionType.UNSUPERVISED.value
     elif "learning" in session_name:
         return SessionType.LEARNING.value
     else:
