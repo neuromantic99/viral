@@ -1,34 +1,18 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Dict, List, Literal, Tuple
 
-from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
+from matplotlib import pyplot as plt
 from pydantic import ValidationError
 from scipy import stats
-import seaborn as sns
-
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
-from viral.imaging_utils import trial_is_imaged
-
-from viral.grosmark_analysis import get_place_cells
-from viral.sessions_keep import SESSIONS_KEEP
-from viral.utils import (
-    boxplot,
-    degrees_to_cm,
-    get_genotype,
-    get_speed_positions,
-    get_wheel_circumference_from_rig,
-    shaded_line_plot,
-)
-
-
-from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
 from viral.cache_2p_sessions import process_session
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -39,10 +23,22 @@ from viral.constants import (
     TIFF_UMBRELLA,
     grosmark_config,
 )
-from viral.gsheets_importer import gsheet2df
-from viral.multiple_sessions import parse_session_number
-from viral.single_session import load_data
 from viral.ensemble_reactivation import main as ensemble_main
+from viral.grosmark_analysis import get_place_cells
+from viral.gsheets_importer import gsheet2df
+from viral.imaging_utils import trial_is_imaged
+from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
+from viral.multiple_sessions import parse_session_number
+from viral.sessions_keep import SESSIONS_KEEP
+from viral.single_session import load_data
+from viral.utils import (
+    boxplot,
+    degrees_to_cm,
+    get_genotype,
+    get_speed_positions,
+    get_wheel_circumference_from_rig,
+    shaded_line_plot,
+)
 
 ## TODO: Do we want to include the first day of learning?
 # There's likely a lot of interesting reactivated activtity there
@@ -51,7 +47,6 @@ from viral.ensemble_reactivation import main as ensemble_main
 def get_session(
     mouse_name: str, date: str, metadata: pd.DataFrame, stage: str
 ) -> Cached2pSession:
-
     path = CACHE_PATH / f"{mouse_name}_{date}.json"
     try:
         cached_session = Cached2pSession.model_validate_json(path.read_text())
@@ -94,7 +89,6 @@ def get_session(
 
 
 def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
-
     results = [None, None, None]
     for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
         path = CACHE_PATH / f"{mouse_name}_{SESSIONS_KEEP[mouse_name][stage]}.json"
@@ -137,7 +131,6 @@ def get_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
 
 
 def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) -> None:
-
     print("Processing", mouse_name, date)
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -167,7 +160,6 @@ class PlaceCellResults:
         plot_type: Literal["corridor_activity", "tuning"],
         verbose: bool = False,
     ) -> None:
-
         self.smoothed_matrix_files = list(
             (cache_umbrella / "smoothed_matrix").glob("*npy")
         )
@@ -274,7 +266,6 @@ class PlaceCellResults:
         return np.mean(result)
 
     def driver(self) -> None:
-
         for stage, store in zip(
             ["unsupervised", "learning", "learned"],
             [self.unsupervised, self.learning, self.learned],
@@ -304,7 +295,6 @@ class PlaceCellResults:
         label: str,
         color: str,
     ) -> None:
-
         matrix = np.vstack(stage_data)
         shaded_line_plot(
             arr=matrix,
@@ -420,7 +410,6 @@ def plot_place_cell_results(
 
 
 def plot_speed_summary() -> None:
-
     result = {
         stage: {"rewarded": [], "unrewarded": []}
         for stage in ["unsupervised", "learning", "learned"]
@@ -443,7 +432,6 @@ def plot_speed_summary() -> None:
 
 
 def run_ensembles() -> None:
-
     for mouse in SESSIONS_KEEP.keys():
         if mouse not in {"JB034", "JB035", "JB036"}:
             continue
@@ -455,7 +443,6 @@ def run_ensembles() -> None:
 
 
 def plot_reward_discrimination(genotype: str) -> None:
-
     place_cell_result = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
         genotype=genotype,
@@ -497,7 +484,6 @@ def plot_reward_discrimination(genotype: str) -> None:
 
 
 def reward_discrimination(rewarded: np.ndarray, unrewarded: np.ndarray) -> float:
-
     reward_zone_size_cm = 10
     n_bins = reward_zone_size_cm // grosmark_config.bin_size
     fraction_rewarded = rewarded[:, -n_bins:].mean(axis=1)
@@ -550,8 +536,8 @@ def reward_discrimination_comparison_plot() -> None:
     df = pd.DataFrame(result)
 
     fig = plt.figure()
-    colors = sns.color_palette(n_colors=2)
-    palette = {"WT": colors[0], "NLGF": colors[1]}
+    colors = sns.color_palette(n_colors=4)
+    palette = {"Trained": colors[2], "Baseline": colors[3]}
 
     p_values = {}
 
@@ -562,20 +548,20 @@ def reward_discrimination_comparison_plot() -> None:
 
     sns.boxplot(
         data=df,
-        x="stage_name",
+        x="genotype",
         y="reward_discrimination",
-        hue="genotype",
-        hue_order=["WT", "NLGF"],
+        hue="stage_name",
+        hue_order=["Baseline", "Trained"],
         palette=palette,
         showfliers=False,
     )
 
     sns.stripplot(
         data=df,
-        x="stage_name",
+        x="genotype",
         y="reward_discrimination",
-        hue="genotype",
-        hue_order=["WT", "NLGF"],
+        hue="stage_name",
+        hue_order=["Baseline", "Trained"],
         palette=palette,
         dodge=True,
         linewidth=1,
@@ -589,11 +575,11 @@ def reward_discrimination_comparison_plot() -> None:
     ymin_plot, ymax_plot = ax.get_ylim()
     plot_range = ymax_plot - ymin_plot
     text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
-    for i, stage_name in enumerate(["Baseline", "Trained"]):
-        subset = df[df["stage_name"] == stage_name]
+    for i, genotype in enumerate(["WT", "NLGF"]):
+        subset = df[df["genotype"] == genotype]
         p_value = stats.ttest_ind(
-            subset[subset["genotype"] == "WT"]["reward_discrimination"],
-            subset[subset["genotype"] == "NLGF"]["reward_discrimination"],
+            subset[subset["stage_name"] == "Baseline"]["reward_discrimination"],
+            subset[subset["stage_name"] == "Trained"]["reward_discrimination"],
         ).pvalue
         p_text = f"P = {round(p_value, 2)}"
         ax.text(i, text_y, p_text, ha="center", va="top")
@@ -604,12 +590,16 @@ def reward_discrimination_comparison_plot() -> None:
     ax.legend(
         handles[:2], labels[:2], loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2
     )
-    plt.xlabel("Stage")
+    plt.xlabel("Genotype")
     plt.ylabel("Reward zone discrimination index")
     plt.axhline(1, color="grey", linestyle="--")
     plt.ylim(None, 3.2)
-
-    1 / 0
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "reward_discrimination"
+        / f"reward_discrimination_comparison_plot.png"
+    )
 
 
 def landmark_comparison_plot() -> None:
@@ -731,5 +721,4 @@ def landmark_comparison_plot() -> None:
 
 
 if __name__ == "__main__":
-
     reward_discrimination_comparison_plot()

@@ -3,6 +3,7 @@ import sys
 from typing import Dict, List
 
 import pandas as pd
+from scipy import stats
 
 
 HERE = Path(__file__).parent
@@ -10,16 +11,20 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 from matplotlib import pyplot as plt
+from scipy.ndimage import percentile_filter
 import numpy as np
 import seaborn as sns
+from scipy.ndimage import gaussian_filter1d
 from tqdm import tqdm
 from viral.constants import SERVER_PATH, TIFF_UMBRELLA, CACHE_PATH, grosmark_config
 from viral.imaging_utils import (
     activity_trial_position,
     get_online_position_and_frames,
     get_resting_position_and_frames,
+    subtract_neuropil,
     trial_is_imaged,
 )
+from viral.run_oasis import correct_f
 from viral.models import Cached2pSession
 from viral.representational_drift import interpolate_nans
 from viral.sessions_keep import SESSIONS_KEEP
@@ -29,6 +34,7 @@ from viral.utils import (
     get_wheel_circumference_from_rig,
     imshow,
     mixed_effects,
+    moving_average,
     remove_diagonal,
     upper_triangle_no_diagonal,
 )
@@ -336,8 +342,8 @@ def n_responders(session: Cached2pSession, rewarded: bool | None) -> float:
     return np.sum(pc_mask) / len(pc_mask)
 
 
-def n_responders_plot(genotype: str, rewarded: bool | None) -> None:
-    result: Dict[str, List[float]] = {"unsupervised": [], "learning": [], "learned": []}
+def get_n_responders(genotype: str, rewarded: bool | None) -> Dict[str, List[float]]:
+    result: Dict[str, List[float]] = {"Baseline": [], "Trained": []}
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
@@ -350,16 +356,124 @@ def n_responders_plot(genotype: str, rewarded: bool | None) -> None:
             session = Cached2pSession.model_validate_json(session_path.read_text())
 
             n = n_responders(session=session, rewarded=rewarded)
-            result[stage].append(n)
+            stage_name = "Baseline" if stage == "unsupervised" else "Trained"
+            result[stage_name].append(n)
 
-    plt.figure()
-    plt.title(genotype)
-    boxplot(result)
+    return result
+
+
+def n_responders_comparison_plot() -> None:
+    # result = {"genotype": [], "stage": [], "rewarded": [], "n_responders": []}
+    # for genotype in ["WT", "NLGF"]:
+    #     for rewarded in [True, False]:
+    #         temp_result = get_n_responders(genotype=genotype, rewarded=rewarded)
+    #         for stage in temp_result.keys():
+    #             result["genotype"].extend([genotype] * len(temp_result[stage]))
+    #             result["stage"].extend([stage] * len(temp_result[stage]))
+    #             result["rewarded"].extend([rewarded] * len(temp_result[stage]))
+    #             result["n_responders"].extend(temp_result[stage])
+
+    # df = pd.DataFrame(result)
+    # df.to_pickle("n_responders_df")
+
+    df = pd.read_pickle("n_responders_df")
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5), sharey=True)
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    sns.boxplot(
+        data=df[df["rewarded"] == True],
+        x="stage",
+        y="n_responders",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+        ax=axes[0],
+    )
+    sns.stripplot(
+        data=df[df["rewarded"] == True],
+        x="stage",
+        y="n_responders",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        dodge=True,
+        linewidth=1,
+        edgecolor="black",
+        ax=axes[0],
+    )
+    # add p-value annotations above each stage for the resting axis
+    stages = ["Baseline", "Trained"]
+    # use the axis y-limits (not the raw data max) so extreme outliers don't push the annotation off-screen
+
+    axes[0].set_title("Rewarded")
+    axes[0].set_ylabel("Fraction of cells with spatial tuning")
+
+    sns.boxplot(
+        data=df[df["rewarded"] == False],
+        x="stage",
+        y="n_responders",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+        ax=axes[1],
+    )
+    sns.stripplot(
+        data=df[df["rewarded"] == False],
+        x="stage",
+        y="n_responders",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        dodge=True,
+        ax=axes[1],
+        linewidth=1,
+        edgecolor="black",
+    )
+    sns.despine()
+
+    axes[1].set_title("Unrewarded")
+    axes[1].set_ylabel("")
+
+    handles, labels = axes[1].get_legend_handles_labels()
+    # remove per-axis legends
+    if axes[0].get_legend() is not None:
+        axes[0].get_legend().remove()
+    if axes[1].get_legend() is not None:
+        axes[1].get_legend().remove()
+    fig.legend(handles[:2], labels[:2], loc="upper center", ncol=2)
+
+    plt.ylim(0, 1)
+
+    for idx, rewarded in enumerate([True, False]):
+        ymin_plot, ymax_plot = axes[idx].get_ylim()
+        plot_range = ymax_plot - ymin_plot
+        text_y = (
+            ymax_plot - plot_range * 0.02
+        )  # place text just below the top of the axis
+        for i, stage in enumerate(stages):
+            p_value = stats.ttest_ind(
+                df[
+                    (df["stage"] == stage)
+                    & (df["rewarded"] == rewarded)
+                    & (df["genotype"] == "WT")
+                ]["n_responders"],
+                df[
+                    (df["stage"] == stage)
+                    & (df["rewarded"] == rewarded)
+                    & (df["genotype"] == "NLGF")
+                ]["n_responders"],
+            ).pvalue
+            print(p_value)
+            p_text = f"P = {p_value:.2g}"
+            axes[idx].text(i, text_y, p_text, ha="center", va="top")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(
-        SERVER_PATH
-        / "viral_plots"
-        / "fraction_place_cells"
-        / f"{genotype}_rewarded_{rewarded}"
+        SERVER_PATH / "viral_plots" / "n_responders" / f"comparison_n_responders.png"
     )
 
 
@@ -508,11 +622,145 @@ def get_correlation_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
     return pd.DataFrame(result)
 
 
+def example_traces() -> None:
+
+    s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-04/JB034/suite2p/plane0/")
+
+    # f_raw = np.load(s2p_path / "F.npy")
+    # f_neu = np.load(s2p_path / "Fneu.npy")
+    # f_raw = f_raw[:, 10000:17000]
+    # f_neu = f_neu[:, 10000:17000]
+    # np.save("fraw.npy", f_raw)
+    # np.save("fneu.npy", f_neu)
+    f_raw = np.load("fraw.npy")
+    f_neu = np.load("fneu.npy")
+
+    f = subtract_neuropil(f_raw, f_neu)
+
+    baseline = np.mean(f, axis=1, keepdims=True)
+    dff = (f - baseline) / baseline
+
+    colors = sns.color_palette(n_colors=2)
+
+    plt.clf()
+    # cells_keep = [5, 6, 9, 19, 26, 35, 40, 45, 50, 55, 60]
+    cells_keep = [5, 6, 9, 19, 26, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100, 150]
+    np.random.shuffle(cells_keep)
+    n = 0
+    for idx in cells_keep:
+        data = dff[idx] + n * 1.4
+        data = moving_average(data, 5)
+
+        plt.plot(data, color=colors[0], linewidth=1)
+        n += 1
+
+    sns.despine(left=True, bottom=True)
+    plt.axis("off")
+
+    # --- Add compact bottom-right scalebar (replacing axes) ---
+    ax = plt.gca()
+    # Sampling rate (Hz). 2P traces elsewhere use 30 FPS
+    fs = 30.0
+    # Determine trace length in frames from the last plotted line if possible
+    # Use dff shape (n_cells, n_frames)
+    n_frames = dff.shape[1]
+    duration_s = n_frames / fs
+
+    # Choose a time scalebar that's <= 20% of the duration, from nice values
+    nice_times = np.array([0.5, 1, 2, 5, 10, 20, 30, 60])
+    max_time = max(0.2 * duration_s, 0.5)
+    bar_t = (
+        float(nice_times[nice_times <= max_time][-1])
+        if np.any(nice_times <= max_time)
+        else 0.5
+    )
+    bar_t_frames = bar_t * fs
+
+    # Choose a vertical amplitude scalebar in dF/F units from nice values
+    # The traces are offset by 1.4 between cells; choose a modest vertical scalebar
+    nice_dff = np.array([0.1, 0.2, 0.5, 1.0])
+    # Aim for ~8% of the total y-range
+    ymin, ymax = ax.get_ylim()
+    y_range = ymax - ymin if ymax > ymin else max(1.0, len(cells_keep) * 1.4)
+    target_dff = 0.08 * y_range
+    bar_dff = (
+        float(nice_dff[nice_dff <= target_dff][-1])
+        if np.any(nice_dff <= target_dff)
+        else float(nice_dff[0])
+    )
+
+    # Position: bottom-right with small margins (in data coords)
+    x0, x1 = ax.get_xlim()
+    margin_x = 0.02 * (x1 - x0)
+    margin_y = 0.007 * (y_range)
+
+    x_start = x1 - margin_x - bar_t_frames
+    y_start = ymin + margin_y
+
+    # Draw horizontal (time) bar
+    ax.plot(
+        [x_start, x_start + bar_t_frames],
+        [y_start, y_start],
+        color="black",
+        lw=1.5,
+        solid_capstyle="butt",
+    )
+    # Draw vertical (amplitude) bar
+    ax.plot(
+        [x_start + bar_t_frames, x_start + bar_t_frames],
+        [y_start, y_start + bar_dff],
+        color="black",
+        lw=1.5,
+        solid_capstyle="butt",
+    )
+
+    # Labels: time (bottom) and dF/F (side)
+    # Format helpers
+    def _fmt_val(v: float) -> str:
+        # Use integer when close, else one decimal
+        return f"{int(round(v))}" if abs(v - round(v)) < 1e-6 else f"{v:.1f}"
+
+    time_label = f"{_fmt_val(bar_t)} s"
+    dff_label = f"{_fmt_val(bar_dff)} dF/F"
+
+    # Place time label centered under the horizontal bar (clamp to stay inside axes)
+    x_mid = x_start + 0.5 * bar_t_frames
+    y_text_bottom = y_start - 0.015 * y_range
+    # if y_text_bottom < ymin + 0.005 * y_range:
+    #     y_text_bottom = y_start + 0.018 * y_range
+    ax.text(
+        x_mid,
+        y_text_bottom,
+        time_label,
+        ha="center",
+        va="top" if y_text_bottom <= y_start else "bottom",
+        fontsize=9,
+        color="black",
+    )
+
+    # Place dF/F label to the left of the vertical bar, centered vertically
+    x_text_side = x_start + bar_t_frames - 0.01 * (x1 - x0)
+    y_mid = y_start + 0.5 * bar_dff
+    ax.text(
+        x_text_side,
+        y_mid,
+        dff_label,
+        ha="right",
+        va="center",
+        fontsize=9,
+        color="black",
+    )
+
+    plt.savefig(SERVER_PATH / "viral_plots" / "example_traces" / f"example_traces.png")
+    1 / 0
+
+
 if __name__ == "__main__":
     # firing_rates_plot(None)
     # for genotype in tqdm(
     #     ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"], desc="corrleations"
     # ):
     #     # for rewarded in [True, False, None]:
-    firing_rates_plot(False)
-    1 / 0
+    n_responders_comparison_plot()
+    # firing_rates_plot(False)
+    # 1 / 0
