@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import zscore
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import ConfusionMatrixDisplay, r2_score, confusion_matrix
+from sklearn.metrics import r2_score, confusion_matrix, f1_score
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -411,14 +411,18 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
     if bayesian_config.online:
         # use the test trials for decoding
 
+        # TODO: change back!
+        # all trial frames
+        ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, "all")
+
         # phases of mobility
-        ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells)
+        # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells)
 
         # phases of immobility
         # ssp_test = get_ssp_vectors(
         #     trials=trials_test,
         #     place_cells=spks,
-        #     above=False,
+        #     mode="below",
         #     speed_threshold=1,
         #     n_consecutive_samples=3 * 30,
         # )
@@ -580,7 +584,7 @@ def plot_decoded_vs_actual_position(
 
 
 def get_statistics_actual_vs_decoded_position(genotype: str) -> pd.DataFrame:
-    result = {"stage": [], "r2": [], "mouse_id": [], "genotype": []}
+    result = {"stage": [], "r2": [], "f1": [], "mouse_id": [], "genotype": []}
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
@@ -607,9 +611,14 @@ def get_statistics_actual_vs_decoded_position(genotype: str) -> pd.DataFrame:
                 continue
             # cm = confusion_matrix(y_true=positions, y_pred=pr_max)
             r_square = r2_score(y_true=positions, y_pred=pr_max)
+            # TODO: think about the averaging method
+            # TODO: bin_size_spatial is hardcoded here
+            y_true_bins = prepare_for_classification(positions, 5)
+            y_pred_bins = prepare_for_classification(pr_max, 5)
+            f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
             result["stage"].append(stage)
             result["r2"].append(r_square)
-            # result["cm"].append(cm)
+            result["f1"].append(f1)
             result["mouse_id"].append(mouse_name)
             result["genotype"].append(genotype)
     return pd.DataFrame(result)
@@ -668,8 +677,73 @@ def plot_decoded_vs_actual_position_rsquare() -> None:
         SERVER_PATH
         / "viral_plots"
         / "decoded_vs_actual_positions"
-        / f"actual_vs_decoded.png"
+        / f"actual_vs_decoded_rsquare.png"
     )
+
+
+def plot_decoded_vs_actual_position_f1() -> None:
+    wt = get_statistics_actual_vs_decoded_position("WT")
+    nlgf = get_statistics_actual_vs_decoded_position("NLGF")
+    all_data = pd.concat([wt, nlgf], ignore_index=True)
+
+    fig = plt.figure()
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    # p_values = {}
+
+    # for stage in ["Baseline", "Trained"]:
+    #     subset = all_data[all_data["stage"] == stage]
+    #     assert len(subset) > 100, "make sure nothing weird happend"
+    #     p_value = mixed_effects(
+    #         df=subset,
+    #         dependent_var="correlation",
+    #         independent_var="genotype",
+    #         group_name="mouse_id",
+    #     ).filter(like="C(genotype)")
+    #     p_values[f"{stage}"] = p_value
+
+    sns.boxplot(
+        data=all_data,
+        x="stage",
+        y="f1",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+
+    plt.tight_layout()
+    sns.despine()
+    # plt.ylim(None, 1.49)
+    ax = plt.gca()
+    # ymin_plot, ymax_plot = ax.get_ylim()
+    # plot_range = ymax_plot - ymin_plot
+    # text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
+    # for i, stage in enumerate(["Baseline", "Trained"]):
+    #     p_text = f"P = {round(p_values[stage].values[0], 2)}"
+    #     ax.text(i, text_y, p_text, ha="center", va="top")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+        # place legend centered relative to the axes (not the whole figure)
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
+
+    # plt.savefig(
+    #     SERVER_PATH
+    #     / "viral_plots"
+    #     / "decoded_vs_actual_positions"
+    #     / "actual_vs_decoded_f1score_macro.png"
+    # )
+    # plt.savefig(Path("plots") / "actual_vs_decoded_f1score_macro.png")
+    plt.savefig(Path("plots") / "actual_vs_decoded_f1score_weighted.png")
+
+
+def prepare_for_classification(
+    position_array: np.ndarray, bin_size_spatial: int
+) -> np.ndarray:
+    return np.floor(position_array / bin_size_spatial).astype(int)
 
 
 def plot_confusion_matrix_actual_vs_decoded_position(
@@ -677,17 +751,25 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     decoded_position: np.ndarray,
     session: Cached2pSession,
     bayesian_config: BayesianDecodingConfig,
+    plot_landmarks: bool = True,
 ) -> None:
-    y_true_bins = np.floor(actual_position / bayesian_config.bin_size_spatial).astype(
-        int
+    landmarks_cm = [45, 90, 135]
+    landmarks = [l / bayesian_config.bin_size_spatial for l in landmarks_cm]
+
+    y_true_bins = prepare_for_classification(
+        actual_position, bayesian_config.bin_size_spatial
     )
-    # kind of weird to do a floor devision after multiplying in the main function but keeping this for consistency
-    y_pred_bins = np.floor(decoded_position / bayesian_config.bin_size_spatial).astype(
-        int
+    y_pred_bins = prepare_for_classification(
+        decoded_position, bayesian_config.bin_size_spatial
     )
+
     cm = confusion_matrix(y_true=y_true_bins, y_pred=y_pred_bins)
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, cmap="viridis", square=True)
+    if plot_landmarks:
+        plt.vlines(
+            landmarks, ymin=0, ymax=cm.shape[0], colors="r", linestyles="--", alpha=0.7
+        )
     plt.xlabel("Decoded Bin")
     plt.ylabel("True Bin")
     plt.title(
@@ -700,8 +782,9 @@ def plot_confusion_matrix_actual_vs_decoded_position(
 
 
 if __name__ == "__main__":
-    for mouse_name in SESSIONS_KEEP.keys():
-        for stage, date in SESSIONS_KEEP[mouse_name].items():
-            print(f"Processing {mouse_name} - {stage} - {date}")
-            main(mouse_name, date)
+    # for mouse_name in SESSIONS_KEEP.keys():
+    #     for stage, date in SESSIONS_KEEP[mouse_name].items():
+    #         print(f"Processing {mouse_name} - {stage} - {date}")
+    #         main(mouse_name, date)
     # plot_decoded_vs_actual_position_rsquare()
+    plot_decoded_vs_actual_position_f1()

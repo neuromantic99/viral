@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Literal
 import numpy as np
 import sys
 import concurrent.futures
@@ -661,9 +661,9 @@ def plot_grosmark_panel(
 def get_ssp_vectors(
     trials: List[TrialInfo],
     place_cells: np.ndarray,
+    mode: Literal["above", "below", "all"] = "above",
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
-    above: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
@@ -698,14 +698,17 @@ def get_ssp_vectors(
 
         speed = compute_speed_grosmark(position)
 
-        if above:
+        if mode == "above":
             idx_keep = above_threshold_for_n_consecutive_samples(
                 speed, threshold=speed_threshold, n_samples=n_consecutive_samples
             )
-        else:
+        elif mode == "below":
             idx_keep = below_threshold_for_n_consecutive_samples(
                 speed, threshold=speed_threshold, n_samples=n_consecutive_samples
             )
+        elif mode == "all":
+            # don't filter for speed
+            idx_keep = np.ones_like(speed, dtype=bool)
         # Take the ITI out
         idx_keep = idx_keep & (position < 180)
         frames_keep = np.unique(frame_position[idx_keep])
