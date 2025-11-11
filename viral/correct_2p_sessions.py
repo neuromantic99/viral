@@ -4,12 +4,6 @@ performing a series of checks before appending this information.
 However, a range of user-dependent or experimental circumstances can occasionally cause the caching process to fail.
 In these cases, manual correction is required."""
 
-"""cache_2p_sessions.py is responsible for adding frame stamps and time stamps to behavioural event data.
-It processes imaging files (.tiff), behavioural events (trial.json), and the corresponding synchronisation file (DAQami) as inputs,
-performing a series of checks before appending this information.
-However, a range of user-dependent or experimental circumstances can occasionally cause the caching process to fail.
-In these cases, manual correction is required."""
-
 import sys
 import numpy as np
 from pathlib import Path
@@ -159,8 +153,6 @@ def jb031_2025_03_31(c: SessionCorrection) -> SessionCorrection:
 
 # Ex.: classic case of manual 'focus' without grabbing, resulting in a daq chunk with no associated tiff frames.
 # The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
-# Ex.: classic case of manual 'focus' without grabbing, resulting in a tiff stack with no associated DAQ chunk.
-# The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
 @register_correction("JB031", "2025-04-01")
 def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
@@ -181,10 +173,6 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-# Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
-# The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
-# The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
-# so that the DAQ signals keep on being aligned while the pre_session_epoch will be skipped.
 # Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
 # The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
 # The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
@@ -263,14 +251,13 @@ def jb031_2025_04_07(c: SessionCorrection) -> SessionCorrection:
     # "Forgot to start the DAQami before pre-trial wheel blocking.[...]
     # Readjusted imaging plane between wheel-blocking and main task as focus appeared to drift. First few trials were not imaged, as I had to adjust focal plane. [...]
     # Focal plane was readjusted before post-trial wheel blocking.[...]"
-    # TODO: delete those 506 and 319 frames chunks?
+    # visually inspected "2025-04-07_JB031_.leftHem_2x_00002.tif" and "2025-04-07_JB031_.leftHem_2x_00003.tif" -> decided to keep
     c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [1, 4, 5, 6])
     c.stack_lengths_tiffs = np.delete(c.stack_lengths_tiffs, [0])
     c.all_tiff_timestamps = c.all_tiff_timestamps[27000:]
-    c.epochs = np.delete(c.epochs, [1], axis=0)
+    c.epochs = np.delete(c.epochs, [0], axis=0)
     c.frame_times_daq = np.concatenate(
         [
-            c.frame_times_daq[:508],
             c.frame_times_daq[sum([508, 3127]) : sum([508, 3127, 321, 164381])],
             c.frame_times_daq[sum([508, 3127, 321, 164381, 324, 424, 1299]) :],
         ]

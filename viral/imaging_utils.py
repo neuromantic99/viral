@@ -35,8 +35,10 @@ def load_imaging_data(
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
-    spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
-    denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
+    # spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
+    # denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
+    spks = np.load(s2p_path / "spks.npy")[iscell, :]
+    denoised = np.load(s2p_path / "spks.npy")[iscell, :]
 
     f_raw = np.load(s2p_path / "F.npy")[iscell, :]
     f_neu = np.load(s2p_path / "Fneu.npy")[iscell, :]
