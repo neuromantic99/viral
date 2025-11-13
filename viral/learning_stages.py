@@ -157,7 +157,9 @@ class PlaceCellResults:
         self,
         cache_umbrella: Path,
         genotype: str,
-        plot_type: Literal["corridor_activity", "tuning"],
+        plot_type: Literal[
+            "corridor_activity", "landmark_tuning", "landmark_speed_tuning"
+        ],
         verbose: bool = False,
     ) -> None:
         self.smoothed_matrix_files = list(
@@ -225,7 +227,15 @@ class PlaceCellResults:
         mask = smoothed_matrix[pcs_combined, :] > place_threshold[pcs_combined, :]
         if self.plot_type == "corridor_activity":
             return np.sum(mask, axis=0) / mask.shape[0]
-        return self.landmark_tuning(mask)
+        elif self.plot_type == "landmark_speed_tuning":
+            with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
+                session = Cached2pSession.model_validate_json(f.read())
+            speed = get_speed_summary(
+                session, rewarded=rewarded, config=grosmark_config
+            )
+            return self.landmark_speed_tuning(speed)
+        else:
+            return self.landmark_tuning(mask)
 
     def landmark_tuning(self, mask: np.ndarray) -> float:
         n_bins = mask.shape[1]
@@ -262,6 +272,43 @@ class PlaceCellResults:
                 )
             )
             result.append(n_cells_in / n_cells_out)
+
+        return np.mean(result)
+
+    def landmark_speed_tuning(self, speed: np.ndarray) -> float:
+        n_bins = speed.shape[1]
+        assert (
+            n_bins
+            == (grosmark_config.end - grosmark_config.start) / grosmark_config.bin_size
+        )
+        bin_to_cm_scaling_factor = (
+            grosmark_config.end - grosmark_config.start
+        ) / n_bins
+        mean_speed = np.nanmean(speed, axis=0)
+        result = list()
+        for landmark_center in self.LANDMARK_LOCATIONS:
+            landmark_bin_center = int(landmark_center / bin_to_cm_scaling_factor)
+            start_inside = int(landmark_bin_center - (5 / bin_to_cm_scaling_factor))
+            end_inside = int(landmark_bin_center + (5 / bin_to_cm_scaling_factor))
+            mean_speed_inside = np.nanmean(mean_speed[start_inside:end_inside])
+            start_outside_left = landmark_bin_center - int(
+                10 / bin_to_cm_scaling_factor
+            )
+            end_outside_right = landmark_bin_center + int(10 / bin_to_cm_scaling_factor)
+            mean_speed_outside = np.mean(
+                np.concatenate(
+                    (
+                        np.sum(
+                            speed[:, int(start_outside_left) : int(start_inside)],
+                            axis=0,
+                        ),
+                        np.sum(
+                            speed[:, int(end_inside) : int(end_outside_right)], axis=0
+                        ),
+                    )
+                )
+            )
+            result.append(mean_speed_inside / mean_speed_outside)
 
         return np.mean(result)
 
@@ -720,5 +767,138 @@ def landmark_comparison_plot() -> None:
     1 / 0
 
 
+def landmark_speed_comparison_plot() -> None:
+    wt = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="WT",
+        plot_type="landmark_speed_tuning",
+    )
+    wt.driver()
+    nlgf = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="NLGF",
+        plot_type="landmark_speed_tuning",
+    )
+    nlgf.driver()
+
+    result = {
+        "genotype": [],
+        "stage_name": [],
+        "landmark_speed_tuning": [],
+        "rewarded": [],
+    }
+
+    for genotype_name, genotype_data in zip(["WT", "NLGF"], [wt, nlgf]):
+        for stage, data in zip(
+            ["unsupervised", "learning", "learned"],
+            [
+                genotype_data.unsupervised,
+                genotype_data.learning,
+                genotype_data.learned,
+            ],
+        ):
+            stage_name = "Baseline" if stage == "unsupervised" else "Trained"
+            result["genotype"].extend(
+                [genotype_name] * (len(data["rewarded"]) + len(data["unrewarded"]))
+            )
+            result["stage_name"].extend(
+                [stage_name] * (len(data["rewarded"]) + len(data["unrewarded"]))
+            )
+            result["landmark_speed_tuning"].extend(
+                data["rewarded"] + data["unrewarded"]
+            )
+            result["rewarded"].extend(
+                [True] * len(data["rewarded"]) + [False] * len(data["unrewarded"])
+            )
+    df = pd.DataFrame(result)
+
+    plt.clf()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    for rewarded, ax in zip([True, False], axes):
+        sns.boxplot(
+            data=df[df["rewarded"] == rewarded],
+            x="stage_name",
+            y="landmark_speed_tuning",
+            hue="genotype",
+            hue_order=["WT", "NLGF"],
+            palette=palette,
+            showfliers=False,
+            ax=ax,
+        )
+        sns.stripplot(
+            data=df[df["rewarded"] == rewarded],
+            x="stage_name",
+            y="landmark_speed_tuning",
+            hue="genotype",
+            hue_order=["WT", "NLGF"],
+            palette=palette,
+            dodge=True,
+            linewidth=1,
+            edgecolor="black",
+            ax=ax,
+        )
+        ax.set_title("Rewarded" if rewarded else "Unrewarded")
+        ax.set_xlabel("Stage")
+
+        if ax is axes[0]:
+            ax.set_ylabel("Landmark speed tuning index")
+
+        ax.axhline(0, color="grey", linestyle="--")
+
+    handles, labels = axes[1].get_legend_handles_labels()
+    # remove per-axis legends
+    if axes[0].get_legend() is not None:
+        axes[0].get_legend().remove()
+    if axes[1].get_legend() is not None:
+        axes[1].get_legend().remove()
+    fig.legend(handles[:2], labels[:2], loc="upper center", ncol=2)
+    sns.despine()
+    plt.ylim(None, 0.5)
+
+    for idx, rewarded in enumerate([True, False]):
+        ymin_plot, ymax_plot = axes[idx].get_ylim()
+        plot_range = ymax_plot - ymin_plot
+        text_y = (
+            ymax_plot - plot_range * 0.02
+        )  # place text just below the top of the axis
+
+        for i, stage in enumerate(["Baseline", "Trained"]):
+            p_value = stats.ttest_ind(
+                df[
+                    (df["stage_name"] == stage)
+                    & (df["genotype"] == "WT")
+                    & (df["rewarded"] == rewarded)
+                ]["landmark_speed_tuning"],
+                df[
+                    (df["stage_name"] == stage)
+                    & (df["genotype"] == "NLGF")
+                    & (df["rewarded"] == rewarded)
+                ]["landmark_speed_tuning"],
+            ).pvalue
+            p_text = f"P = {p_value:.2g}"
+            axes[idx].text(i, text_y, p_text, ha="center", va="top")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "landmark_tuning"
+        / f"landmark_speed_tuning_comparison_plot.png"
+    )
+    1 / 0
+
+
 if __name__ == "__main__":
-    reward_discrimination_comparison_plot()
+    # reward_discrimination_comparison_plot()
+    # place_cell_result = PlaceCellResults(
+    #     SERVER_PATH / "viral_caches" / "place_cells",
+    #     genotype="wt",
+    #     plot_type="landmark_speed_tuning",
+    # )
+    # place_cell_result.driver()
+    # result = place_cell_result.collapsed_matrix_result("JB026", "unsupervised", True)
+    # 1 / 0
+    landmark_speed_comparison_plot()

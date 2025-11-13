@@ -60,7 +60,7 @@ SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
         "learned": "2025-03-14",
     },
     # Imaging was ok for the first few days but then degraded to become not usable
-    "JB031": {"unsupervised": "2025-03-07", "learning": "2025-03-12", "learned": None},
+    # "JB031": {"unsupervised": "2025-03-07", "learning": "2025-03-12", "learned": None},
     "JB033": {
         "unsupervised": "2025-03-13",
         "learning": "2025-03-17",
