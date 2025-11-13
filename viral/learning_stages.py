@@ -298,13 +298,8 @@ class PlaceCellResults:
             mean_speed_outside = np.mean(
                 np.concatenate(
                     (
-                        np.sum(
-                            speed[:, int(start_outside_left) : int(start_inside)],
-                            axis=0,
-                        ),
-                        np.sum(
-                            speed[:, int(end_inside) : int(end_outside_right)], axis=0
-                        ),
+                        mean_speed[start_outside_left:start_inside],
+                        mean_speed[end_inside:end_outside_right],
                     )
                 )
             )
@@ -846,7 +841,7 @@ def landmark_speed_comparison_plot() -> None:
         if ax is axes[0]:
             ax.set_ylabel("Landmark speed tuning index")
 
-        ax.axhline(0, color="grey", linestyle="--")
+        ax.axhline(1, color="grey", linestyle="--")
 
     handles, labels = axes[1].get_legend_handles_labels()
     # remove per-axis legends
@@ -856,7 +851,7 @@ def landmark_speed_comparison_plot() -> None:
         axes[1].get_legend().remove()
     fig.legend(handles[:2], labels[:2], loc="upper center", ncol=2)
     sns.despine()
-    plt.ylim(None, 0.5)
+    # plt.ylim(-0.5, 0.5)
 
     for idx, rewarded in enumerate([True, False]):
         ymin_plot, ymax_plot = axes[idx].get_ylim()
