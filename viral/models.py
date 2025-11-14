@@ -214,13 +214,14 @@ class BayesianDecodingConfig:
     peak_threshold: float  # SDs above mean
     edge_threshold: float  # SDs above mean
     event_duration: Tuple[float, float]  # min, max (frames)
-    bin_size_time_online: int  # frames
     bin_size_time_offline: int  # frames
+    bin_size_time_online: int  # frames
     bin_size_spatial: int  # cms
-    en_bloc: bool = True  # whether to decode en bloc or pse event by pse event
-    online: bool = (
-        True  # True for the online epoch, False for the offline post wheel freeze epoch
+    en_bloc: bool  # whether to decode en bloc or pse event by pse event
+    online: (
+        bool  # True for the online epoch, False for the offline post wheel freeze epoch
     )
+    sigma: int  # frames (for the convolving with Gaussian kernel bit)
 
 
 # TODO: rethink this, currently unused

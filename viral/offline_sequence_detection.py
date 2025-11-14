@@ -16,7 +16,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA
+from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA, PLOT_PATH
 from viral.models import (
     Cached2pSession,
     GrosmarkConfig,
@@ -26,7 +26,6 @@ from viral.models import (
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     get_session_type,
-    shuffle_rows,
     get_genotype,
 )
 from viral.imaging_utils import split_fluoresence_online_freeze, trial_is_imaged
@@ -35,24 +34,21 @@ from viral.ensemble_reactivation import get_ssp_vectors
 from viral.sessions_keep import SESSIONS_KEEP
 
 
-# TODO: is this the "right Ssp"? This is hard to understand
 def get_population_vector(ssp: np.ndarray) -> np.ndarray:
     """
     Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
     mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored.
     """
-
-    # TODO: which Ssp?
     sigma = 125 / 1000 * 30  # 125 ms kernel
     smoothed = np.apply_along_axis(gaussian_filter1d, axis=1, arr=ssp, sigma=sigma)
 
-    # TODO: which axis?
+    # TODO: check axis?
     z_scored = zscore(smoothed, axis=1)
     # Remove nans from silent neurons
     z_scored = np.nan_to_num(z_scored)
 
-    # TODO: which axis?
+    # TODO: check axis?
     return zscore(np.mean(z_scored, axis=0))
 
 
@@ -70,8 +66,6 @@ def find_pse_events(
     """
 
     # TODO: is the z_scored population activity vector the one with the z_scored means????
-
-    # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
     # TODO: is this always one??
     population_vector_sd = np.std(population_vector)
     # find all peaks above 3.5 SD
@@ -194,17 +188,21 @@ def offline_sequence_bayesian_decoding(
     buffer = 12
     # TODO: or copy the frames bin_size rather than the time bin_size from Grosmark?
     # bin_length_time_online = config.bin_size_time_online / 30  # seconds
-    bin_length_time_offline = config.bin_size_time_offline / 30  # seconds
+    bin_length_time = (
+        config.bin_size_time_online / 30
+        if config.online
+        else config.bin_size_time_offline / 30
+    )  # seconds
     n_time_bins = offline_activity_binned.shape[1]
     n_spatial_bins = place_fields.shape[1]
 
     Cr = offline_activity_binned.T  # shape: (n_time_bins, n_cells)
     rate_map = place_fields  # shape: (n_cells, n_spatial_bins)
 
-    Cr = Cr * bin_length_time_offline
+    Cr = Cr * bin_length_time
     rate_map = place_fields.T + (10 ** (-10))
 
-    term2 = (-bin_length_time_offline) * np.sum(rate_map, axis=1)
+    term2 = (-bin_length_time) * np.sum(rate_map, axis=1)
 
     Pr = np.zeros((n_time_bins, n_spatial_bins))
 
@@ -232,19 +230,20 @@ def offline_sequence_bayesian_decoding(
     # TODO: it is the same!!!
 
 
-def shuffle_pse_event(
-    posterior_probability_matrix: np.ndarray, n_shuffles: int = 5
-) -> np.ndarray:
-    """
-    "While several shuffle approaches were used (Extended Data Fig. 6),
-    the principal shuffle used in the main figures involved the random re-ordering (resampling without replacement)
-    of the bins observed within a given event."
-    "'timeBinPermutation': permutes (resamples without replacement)"
-    # TODO Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m time bin permutation
-    """
-    # TODO: check actual shape
-    # TODO: make this an empirical P value function?
-    return shuffle_rows(posterior_probability_matrix)
+# TODO: remove as unused (we didn't find meaningful PSE events so far)
+# def shuffle_pse_event(
+#     posterior_probability_matrix: np.ndarray, n_shuffles: int = 5
+# ) -> np.ndarray:
+#     """
+#     "While several shuffle approaches were used (Extended Data Fig. 6),
+#     the principal shuffle used in the main figures involved the random re-ordering (resampling without replacement)
+#     of the bins observed within a given event."
+#     "'timeBinPermutation': permutes (resamples without replacement)"
+#     # TODO Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m time bin permutation
+#     """
+#     # TODO: check actual shape
+#     # TODO: make this an empirical P value function?
+#     return shuffle_rows(posterior_probability_matrix)
 
 
 def plot_pse_event(
@@ -274,7 +273,9 @@ def plot_pse_event(
     # )
     plt.tight_layout()
     plt.savefig(
-        f"plots/pse_events/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_event{idx}.png"
+        PLOT_PATH
+        / "pse_events"
+        / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_event{idx}.png"
     )
 
 
@@ -291,6 +292,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
     en bloc decoding:       Decode the entire period (online or offline) at once
     per PSE event decoding: Detect PSE events, then decode each detected PSE event separately
     """
+    # careful when decoding a train-test-split online session en bloc (place cell thresholds will shift)
     use_cache = False
 
     # did show a little bit
@@ -308,37 +310,33 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
     # mouse = "JB035"
     # date = "2025-07-11"
 
-    # TODO: done this
-    # looks like landmarks???????
+    # looks like landmarks
     # mouse = "JB034"
     # date = "2025-07-04"
 
-    # TODO: implement doing this on ITI as well
-    # use_ITI = True
-
     # TODO: time bin 2, spatial bin 5 or 10 cm
-    # CAUTION: spatial bin size in GrosmarkConfig!
+
+    # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
+    # so, 33 ms would be 1 frame for offline (changed it to 2 frames) and 333 ms would be 10 frames for online decoding
     bayesian_config = BayesianDecodingConfig(
-        en_bloc=True,
-        online=True,
-        # peak_threshold=3.5,
-        peak_threshold=2,
-        edge_threshold=0,
+        en_bloc=False,
+        online=False,
+        sigma=(125 / 1000) * 30,
+        peak_threshold=3.5,
+        # peak_threshold=2,
+        # edge_threshold=0,
+        edge_threshold=1,
         event_duration=(6, 30),
-        bin_size_time_online=10,
-        # TODO: currently bin_size_time_online is unused (bin_size_time_offline is used in every case)
         bin_size_time_offline=2,
+        bin_size_time_online=10,
         bin_size_spatial=5,
     )
-
-    # can't use cached place cell threshold when doing a train/test split
-    # use_cache = False if bayesian_config.online else True
 
     train_size = 0.5  # fraction of trials used to get place cells (online only)
 
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
-        start=0,  # 0
+        start=0,
         end=180,
     )
 
@@ -378,7 +376,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
     session.trials = trials_train
 
     cache_file = Path(
-        f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{f"online" if bayesian_config.online else "offline"}_{f"en_bloc" if bayesian_config.en_bloc else "per_event"}_place_cells.npz"
+        f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_{"en_bloc" if bayesian_config.en_bloc else "per_event"}_place_cells.npz"
     )
 
     if cache_file.exists():
@@ -408,20 +406,24 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
 
     place_cells = spks[pcs_mask, :]
 
+    # TODO: is ssp test the correct one? (in terms of convolution)
+
     if bayesian_config.online:
         # use the test trials for decoding
 
-        # TODO: change back!
         # all trial frames
-        ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, "all")
+        # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, bayesian_config.sigma, "all", 5, 3 * 30)
 
         # phases of mobility
-        # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells)
+        ssp_test, positions_test = get_ssp_vectors(
+            trials_test, place_cells, bayesian_config.sigma, "above", 5, 3 * 30
+        )
 
         # phases of immobility
         # ssp_test = get_ssp_vectors(
         #     trials=trials_test,
         #     place_cells=spks,
+        #     sigma=bayesian_config.sigma,
         #     mode="below",
         #     speed_threshold=1,
         #     n_consecutive_samples=3 * 30,
@@ -431,10 +433,10 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         _, _, offline = split_fluoresence_online_freeze(
             flu=place_cells, wheel_freeze=session.wheel_freeze
         )
-        sigma = 30
+        # TODO: is this sigma correct?
         ssp_test = gaussian_filter1d(
             input=offline,
-            sigma=sigma,
+            sigma=bayesian_config.sigma,
             axis=1,
         )
 
@@ -445,26 +447,6 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         if len(pse_events) == 0:
             print("No PSE events found, exiting")
             return
-
-        # TODO: just for debugging, remove eventually
-        plt.figure()
-        plt.plot(population_vector)
-        for event_start, event_end in pse_events:
-            plt.vlines(
-                event_start,
-                ymin=min(population_vector),
-                ymax=max(population_vector),
-                colors="r",
-            )
-            plt.vlines(
-                event_end,
-                ymin=min(population_vector),
-                ymax=max(population_vector),
-                colors="b",
-            )
-        plt.savefig(
-            f"plots/{session.date}_{session.mouse_name}_population_vector_{"online" if bayesian_config.online else "offline"}.png"
-        )
 
         pse_activity = [ssp_test[:, start:end] for start, end in pse_events]
 
@@ -604,18 +586,18 @@ def get_statistics_actual_vs_decoded_position(genotype: str) -> pd.DataFrame:
             else:
                 try:
                     positions, pr_max = main(mouse_name, date)
-                except Exception as e:
+                except (ValueError, FileNotFoundError, KeyError) as e:
                     print(f"Error processing {mouse_name} at {stage} stage: {e}")
                     continue
             if positions is None or pr_max is None:
                 continue
-            # cm = confusion_matrix(y_true=positions, y_pred=pr_max)
             r_square = r2_score(y_true=positions, y_pred=pr_max)
+            # TODO: bin_size_spatial is hardcoded here, as is n_bins
+            y_true_bins = bin_for_classification(positions, 5, 180 // 5)
+            y_pred_bins = bin_for_classification(pr_max, 5, 180 // 5)
             # TODO: think about the averaging method
-            # TODO: bin_size_spatial is hardcoded here
-            y_true_bins = prepare_for_classification(positions, 5)
-            y_pred_bins = prepare_for_classification(pr_max, 5)
             f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
+            # f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="macro")
             result["stage"].append(stage)
             result["r2"].append(r_square)
             result["f1"].append(f1)
@@ -730,20 +712,22 @@ def plot_decoded_vs_actual_position_f1() -> None:
         # place legend centered relative to the axes (not the whole figure)
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
 
-    # plt.savefig(
-    #     SERVER_PATH
-    #     / "viral_plots"
-    #     / "decoded_vs_actual_positions"
-    #     / "actual_vs_decoded_f1score_macro.png"
-    # )
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "decoded_vs_actual_positions"
+        / "actual_vs_decoded_f1score.png"
+    )
     # plt.savefig(Path("plots") / "actual_vs_decoded_f1score_macro.png")
-    plt.savefig(Path("plots") / "actual_vs_decoded_f1score_weighted.png")
+    # plt.savefig(Path("plots") / "actual_vs_decoded_f1score_weighted.png")
 
 
-def prepare_for_classification(
-    position_array: np.ndarray, bin_size_spatial: int
+def bin_for_classification(
+    position_array: np.ndarray, bin_size_spatial: int, n_bins: int
 ) -> np.ndarray:
-    return np.floor(position_array / bin_size_spatial).astype(int)
+    binned_positions = np.floor(position_array / bin_size_spatial).astype(int)
+    # clip to valid spatial bins
+    return np.clip(binned_positions, 0, n_bins - 1)
 
 
 def plot_confusion_matrix_actual_vs_decoded_position(
@@ -756,10 +740,10 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     landmarks_cm = [45, 90, 135]
     landmarks = [l / bayesian_config.bin_size_spatial for l in landmarks_cm]
 
-    y_true_bins = prepare_for_classification(
+    y_true_bins = bin_for_classification(
         actual_position, bayesian_config.bin_size_spatial
     )
-    y_pred_bins = prepare_for_classification(
+    y_pred_bins = bin_for_classification(
         decoded_position, bayesian_config.bin_size_spatial
     )
 
@@ -782,9 +766,10 @@ def plot_confusion_matrix_actual_vs_decoded_position(
 
 
 if __name__ == "__main__":
-    # for mouse_name in SESSIONS_KEEP.keys():
-    #     for stage, date in SESSIONS_KEEP[mouse_name].items():
-    #         print(f"Processing {mouse_name} - {stage} - {date}")
-    #         main(mouse_name, date)
+    for mouse_name in SESSIONS_KEEP.keys():
+        for stage, date in SESSIONS_KEEP[mouse_name].items():
+            print(f"Processing {mouse_name} - {stage} - {date}")
+            if date:
+                main(mouse_name, date)
     # plot_decoded_vs_actual_position_rsquare()
-    plot_decoded_vs_actual_position_f1()
+    # plot_decoded_vs_actual_position_f1()

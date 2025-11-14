@@ -661,6 +661,7 @@ def plot_grosmark_panel(
 def get_ssp_vectors(
     trials: List[TrialInfo],
     place_cells: np.ndarray,
+    sigma: int = 30,
     mode: Literal["above", "below", "all"] = "above",
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
@@ -676,7 +677,6 @@ def get_ssp_vectors(
     'PC run running-bout spike estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel
         corresponding to behavioral timescales.'
     """
-    sigma = 30
     ssp_vectors = []
     position_vectors = []
 
