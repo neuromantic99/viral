@@ -691,3 +691,16 @@ def mixed_effects(
     mdf = md.fit(reml=False)
     assert mdf.converged, "MixedLM did not converge for resting baseline firing rates"
     return mdf.pvalues
+
+
+def interpolate_nans_vector(arr: np.ndarray) -> np.ndarray:
+    assert arr.ndim == 1, "Input array must be one-dimensional"
+    # arr = np.asarray(arr, dtype=float)
+    nans = np.isnan(arr)
+
+    if not nans.any():
+        return arr  # nothing to do
+
+    x = np.arange(len(arr))
+    arr[nans] = np.interp(x[nans], x[~nans], arr[~nans])
+    return arr

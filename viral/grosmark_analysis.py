@@ -34,6 +34,7 @@ from viral.utils import (
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
+    interpolate_nans_vector,
     remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
@@ -417,14 +418,13 @@ def correlations_vs_peak_distance(
     plot: bool = False,
 ) -> tuple[float, tuple[np.ndarray, np.ndarray]]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
-    distance between their place field peaks.
-
+        distance between their place field peaks.
     Args:
-    corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
-    peak_position_cm: the position of the peak firing rate of each neuron in cm
-    colour: colour for the plot
-    label: label for the plot
-    plot: whether to plot
+        corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
+        peak_position_cm: the position of the peak firing rate of each neuron in cm
+        colour: colour for the plot
+        label: label for the plot
+        plot: whether to plot
     """
 
     n_cells = corrs.shape[0]
@@ -460,7 +460,13 @@ def correlations_vs_peak_distance(
     # Need to put this back if grosmarking
     # r, p = pearsonr(x, y)
     # return r, p
-    m = compute_linear_slope((np.array(x) / 60), np.array(y) / y[0])
+    x = np.array(x)
+    y = np.array(y)
+
+    y = interpolate_nans_vector(y)
+
+    m = compute_linear_slope((x / 60), y / y[0])
+
     return m, (np.array(x), np.array(y))
 
 
