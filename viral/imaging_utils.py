@@ -209,7 +209,9 @@ def get_resting_position_and_frames(
 
 
 def get_online_position_and_frames(
-    trial: TrialInfo, wheel_circumference: float, threshold_speed: bool = True
+    trial: TrialInfo,
+    wheel_circumference: float,
+    threshold_speed: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
     smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
@@ -254,6 +256,7 @@ def activity_trial_position(
     verbose: bool = False,
     do_shuffle: bool = False,
     threshold_speed: bool = True,
+    bin_occupancy_divide: bool = False,
 ) -> np.ndarray:
     """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
     trial: TrialInfo
@@ -280,6 +283,10 @@ def activity_trial_position(
             ]
         )
         dff_bin = flu[:, frame_idx_bin]
+        if bin_occupancy_divide:
+            dff_bin = (
+                dff_bin / len(frame_idx_bin) if len(frame_idx_bin) > 0 else dff_bin
+            )
 
         if verbose:
             print(f"bin_start: {bin_start}")

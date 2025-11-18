@@ -101,6 +101,7 @@ def get_place_cells(
     spks: np.ndarray,
     config: GrosmarkConfig,
     rewarded: bool | None,
+    bin_occupancy_divide: bool = False,
     plot: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -145,6 +146,8 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
+                threshold_speed=False if bin_occupancy_divide else True,
+                bin_occupancy_divide=bin_occupancy_divide,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
@@ -163,7 +166,7 @@ def get_place_cells(
         / "viral_caches"
         / "place_cells"
         / variable_name
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
     )
 
     if use_cache and get_cache_path("place_threshold").exists():
@@ -192,6 +195,8 @@ def get_place_cells(
                             max_position=config.end,
                             verbose=False,
                             do_shuffle=True,
+                            threshold_speed=False if bin_occupancy_divide else True,
+                            bin_occupancy_divide=bin_occupancy_divide,
                         )
                         for trial in session.trials
                         if trial_is_imaged(trial)

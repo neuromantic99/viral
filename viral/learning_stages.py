@@ -143,9 +143,14 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
     )
     spks = np.load(spks_path / "oasis_spikes.npy")
 
-    for rewarded in [False, True]:
+    for rewarded in [False, True, None]:
         pcs_mask, smoothed_matrix, place_threshold = get_place_cells(
-            session=session, spks=spks, rewarded=rewarded, config=config, plot=False
+            session=session,
+            spks=spks,
+            rewarded=rewarded,
+            config=config,
+            plot=False,
+            bin_occupancy_divide=True,
         )
 
 
@@ -721,4 +726,7 @@ def landmark_comparison_plot() -> None:
 
 
 if __name__ == "__main__":
-    reward_discrimination_comparison_plot()
+    for mouse_name, dates in SESSIONS_KEEP.items():
+
+        for stage, date in dates.items():
+            store_place_cell_result(mouse_name, date, config=grosmark_config)
