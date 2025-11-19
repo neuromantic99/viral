@@ -28,23 +28,24 @@ from viral.utils import (
     get_session_type,
     get_genotype,
 )
-from viral.imaging_utils import split_fluoresence_online_freeze, trial_is_imaged
+from viral.imaging_utils import (
+    split_fluoresence_online_freeze,
+    trial_is_imaged,
+    shuffle_rows,
+)
 from viral.grosmark_analysis import get_place_cells
 from viral.ensemble_reactivation import get_ssp_vectors
 from viral.sessions_keep import SESSIONS_KEEP
 
 
-def get_population_vector(ssp: np.ndarray) -> np.ndarray:
+def get_population_vector(ssp_smoothed: np.ndarray) -> np.ndarray:
     """
     Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
     mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored.
     """
-    sigma = 125 / 1000 * 30  # 125 ms kernel
-    smoothed = np.apply_along_axis(gaussian_filter1d, axis=1, arr=ssp, sigma=sigma)
-
     # TODO: check axis?
-    z_scored = zscore(smoothed, axis=1)
+    z_scored = zscore(ssp_smoothed, axis=1)
     # Remove nans from silent neurons
     z_scored = np.nan_to_num(z_scored)
 
@@ -230,20 +231,74 @@ def offline_sequence_bayesian_decoding(
     # TODO: it is the same!!!
 
 
-# TODO: remove as unused (we didn't find meaningful PSE events so far)
-# def shuffle_pse_event(
-#     posterior_probability_matrix: np.ndarray, n_shuffles: int = 5
-# ) -> np.ndarray:
-#     """
-#     "While several shuffle approaches were used (Extended Data Fig. 6),
-#     the principal shuffle used in the main figures involved the random re-ordering (resampling without replacement)
-#     of the bins observed within a given event."
-#     "'timeBinPermutation': permutes (resamples without replacement)"
-#     # TODO Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m time bin permutation
-#     """
-#     # TODO: check actual shape
-#     # TODO: make this an empirical P value function?
-#     return shuffle_rows(posterior_probability_matrix)
+def calculate_linear_weighted_correlations(
+    posterior_probability_matrix: np.ndarray,
+) -> np.ndarray:
+    """
+    "Where posj is the jth spatial bin, bini is the ith temporal (two frame) bin in the event,
+    Prij is the Bayesian posterior probability for that spatial bin at that temporal bin,
+    M is the total number of temporal bins and N is the total number of spatial bins."
+
+    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcWeightedLinearCorr.m
+    """
+    n_time, n_pos = posterior_probability_matrix.shape
+
+    time_coords = np.repeat(np.arange(n_time), n_pos)
+    pos_coords = np.tile(np.arange(n_pos), n_time)
+
+    xy = np.column_stack((time_coords, pos_coords))
+
+    w = posterior_probability_matrix.flatten()
+    if np.isnan(np.any(w)):
+        raise ValueError("Encountered NaN in posterior probability matrix")
+
+    w = w / np.sum(w)
+
+    # weighted means
+    mxy = np.sum(xy * w[:, None], axis=0)
+
+    # weighted covariance terms
+    covxy = np.sum(w * (xy[:, 0] - mxy[0]) * (xy[:, 1] - mxy[1]))
+    covxx = np.sum(w * (xy[:, 0] - mxy[0]) ** 2)
+    covyy = np.sum(w * (xy[:, 1] - mxy[1]) ** 2)
+
+    return covxy / np.sqrt(covxx * covyy)
+    # TODO: check against Matlab!
+    # TODO: it was close (5.165097433127688233e-04 vs 5.165097433127881e-04) on default settings (rtol=1e-05, atol=1e-08)
+
+
+def check_significance_pse_event(
+    posterior_probability_matrix: np.ndarray,
+    n_shuffles: int = 2000,
+    significance: float = 0.05,
+) -> np.ndarray:
+    """
+    "For each event, the observed weighted circo-linear correlation coefficients weightedr(circular), hereafter referred to as weighted-r,
+    was compared to a distribution of 2,000 null weighted-r values either by z-scoring the observed value by the null values (rZ score) or
+    as the empirical P value.
+    While several shuffle approaches were used (Extended Data Fig. 6),
+    the principal shuffle used in the main figures involved the random re-ordering (resampling without replacement)
+    of the bins observed within a given event."
+    "'timeBinPermutation': permutes (resamples without replacement)"
+
+    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m
+    """
+    # as we don't have a circular run belt but a linear corridor, we are using the weighted linear correlation coefficients
+    weighted_r = calculate_linear_weighted_correlations(posterior_probability_matrix)
+    print(f"Linear weighted correlation: {weighted_r}")
+    shuffled_weighted_rs = list()
+    for i in range(n_shuffles):
+        shuffled = shuffle_rows(posterior_probability_matrix)
+        shuffled_weighted_rs.append(calculate_linear_weighted_correlations(shuffled))
+    r_real = np.abs(weighted_r)
+    # TODO: it isn't clear, should the raw pse activity or the ppm be shuffled?
+    r_shuffled = np.abs(shuffled_weighted_rs)
+    empirical_p = np.mean(r_shuffled >= r_real)
+    rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
+    print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
+    return empirical_p < significance
+    # TODO: they use Radon whatever, do we need it as well? (I think because of using the absolute values, the direction isn't correctly accounted for)
+    return
 
 
 def plot_pse_event(
@@ -255,7 +310,12 @@ def plot_pse_event(
     bayesian_config: BayesianDecodingConfig,
 ) -> None:
     plt.figure(figsize=(5, 4))
-    plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.07, aspect="auto")
+    plt.imshow(
+        posterior_probability_matrix.T,
+        vmin=0,
+        vmax=np.max(posterior_probability_matrix) * 1.1,
+        aspect="auto",
+    )
     plt.colorbar()
     # plt.xlabel("Time (seconds)")
     # xtick_bins = np.linspace(0, posterior_probability_matrix.shape[0] - 1, 2)
@@ -321,7 +381,9 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
     bayesian_config = BayesianDecodingConfig(
         en_bloc=False,
         online=False,
-        sigma=(125 / 1000) * 30,
+        # TODO: or is the 125 ms sigma also just offline and 1 s for online????
+        sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
+        sigma_online=30,  # "1 s Gaussian kernel"
         peak_threshold=3.5,
         # peak_threshold=2,
         # edge_threshold=0,
@@ -379,7 +441,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_{"en_bloc" if bayesian_config.en_bloc else "per_event"}_place_cells.npz"
     )
 
-    if cache_file.exists():
+    if cache_file.exists and use_cache:
         npz = np.load(cache_file)
         pcs_mask = npz["pcs_mask"]
         place_fields = npz["place_fields"]
@@ -392,7 +454,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
             session=session,
             spks=spks,
             rewarded=None,
-            use_cache=use_cache,
+            use_cache=True,  # TODO: change to False for online!!!
             config=grosmark_config,
             plot=False,
         )
@@ -412,18 +474,18 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         # use the test trials for decoding
 
         # all trial frames
-        # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, bayesian_config.sigma, "all", 5, 3 * 30)
+        # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, bayesian_config.sigma_online, "all", 5, 3 * 30)
 
         # phases of mobility
         ssp_test, positions_test = get_ssp_vectors(
-            trials_test, place_cells, bayesian_config.sigma, "above", 5, 3 * 30
+            trials_test, place_cells, bayesian_config.sigma_online, "above", 5, 3 * 30
         )
 
         # phases of immobility
         # ssp_test = get_ssp_vectors(
         #     trials=trials_test,
         #     place_cells=spks,
-        #     sigma=bayesian_config.sigma,
+        #     sigma=bayesian_config.sigma_online,
         #     mode="below",
         #     speed_threshold=1,
         #     n_consecutive_samples=3 * 30,
@@ -436,7 +498,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         # TODO: is this sigma correct?
         ssp_test = gaussian_filter1d(
             input=offline,
-            sigma=bayesian_config.sigma,
+            sigma=bayesian_config.sigma_offline,
             axis=1,
         )
 
@@ -452,6 +514,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
 
         # TODO: why can place_fields contain NaNs???
 
+        significant_events = list()
         for idx, event in enumerate(pse_activity):
             posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
                 event,
@@ -466,18 +529,28 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
                 grosmark_config,
                 bayesian_config,
             )
+            if check_significance_pse_event(posterior_probability_matrix):
+                significant_events.append(event)
+        print(f"Found {len(significant_events)} significant events")
     else:
         posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
             ssp_test,
             place_fields=place_fields[pcs_mask, :],
             config=bayesian_config,
         )
-        plt.figure(figsize=(10, 4))
-        plt.imshow(posterior_probability_matrix.T, vmin=0, vmax=0.05, aspect="auto")
+        plt.figure(figsize=(25, 4))
+        plt.imshow(
+            posterior_probability_matrix.T,
+            vmin=0,
+            vmax=np.max(posterior_probability_matrix) * 1.1,
+            aspect="auto",
+        )
         plt.colorbar()
         plt.tight_layout()
         plt.savefig(
-            f"plots/pse_events/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
+            PLOT_PATH
+            / "sequence_en_bloc"
+            / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
         )
 
         if bayesian_config.online:
@@ -740,11 +813,17 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     landmarks_cm = [45, 90, 135]
     landmarks = [l / bayesian_config.bin_size_spatial for l in landmarks_cm]
 
+    print("N_bins", np.max(actual_position) // bayesian_config.bin_size_spatial)
+
     y_true_bins = bin_for_classification(
-        actual_position, bayesian_config.bin_size_spatial
+        actual_position,
+        bayesian_config.bin_size_spatial,
+        np.max(actual_position) // bayesian_config.bin_size_spatial,
     )
     y_pred_bins = bin_for_classification(
-        decoded_position, bayesian_config.bin_size_spatial
+        decoded_position,
+        bayesian_config.bin_size_spatial,
+        np.max(actual_position) // bayesian_config.bin_size_spatial,
     )
 
     cm = confusion_matrix(y_true=y_true_bins, y_pred=y_pred_bins)
@@ -761,7 +840,10 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     )
     plt.tight_layout()
     plt.savefig(
-        f"plots/{session.mouse_name}_{session.date}_confusion_matrix.png", dpi=300
+        PLOT_PATH
+        / "decoded_vs_actual_positions"
+        / f"{session.mouse_name}_{session.date}_confusion_matrix.png",
+        dpi=300,
     )
 
 

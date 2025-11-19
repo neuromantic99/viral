@@ -156,20 +156,29 @@ def get_place_cells(
     )
 
     # TODO: change back!
+    get_cache_path = lambda variable_name: (
+        SERVER_PATH
+        / "viral_caches"
+        / "place_cells"
+        / variable_name
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
+    )
+
+    # Train-test split
     # get_cache_path = lambda variable_name: (
     #     SERVER_PATH
     #     / "viral_caches"
     #     / "place_cells"
     #     / variable_name
-    #     / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
+    #     / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_train-split_{variable_name}.npy"
     # )
 
-    get_cache_path = lambda variable_name: (
-        Path("data")
-        / "cache"
-        # / variable_name
-        / f"{session.mouse_name}_{session.date}_debugcache_rewarded_{rewarded}_{config}_{variable_name}.npy"
-    )
+    # get_cache_path = lambda variable_name: (
+    #     Path("data")
+    #     / "cache"
+    #     # / variable_name
+    #     / f"{session.mouse_name}_{session.date}_debugcache_rewarded_{rewarded}_{config}_{variable_name}.npy"
+    # )
 
     if use_cache and get_cache_path("place_threshold").exists():
         print("Found cached place threshold")

@@ -221,7 +221,8 @@ class BayesianDecodingConfig:
     online: (
         bool  # True for the online epoch, False for the offline post wheel freeze epoch
     )
-    sigma: int  # frames (for the convolving with Gaussian kernel bit)
+    sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
+    sigma_online: int  # frames (for the convolving with Gaussian kernel bit)
 
 
 # TODO: rethink this, currently unused
