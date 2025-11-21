@@ -262,7 +262,7 @@ def construct_xy_by_bin(
 
 def calculate_linear_weighted_correlation(
     posterior_probability_matrix: np.ndarray, xy: np.ndarray
-) -> np.ndarray:
+) -> float:
     """
     "Where posj is the jth spatial bin, bini is the ith temporal (two frame) bin in the event,
     Prij is the Bayesian posterior probability for that spatial bin at that temporal bin,
@@ -292,9 +292,9 @@ def calculate_linear_weighted_correlation(
     # TODO: need to recheck!
 
 
-def calculate_circular_weighted_correlations(
-    events_ppm: List[np.ndarray],
-) -> None:
+def calculate_circular_weighted_correlation(
+    posterior_probability_matrix: np.ndarray,
+) -> float:
     """
     "Where posj is the jth spatial bin, bini is the ith temporal (two frame) bin in the event,
     Prij is the Bayesian posterior probability for that spatial bin at that temporal bin,
@@ -308,30 +308,22 @@ def calculate_circular_weighted_correlations(
 
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcWeightedCircCorr.m
     """
-    results = list()
+    xy = construct_xy_by_bin(posterior_probability_matrix, mode="circular")
 
-    for event_ppm in events_ppm:
-        xy = construct_xy_by_bin(event_ppm, mode="circular")
+    rxs = calculate_linear_weighted_correlation(
+        posterior_probability_matrix=posterior_probability_matrix,
+        xy=np.column_stack((xy[:, 0], np.sin(xy[:, 1]))),
+    )
+    rxc = calculate_linear_weighted_correlation(
+        posterior_probability_matrix=posterior_probability_matrix,
+        xy=np.column_stack((xy[:, 0], np.cos(xy[:, 1]))),
+    )
+    rcs = calculate_linear_weighted_correlation(
+        posterior_probability_matrix=posterior_probability_matrix,
+        xy=np.column_stack((np.sin(xy[:, 1]), np.cos(xy[:, 1]))),
+    )
 
-        rxs = calculate_linear_weighted_correlation(
-            posterior_probability_matrix=event_ppm,
-            xy=np.column_stack((xy[:, 0], np.sin(xy[:, 1]))),
-        )
-        rxc = calculate_linear_weighted_correlation(
-            posterior_probability_matrix=event_ppm,
-            xy=np.column_stack((xy[:, 0], np.cos(xy[:, 1]))),
-        )
-        rcs = calculate_linear_weighted_correlation(
-            posterior_probability_matrix=event_ppm,
-            xy=np.column_stack((np.sin(xy[:, 1]), np.cos(xy[:, 1]))),
-        )
-
-        circular_corr_coeff = np.sqrt(
-            (rxc**2 + rxs**2 - 2 * rxc * rxs * rcs) / (1 - rcs**2)
-        )
-
-    results.append(circular_corr_coeff)
-    return np.array(results)
+    return np.sqrt((rxc**2 + rxs**2 - 2 * rxc * rxs * rcs) / (1 - rcs**2))
     # TODO: check against Matlab!
 
 
@@ -353,6 +345,7 @@ def check_significance_pse_event(
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m
     """
     # as we don't have a circular run belt but a linear corridor, we are using the weighted linear correlation coefficients
+    # TODO: probably we have to go circular as the task can be seen as a circle
     xy = construct_xy_by_bin(posterior_probability_matrix, mode=mode)
     if mode == "linear":
         weighted_r = calculate_linear_weighted_correlation(
@@ -455,8 +448,8 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
     # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
     # so, 33 ms would be 1 frame for offline (changed it to 2 frames) and 333 ms would be 10 frames for online decoding
     bayesian_config = BayesianDecodingConfig(
-        en_bloc=False,
-        online=False,
+        en_bloc=True,
+        online=True,
         # TODO: or is the 125 ms sigma also just offline and 1 s for online????
         sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
         sigma_online=30,  # "1 s Gaussian kernel"
@@ -553,7 +546,7 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, bayesian_config.sigma_online, "all", 5, 3 * 30)
 
         # phases of mobility
-        ssp_test, positions_test = get_ssp_vectors(
+        ssp_test, positions_test, trial_start_indices = get_ssp_vectors(
             trials_test, place_cells, bayesian_config.sigma_online, "above", 5, 3 * 30
         )
 
@@ -591,7 +584,6 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         # TODO: why can place_fields contain NaNs???
 
         # significant_events = list()
-        ppm = list()
         for idx, event in enumerate(pse_activity):
             posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
                 event,
@@ -606,21 +598,34 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
                 grosmark_config,
                 bayesian_config,
             )
-            ppm.append(posterior_probability_matrix)
+            circular_corr_coeff = calculate_circular_weighted_correlation(
+                posterior_probability_matrix=posterior_probability_matrix,
+            )
+            print(circular_corr_coeff)
         #     if check_significance_pse_event(posterior_probability_matrix):
         #         significant_events.append(posterior_probability_matrix)
         # print(f"Found {len(significant_events)} significant events")
         # TODO: this certainly is wrong so change later
-        calculate_circular_weighted_correlations(
-            events_ppm=ppm,
-        )
-        1 / 0
     else:
+        # TODO: do the circular or linear weighted correlation on the trials as "events"
         posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
             ssp_test,
             place_fields=place_fields[pcs_mask, :],
             config=bayesian_config,
         )
+        # TODO: is by-trial for correlation correct??? Or would I have to do the decoding on each trial individually???
+        circular_corr_coeffs = list()
+        for trial_idx in range(len(trial_start_indices)):
+            start = trial_start_indices[trial_idx]
+            if trial_idx < len(trial_start_indices) - 1:
+                end = trial_start_indices[trial_idx + 1]
+            else:
+                end = posterior_probability_matrix.shape[0]
+            trial_ppm = posterior_probability_matrix[start:end, :]
+            circular_corr_coeffs.append(
+                calculate_circular_weighted_correlation(trial_ppm)
+            )
+        print(circular_corr_coeffs)
         plt.figure(figsize=(25, 4))
         plt.imshow(
             posterior_probability_matrix.T,
