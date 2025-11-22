@@ -226,12 +226,21 @@ class BayesianDecodingConfig:
 
 
 # TODO: rethink this, currently unused
+# @dataclass
+# class ReplayEvent:
+#     start_frame: int
+#     end_frame: int
+#     posterior_probability_matrix: np.ndarray
+#     pr_max: np.ndarray
+#     p_value: float
+#     weighted_r: float
+#     rz_score: float
+
+
 @dataclass
-class ReplayEvent:
-    start_frame: int
-    end_frame: int
-    posterior_probability_matrix: np.ndarray
-    pr_max: np.ndarray
-    p_value: float
-    weighted_r: float
-    rz_score: float
+class BayesianDecodingResult:
+    posterior_probability_matrices: List[np.ndarray]
+    pr_max_matrices: List[np.ndarray]
+    linear_weighted_r: List[float]
+    circular_weighted_r: List[float]
+    actual_positions: List[np.ndarray] | None = None

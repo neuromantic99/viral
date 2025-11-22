@@ -21,12 +21,14 @@ from viral.models import (
     Cached2pSession,
     GrosmarkConfig,
     BayesianDecodingConfig,
+    BayesianDecodingResult,
 )
 
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     get_session_type,
     get_genotype,
+    mixed_effects,
 )
 from viral.imaging_utils import (
     split_fluoresence_online_freeze,
@@ -408,7 +410,7 @@ def plot_pse_event(
     )
 
 
-def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
+def main(mouse_name: str, date: str) -> BayesianDecodingResult:
     """
     'Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
@@ -537,6 +539,14 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
 
     place_cells = spks[pcs_mask, :]
 
+    get_cache_path = lambda variable_name: (
+        SERVER_PATH
+        / "viral_caches"
+        / "sequence_detection"
+        / variable_name
+        / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_{"en_bloc" if bayesian_config.en_bloc else "event_by_event"}.npz"
+    )
+
     # TODO: is ssp test the correct one? (in terms of convolution)
 
     if bayesian_config.online:
@@ -584,6 +594,10 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
         # TODO: why can place_fields contain NaNs???
 
         # significant_events = list()
+        events_ppm = list()
+        events_pr_maxs = list()
+        linear_corr_coeffs = list()
+        circular_corr_coeffs = list()
         for idx, event in enumerate(pse_activity):
             posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
                 event,
@@ -598,70 +612,138 @@ def main(mouse_name: str, date: str) -> Tuple[np.ndarray, np.ndarray] | None:
                 grosmark_config,
                 bayesian_config,
             )
+            linear_corr_coeff = calculate_linear_weighted_correlation(
+                posterior_probability_matrix=posterior_probability_matrix,
+                xy=construct_xy_by_bin(posterior_probability_matrix, mode="linear"),
+            )
             circular_corr_coeff = calculate_circular_weighted_correlation(
                 posterior_probability_matrix=posterior_probability_matrix,
             )
             print(circular_corr_coeff)
+            events_ppm.append(posterior_probability_matrix)
+            events_pr_maxs.append(pr_max)
+            linear_corr_coeffs.append(linear_corr_coeff)
+            circular_corr_coeffs.append(circular_corr_coeff)
+        result = BayesianDecodingResult(
+            posterior_probability_matrices=events_ppm,
+            pr_max_matrices=events_pr_maxs,
+            linear_weighted_r=linear_corr_coeffs,
+            circular_weighted_r=circular_corr_coeffs,
+        )
         #     if check_significance_pse_event(posterior_probability_matrix):
         #         significant_events.append(posterior_probability_matrix)
         # print(f"Found {len(significant_events)} significant events")
         # TODO: this certainly is wrong so change later
     else:
-        # TODO: do the circular or linear weighted correlation on the trials as "events"
-        posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
-            ssp_test,
-            place_fields=place_fields[pcs_mask, :],
-            config=bayesian_config,
-        )
-        # TODO: is by-trial for correlation correct??? Or would I have to do the decoding on each trial individually???
-        circular_corr_coeffs = list()
-        for trial_idx in range(len(trial_start_indices)):
-            start = trial_start_indices[trial_idx]
-            if trial_idx < len(trial_start_indices) - 1:
-                end = trial_start_indices[trial_idx + 1]
-            else:
-                end = posterior_probability_matrix.shape[0]
-            trial_ppm = posterior_probability_matrix[start:end, :]
-            circular_corr_coeffs.append(
-                calculate_circular_weighted_correlation(trial_ppm)
+        if not os.path.exists(get_cache_path("bayesian")) or not use_cache:
+            # TODO: do the circular or linear weighted correlation on the trials as "events"
+            posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
+                ssp_test,
+                place_fields=place_fields[pcs_mask, :],
+                config=bayesian_config,
             )
-        print(circular_corr_coeffs)
-        plt.figure(figsize=(25, 4))
-        plt.imshow(
-            posterior_probability_matrix.T,
-            vmin=0,
-            vmax=np.max(posterior_probability_matrix) * 1.1,
-            aspect="auto",
-        )
-        plt.colorbar()
-        plt.tight_layout()
-        plt.savefig(
-            PLOT_PATH
-            / "sequence_en_bloc"
-            / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
-        )
+            # TODO: is by-trial for correlation correct??? Or would I have to do the decoding on each trial individually???
+            trial_actual_positions = list()
+            trial_ppms = list()
+            trial_pr_maxs = list()
+            linear_corr_coeffs = list()
+            circular_corr_coeffs = list()
+            for trial_idx in range(len(trial_start_indices)):
+                start = trial_start_indices[trial_idx]
+                if trial_idx < len(trial_start_indices) - 1:
+                    end = trial_start_indices[trial_idx + 1]
+                else:
+                    end = posterior_probability_matrix.shape[0]
+                trial_actual_positions.append(positions_test[start:end])
+                trial_ppm = posterior_probability_matrix[start:end, :]
+                trial_ppms.append(trial_ppm)
+                trial_pr_maxs.append(pr_max[start:end])
+                linear_corr_coeffs.append(
+                    calculate_linear_weighted_correlation(
+                        posterior_probability_matrix=trial_ppm,
+                        xy=construct_xy_by_bin(trial_ppm, mode="linear"),
+                    )
+                )
+                circular_corr_coeffs.append(
+                    calculate_circular_weighted_correlation(trial_ppm)
+                )
+            print(circular_corr_coeffs)
 
-        if bayesian_config.online:
-            # plot_decoded_vs_actual_position(
-            #     positions=positions_test,
-            #     pr_max=pr_max,
-            #     session=session,
-            #     bayesian_config=bayesian_config,
-            # )
-            plot_confusion_matrix_actual_vs_decoded_position(
-                actual_position=positions_test,
-                decoded_position=pr_max * bayesian_config.bin_size_spatial,
-                session=session,
-                bayesian_config=bayesian_config,
+            result = BayesianDecodingResult(
+                posterior_probability_matrices=trial_ppms,
+                pr_max_matrices=trial_pr_maxs,
+                actual_positions=trial_actual_positions,
+                linear_weighted_r=linear_corr_coeffs,
+                circular_weighted_r=circular_corr_coeffs,
             )
+
+            plt.figure(figsize=(25, 4))
+            plt.imshow(
+                posterior_probability_matrix.T,
+                vmin=0,
+                vmax=np.max(posterior_probability_matrix) * 1.1,
+                aspect="auto",
+            )
+            plt.colorbar()
+            plt.tight_layout()
+            plt.savefig(
+                PLOT_PATH
+                / "sequence_en_bloc"
+                / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
+            )
+
+            if bayesian_config.online:
+                # plot_decoded_vs_actual_position(
+                #     positions=positions_test,
+                #     pr_max=pr_max,
+                #     session=session,
+                #     bayesian_config=bayesian_config,
+                # )
+                plot_confusion_matrix_actual_vs_decoded_position(
+                    actual_position=positions_test,
+                    decoded_position=pr_max * bayesian_config.bin_size_spatial,
+                    session=session,
+                    bayesian_config=bayesian_config,
+                )
+                np.savez(
+                    f"data/cache/{session.mouse_name}_{session.date}_online_en_bloc_decoding.npz",
+                    positions=positions_test,
+                    pr_max=pr_max * bayesian_config.bin_size_spatial,
+                )
+
             np.savez(
-                f"data/cache/{session.mouse_name}_{session.date}_online_en_bloc_decoding.npz",
-                positions=positions_test,
-                pr_max=pr_max * bayesian_config.bin_size_spatial,
+                get_cache_path("bayesian"),
+                posterior_probability_matrices=np.array(
+                    result.posterior_probability_matrices, dtype=object
+                ),
+                pr_max_matrices=np.array(result.pr_max_matrices, dtype=object),
+                linear_weighted_r=np.array(result.linear_weighted_r, dtype=float),
+                circular_weighted_r=np.array(result.circular_weighted_r, dtype=float),
+                actual_positions=(
+                    np.array(result.actual_positions, dtype=object)
+                    if result.actual_positions is not None
+                    else None
+                ),
             )
-            return positions_test, pr_max * bayesian_config.bin_size_spatial
+        else:
+            npz = np.load(get_cache_path("bayesian"), allow_pickle=True)
+            result = BayesianDecodingResult(
+                posterior_probability_matrices=npz[
+                    "posterior_probability_matrices"
+                ].tolist(),
+                pr_max_matrices=npz["pr_max_matrices"].tolist(),
+                linear_weighted_r=npz["linear_weighted_r"].tolist(),
+                circular_weighted_r=npz["circular_weighted_r"].tolist(),
+                actual_positions=(
+                    npz["actual_positions"].tolist()
+                    if "actual_positions" in npz.files
+                    else None
+                ),
+            )
+            print("Loaded Bayesian decoding result from cache")
 
     print(f"Done for {session.mouse_name} on {session.date}")
+    return result
 
 
 def test_against_matlab() -> None:
@@ -726,6 +808,7 @@ def plot_decoded_vs_actual_position(
     )
 
 
+# TODO: this needs to be refactored as main() changed
 def get_statistics_actual_vs_decoded_position(genotype: str) -> pd.DataFrame:
     result = {"stage": [], "r2": [], "f1": [], "mouse_id": [], "genotype": []}
     for mouse_name in SESSIONS_KEEP.keys():
@@ -764,6 +847,65 @@ def get_statistics_actual_vs_decoded_position(genotype: str) -> pd.DataFrame:
             result["f1"].append(f1)
             result["mouse_id"].append(mouse_name)
             result["genotype"].append(genotype)
+    return pd.DataFrame(result)
+
+
+def get_statistics_correlation(genotype: str) -> pd.DataFrame:
+    result = {
+        "stage": [],
+        "circular_weighted_r": [],
+        "linear_weighted_r": [],
+        "mouse_id": [],
+        "genotype": [],
+    }
+    for mouse_name in SESSIONS_KEEP.keys():
+        if get_genotype(mouse_name) != genotype:
+            continue
+        for stage in ["unsupervised", "learning", "learned"]:
+            print(f"Doing {mouse_name} at {stage} stage")
+            date = SESSIONS_KEEP[mouse_name][stage]
+            if date is None:
+                continue
+            # TODO: this needs refacoring
+            if os.path.exists(
+                SERVER_PATH
+                / "viral_caches"
+                / "sequence_detection"
+                / "bayesian"
+                / f"{mouse_name}_{date}_online_en_bloc.npz"
+            ):
+                npz = np.load(
+                    SERVER_PATH
+                    / "viral_caches"
+                    / "sequence_detection"
+                    / "bayesian"
+                    / f"{mouse_name}_{date}_online_en_bloc.npz",
+                    allow_pickle=True,
+                )
+                bayesian = BayesianDecodingResult(
+                    posterior_probability_matrices=npz[
+                        "posterior_probability_matrices"
+                    ].tolist(),
+                    pr_max_matrices=npz["pr_max_matrices"].tolist(),
+                    linear_weighted_r=npz["linear_weighted_r"].tolist(),
+                    circular_weighted_r=npz["circular_weighted_r"].tolist(),
+                    actual_positions=(
+                        npz["actual_positions"].tolist()
+                        if "actual_positions" in npz.files
+                        else None
+                    ),
+                )
+            else:
+                try:
+                    bayesian = main(mouse_name, date)
+                except (ValueError, FileNotFoundError, KeyError) as e:
+                    print(f"Error processing {mouse_name} at {stage} stage: {e}")
+                    continue
+            result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
+            result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
+            result["mouse_id"].append(mouse_name)
+            result["genotype"].append(genotype)
+            result["stage"].append(stage)
     return pd.DataFrame(result)
 
 
@@ -833,18 +975,18 @@ def plot_decoded_vs_actual_position_f1() -> None:
     colors = sns.color_palette(n_colors=2)
     palette = {"WT": colors[0], "NLGF": colors[1]}
 
-    # p_values = {}
+    p_values = {}
 
-    # for stage in ["Baseline", "Trained"]:
-    #     subset = all_data[all_data["stage"] == stage]
-    #     assert len(subset) > 100, "make sure nothing weird happend"
-    #     p_value = mixed_effects(
-    #         df=subset,
-    #         dependent_var="correlation",
-    #         independent_var="genotype",
-    #         group_name="mouse_id",
-    #     ).filter(like="C(genotype)")
-    #     p_values[f"{stage}"] = p_value
+    for stage in ["Baseline", "Trained"]:
+        subset = all_data[all_data["stage"] == stage]
+        assert len(subset) > 100, "make sure nothing weird happend"
+        p_value = mixed_effects(
+            df=subset,
+            dependent_var="correlation",
+            independent_var="genotype",
+            group_name="mouse_id",
+        ).filter(like="C(genotype)")
+        p_values[f"{stage}"] = p_value
 
     sns.boxplot(
         data=all_data,
@@ -935,11 +1077,72 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     )
 
 
+def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
+    wt = get_statistics_correlation("WT")
+    nlgf = get_statistics_correlation("NLGF")
+    all_data = pd.concat([wt, nlgf], ignore_index=True)
+
+    fig = plt.figure()
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    p_values = {}
+
+    # for stage in ["Baseline", "Trained"]:
+    for stage in ["unsupervised", "learning", "learned"]:
+        subset = all_data[all_data["stage"] == stage]
+        # assert len(subset) > 100, "make sure nothing weird happend"
+        p_value = mixed_effects(
+            df=subset,
+            dependent_var=f"{mode}_weighted_r",
+            independent_var="genotype",
+            group_name="mouse_id",
+        ).filter(like="C(genotype)")
+        p_values[f"{stage}"] = p_value
+
+    sns.boxplot(
+        data=all_data,
+        x="stage",
+        y=f"{mode}_weighted_r",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+
+    plt.tight_layout()
+    sns.despine()
+    # plt.ylim(None, 1.49)
+    ax = plt.gca()
+    ymin_plot, ymax_plot = ax.get_ylim()
+    plot_range = ymax_plot - ymin_plot
+    text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
+    # for i, stage in enumerate(["Baseline", "Trained"]):
+    for i, stage in enumerate(["unsupervised", "learning", "learned"]):
+        p_text = f"P = {round(p_values[stage].values[0], 2)}"
+        ax.text(i, text_y, p_text, ha="center", va="top")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+        # place legend centered relative to the axes (not the whole figure)
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
+
+    plt.savefig(
+        SERVER_PATH / "viral_plots" / "sequence_en_bloc" / f"{mode}_weighted_r.png"
+    )
+
+
 if __name__ == "__main__":
-    for mouse_name in SESSIONS_KEEP.keys():
-        for stage, date in SESSIONS_KEEP[mouse_name].items():
-            print(f"Processing {mouse_name} - {stage} - {date}")
-            if date:
-                main(mouse_name, date)
+    # for mouse_name in SESSIONS_KEEP.keys():
+    #     for stage, date in SESSIONS_KEEP[mouse_name].items():
+    #         print(f"Processing {mouse_name} - {stage} - {date}")
+    #         if date:
+    #             try:
+    #                 main(mouse_name, date)
+    #             except Exception as e:
+    #                 print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
+    plot_correlation_across_stages(mode="linear")
+    plot_correlation_across_stages(mode="circular")
     # plot_decoded_vs_actual_position_rsquare()
     # plot_decoded_vs_actual_position_f1()
