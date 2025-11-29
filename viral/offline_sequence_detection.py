@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 import numpy as np
 import sys
 import time
@@ -234,7 +234,9 @@ def offline_sequence_bayesian_decoding(
 
 
 def construct_xy_by_bin(
-    posterior_probability_matrix: np.ndarray, mode: Literal["linear", "circular"]
+    posterior_probability_matrix: np.ndarray,
+    mode: Literal["linear", "circular"],
+    total_length: Optional[float] = None,
 ) -> np.ndarray:
     """
     We need to precompute a xy-by-bin grid for linear/circular weighted correlation.
@@ -243,23 +245,44 @@ def construct_xy_by_bin(
     https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/demo_LinearReplayAnalysis.m
     and https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/demo_CircularReplayAnalysis.m, respectively.
     """
+    ## In matlab this is done for all unique event lengths and on a fixed 'maze length' and number of spatial bins (at least I think so, 100)
+    ## x is time bin, y is spatial bin
+
+    # h = histc(synthEvents.eventFiringRateMatrixID, unique(synthEvents.eventFiringRateMatrixID));
+    # uBins = unique(h);
+
+    # ySpatial = linspace(0, totalMazeLength,  synthEvents.params.nSpatialBins + 1);
+    # ySpatial = ySpatial(1:synthEvents.params.nSpatialBins);
+    # xyByBin = {};
+    # for i = 1:length(uBins)
+    #     x = repmat((1:uBins(i))', [1, 100]);
+    #     y = repmat(ySpatial, [uBins(i), 1]);
+    #     xyByBin{uBins(i)} = [reshape(x, [], 1), reshape(y, [], 1)];
+    # end
+
     n_time, n_pos = posterior_probability_matrix.shape
 
-    time_coords = np.repeat(np.arange(n_time), n_pos)
+    x = np.arange(1, n_time + 1)
 
     if mode == "linear":
-        pos_coords = np.tile(np.arange(n_pos), n_time)
+        if total_length is None:
+            raise ValueError("total_length must be provided for linear mode")
+        # ySpatial = linspace(0, totalMazeLength,  synthEvents.params.nSpatialBins + 1);
+        # ySpatial = ySpatial(1:synthEvents.params.nSpatialBins);
+        y_spatial = np.linspace(0, total_length, n_pos + 1)[:-1]
     elif mode == "circular":
-        # TODO: in matlab, they did upsampling -> should we do this too?
-        pos_angles = np.linspace(0, 2 * np.pi, n_pos + 1)[:-1]
-        pos_coords = np.tile(pos_angles, n_time)
+        # % for circular weighted correlatioon analysis the circular (spatial)
+        # % variable must be encoded in radians:
+        # ySpatial = linspace(0, 2*pi, synthEvents.params.nSpatialBins + 1);
+        # ySpatial = ySpatial(1:synthEvents.params.nSpatialBins);
+        y_spatial = np.linspace(0, 2 * np.pi, n_pos + 1)[:-1]
+        # y_spatial = np.linspace(0, 2 * 3.14, n_pos + 1)[:-1] # just for checking against MATLAB (pi precision errrors!)
 
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-    return np.column_stack((time_coords, pos_coords))
-    # TODO: now that it is refactored, be extra careful!
-    # TODO: the linear should be correct
+    xx, yy = np.meshgrid(x, y_spatial, indexing="ij")
+    return np.column_stack([xx.ravel(order="F"), yy.ravel(order="F")])
 
 
 def calculate_linear_weighted_correlation(
@@ -272,7 +295,9 @@ def calculate_linear_weighted_correlation(
 
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcWeightedLinearCorr.m
     """
-    w = posterior_probability_matrix.flatten()
+    w = posterior_probability_matrix.flatten(
+        order="F"
+    )  # column-major flattening like matlab
     if np.isnan(w).any():
         raise ValueError("Encountered NaN in posterior probability matrix")
 
@@ -290,8 +315,8 @@ def calculate_linear_weighted_correlation(
 
     return covxy / np.sqrt(covxx * covyy)
     # TODO: check against Matlab!
-    # TODO: it was close (5.165097433127688233e-04 vs 5.165097433127881e-04) on default settings (rtol=1e-05, atol=1e-08)
-    # TODO: need to recheck!
+    # TODO: for perfect diagonal?
+    # TODO: for slightly off-diagonal: Python 0.9708761195036539 MATLAB 0.9709 -> AssertionError -> but fine? what tolerance?
 
 
 def calculate_circular_weighted_correlation(
@@ -310,31 +335,63 @@ def calculate_circular_weighted_correlation(
 
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcWeightedCircCorr.m
     """
+    # xy = construct_xy_by_bin(posterior_probability_matrix, mode="circular")
+
+    # rxs = calculate_linear_weighted_correlation(
+    #     posterior_probability_matrix=posterior_probability_matrix,
+    #     xy=np.column_stack((xy[:, 0], np.sin(xy[:, 1]))),
+    # )
+    # rxc = calculate_linear_weighted_correlation(
+    #     posterior_probability_matrix=posterior_probability_matrix,
+    #     xy=np.column_stack((xy[:, 0], np.cos(xy[:, 1]))),
+    # )
+    # rcs = calculate_linear_weighted_correlation(
+    #     posterior_probability_matrix=posterior_probability_matrix,
+    #     xy=np.column_stack((np.sin(xy[:, 1]), np.cos(xy[:, 1]))),
+    # )
+
+    # return np.sqrt((rxc**2 + rxs**2 - 2 * rxc * rxs * rcs) / (1 - rcs**2))
+
     xy = construct_xy_by_bin(posterior_probability_matrix, mode="circular")
 
+    # w = posterior_probability_matrix.flatten(
+    #     order="F"
+    # )  # column-major flattening like matlab
+    # if np.isnan(w).any():
+    #     raise ValueError("Encountered NaN in posterior probability matrix")
+    # DON'T: This is doen in calculate_linear_weighted_correlation already!
+
+    # rxs = calcWeightedLinearCorr([xy(:, 1), sin(xy(:, 2))], w);
+    # rxc = calcWeightedLinearCorr([xy(:, 1), cos(xy(:, 2))], w);
+    # rcs = calcWeightedLinearCorr([sin(xy(:, 2)),cos(xy(:, 2))], w);
+    x = xy[:, 0]
+    y = xy[:, 1]
+
     rxs = calculate_linear_weighted_correlation(
-        posterior_probability_matrix=posterior_probability_matrix,
-        xy=np.column_stack((xy[:, 0], np.sin(xy[:, 1]))),
+        posterior_probability_matrix, np.column_stack((x, np.sin(y)))
     )
     rxc = calculate_linear_weighted_correlation(
-        posterior_probability_matrix=posterior_probability_matrix,
-        xy=np.column_stack((xy[:, 0], np.cos(xy[:, 1]))),
+        posterior_probability_matrix, np.column_stack((x, np.cos(y)))
     )
     rcs = calculate_linear_weighted_correlation(
-        posterior_probability_matrix=posterior_probability_matrix,
-        xy=np.column_stack((np.sin(xy[:, 1]), np.cos(xy[:, 1]))),
+        posterior_probability_matrix, np.column_stack((np.sin(y), np.cos(y)))
     )
 
     return np.sqrt((rxc**2 + rxs**2 - 2 * rxc * rxs * rcs) / (1 - rcs**2))
-    # TODO: check against Matlab!
+
+    # TODO: check against Matlab
+    # TODO: for perfect diagonal?
+    # TODO: for slightly off-diagonal: Python 0.7583601138637951 MATLAB 0.7584 (set pi to 3.14 to prevent pi-precision errors) -> AssertionError -> but fine? what tolerance?
 
 
-def check_significance_pse_event(
+def check_significance(
     posterior_probability_matrix: np.ndarray,
+    correlation: float,
     mode: Literal["linear", "circular"] = "circular",
+    total_length: float | None = None,
     n_shuffles: int = 2000,
     significance: float = 0.05,
-) -> np.ndarray:
+) -> bool:
     """
     "For each event, the observed weighted circo-linear correlation coefficients weightedr(circular), hereafter referred to as weighted-r,
     was compared to a distribution of 2,000 null weighted-r values either by z-scoring the observed value by the null values (rZ score) or
@@ -346,30 +403,31 @@ def check_significance_pse_event(
 
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m
     """
-    # as we don't have a circular run belt but a linear corridor, we are using the weighted linear correlation coefficients
-    # TODO: probably we have to go circular as the task can be seen as a circle
-    xy = construct_xy_by_bin(posterior_probability_matrix, mode=mode)
     if mode == "linear":
-        weighted_r = calculate_linear_weighted_correlation(
-            posterior_probability_matrix, xy
-        )
-        print(f"Linear weighted correlation: {weighted_r}")
         shuffled_weighted_rs = list()
+        xy = construct_xy_by_bin(
+            posterior_probability_matrix, mode="linear", total_length=total_length
+        )
         for i in range(n_shuffles):
             shuffled = shuffle_rows(posterior_probability_matrix)
             shuffled_weighted_rs.append(
                 calculate_linear_weighted_correlation(shuffled, xy)
             )
-        r_real = np.abs(weighted_r)
-        # TODO: it isn't clear, should the raw pse activity or the ppm be shuffled?
-        r_shuffled = np.abs(shuffled_weighted_rs)
-        empirical_p = np.mean(r_shuffled >= r_real)
-        rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
-        print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
-        return empirical_p < significance
-    # TODO: do this for circular as well
+    elif mode == "circular":
+        shuffled_weighted_rs = list()
+        for i in range(n_shuffles):
+            shuffled = shuffle_rows(posterior_probability_matrix)
+            shuffled_weighted_rs.append(
+                calculate_circular_weighted_correlation(shuffled)
+            )
+    r_real = np.abs(correlation)
+    # TODO: it isn't clear, should the raw pse activity or the ppm be shuffled?
+    r_shuffled = np.abs(shuffled_weighted_rs)
+    empirical_p = np.mean(r_shuffled >= r_real)
+    rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
+    print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
+    return empirical_p < significance
     # TODO: they use Radon whatever, do we need it as well? (I think because of using the absolute values, the direction isn't correctly accounted for)
-    return
 
 
 def plot_pse_event(
@@ -539,6 +597,8 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
 
     place_cells = spks[pcs_mask, :]
 
+    total_length = grosmark_config.end - grosmark_config.start
+
     get_cache_path = lambda variable_name: (
         SERVER_PATH
         / "viral_caches"
@@ -596,8 +656,8 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
         # significant_events = list()
         events_ppm = list()
         events_pr_maxs = list()
-        linear_corr_coeffs = list()
-        circular_corr_coeffs = list()
+        linear_corr_coeffs: List[Tuple[float, bool]] = list()
+        circular_corr_coeffs: List[Tuple[float, bool]] = list()
         for idx, event in enumerate(pse_activity):
             posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
                 event,
@@ -616,19 +676,40 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
                 posterior_probability_matrix=posterior_probability_matrix,
                 xy=construct_xy_by_bin(posterior_probability_matrix, mode="linear"),
             )
+            linear_sign = check_significance(
+                posterior_probability_matrix,
+                linear_corr_coeff,
+                "linear",
+                2000,
+                0.05,
+            )
             circular_corr_coeff = calculate_circular_weighted_correlation(
                 posterior_probability_matrix=posterior_probability_matrix,
+            )
+            circular_sign = check_significance(
+                posterior_probability_matrix,
+                circular_corr_coeff,
+                "circular",
+                2000,
+                0.05,
             )
             print(circular_corr_coeff)
             events_ppm.append(posterior_probability_matrix)
             events_pr_maxs.append(pr_max)
-            linear_corr_coeffs.append(linear_corr_coeff)
-            circular_corr_coeffs.append(circular_corr_coeff)
+            linear_corr_coeffs.append((linear_corr_coeff, linear_sign))
+            circular_corr_coeffs.append((circular_corr_coeff, circular_sign))
+        # sanity check that the correlations in the events aren't just artifactual
+        assert (
+            len([corr for (corr, sign) in linear_corr_coeffs if sign]) > 0
+        ), "No significant PSE events found (linear weighted correlation)!"
+        assert (
+            len([corr for (corr, sign) in circular_corr_coeffs if sign]) > 0
+        ), "No significant PSE events found (circular weighted correlation)!"
         result = BayesianDecodingResult(
             posterior_probability_matrices=events_ppm,
             pr_max_matrices=events_pr_maxs,
-            linear_weighted_r=linear_corr_coeffs,
-            circular_weighted_r=circular_corr_coeffs,
+            linear_weighted_r=[corr for (corr, _) in linear_corr_coeffs],
+            circular_weighted_r=[corr for (corr, _) in circular_corr_coeffs],
         )
         #     if check_significance_pse_event(posterior_probability_matrix):
         #         significant_events.append(posterior_probability_matrix)
@@ -646,8 +727,8 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
             trial_actual_positions = list()
             trial_ppms = list()
             trial_pr_maxs = list()
-            linear_corr_coeffs = list()
-            circular_corr_coeffs = list()
+            linear_corr_coeffs: List[Tuple[float, bool]] = list()
+            circular_corr_coeffs: List[Tuple[float, bool]] = list()
             for trial_idx in range(len(trial_start_indices)):
                 start = trial_start_indices[trial_idx]
                 if trial_idx < len(trial_start_indices) - 1:
@@ -658,23 +739,45 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
                 trial_ppm = posterior_probability_matrix[start:end, :]
                 trial_ppms.append(trial_ppm)
                 trial_pr_maxs.append(pr_max[start:end])
-                linear_corr_coeffs.append(
-                    calculate_linear_weighted_correlation(
-                        posterior_probability_matrix=trial_ppm,
-                        xy=construct_xy_by_bin(trial_ppm, mode="linear"),
-                    )
+                xy = construct_xy_by_bin(
+                    trial_ppm, mode="linear", total_length=total_length
                 )
-                circular_corr_coeffs.append(
-                    calculate_circular_weighted_correlation(trial_ppm)
+                linear_corr_coeff = calculate_linear_weighted_correlation(
+                    posterior_probability_matrix=trial_ppm,
+                    xy=xy,
                 )
+                linear_sign = check_significance(
+                    trial_ppm,
+                    linear_corr_coeff,
+                    "linear",
+                    2000,
+                    0.05,
+                )
+                linear_corr_coeffs.append((linear_corr_coeff, linear_sign))
+                circular_corr_coeff = calculate_circular_weighted_correlation(trial_ppm)
+                circular_sign = check_significance(
+                    trial_ppm,
+                    circular_corr_coeff,
+                    "circular",
+                    2000,
+                    0.05,
+                )
+                circular_corr_coeffs.append((circular_corr_coeff, circular_sign))
+            # sanity check that the correlations in the trials aren't just artifactual
+            assert (
+                len([corr for (corr, sign) in linear_corr_coeffs if sign]) > 0
+            ), "No significant trial found (linear weighted correlation)!"
+            assert (
+                len([corr for (corr, sign) in circular_corr_coeffs if sign]) > 0
+            ), "No significant trial found (circular weighted correlation)!"
             print(circular_corr_coeffs)
 
             result = BayesianDecodingResult(
                 posterior_probability_matrices=trial_ppms,
                 pr_max_matrices=trial_pr_maxs,
                 actual_positions=trial_actual_positions,
-                linear_weighted_r=linear_corr_coeffs,
-                circular_weighted_r=circular_corr_coeffs,
+                linear_weighted_r=[corr for (corr, _) in linear_corr_coeffs],
+                circular_weighted_r=[corr for (corr, _) in circular_corr_coeffs],
             )
 
             plt.figure(figsize=(25, 4))
@@ -744,26 +847,6 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
 
     print(f"Done for {session.mouse_name} on {session.date}")
     return result
-
-
-def test_against_matlab() -> None:
-    python_result = np.genfromtxt("JB030_2025-03-25_result.txt")
-    import pandas as pd
-
-    df = pd.read_csv("matlab_result.csv", header=None)
-    matlab_result = df.to_numpy()
-
-    plt.figure()
-    plt.imshow(python_result.T, aspect="auto", vmin=0, vmax=0.07)
-    plt.colorbar()
-    plt.savefig("python_result")
-
-    plt.figure()
-    plt.imshow(matlab_result.T, aspect="auto", vmin=0, vmax=0.07)
-    plt.colorbar()
-    plt.savefig("matlab_result")
-
-    assert np.all(np.isclose(python_result, matlab_result, rtol=1e-04))
 
 
 def plot_decoded_and_actual_position(positions: np.ndarray, pr_max: np.ndarray) -> None:
@@ -1133,16 +1216,40 @@ def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
     )
 
 
+def test_construct_xy_by_bin_against_matlab() -> None:
+    # matlab_xy = np.genfromtxt("xy_matlab.csv", delimiter=",")
+    # python_xy = np.genfromtxt("xyByBin_linear.txt", delimiter=" ")
+    matlab_xy = np.genfromtxt("xy_circular_matlab copy.csv", delimiter=",")
+    python_xy = np.round(np.genfromtxt("xyByBin_circular.txt", delimiter=" "), 5)
+    # https://uk.mathworks.com/help/matlab/ref/pi.html
+    # TODO: figure out the pi precision needed
+    assert np.all(np.isclose(matlab_xy, python_xy))
+
+
+def create_dummy_ppm_perfect_diagonal() -> np.ndarray:
+    ppm = np.zeros(shape=(10, 10))
+    np.fill_diagonal(ppm, 0.5)
+    return ppm
+
+
+def create_dummy_ppm_more_complex() -> np.ndarray:
+    ppm = np.zeros(shape=(10, 10))
+    np.fill_diagonal(ppm, 0.5)
+    ppm[3, 5] = 0.7
+    return ppm
+
+
 if __name__ == "__main__":
-    # for mouse_name in SESSIONS_KEEP.keys():
-    #     for stage, date in SESSIONS_KEEP[mouse_name].items():
-    #         print(f"Processing {mouse_name} - {stage} - {date}")
-    #         if date:
-    #             try:
-    #                 main(mouse_name, date)
-    #             except Exception as e:
-    #                 print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
-    plot_correlation_across_stages(mode="linear")
-    plot_correlation_across_stages(mode="circular")
+    for mouse_name in SESSIONS_KEEP.keys():
+        for stage, date in SESSIONS_KEEP[mouse_name].items():
+            print(f"Processing {mouse_name} - {stage} - {date}")
+            if date:
+                try:
+                    main(mouse_name, date)
+                except Exception as e:
+                    print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
+
+    # plot_correlation_across_stages(mode="linear")
+    # plot_correlation_across_stages(mode="circular")
     # plot_decoded_vs_actual_position_rsquare()
     # plot_decoded_vs_actual_position_f1()
