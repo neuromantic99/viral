@@ -420,7 +420,7 @@ def test_below_threshold_for_n_consecutive_samples_edge_cases() -> None:
     assert np.array_equal(result, expected)
 
     arr[95:100] = 0.2
-    result = above_threshold_for_n_consecutive_samples(arr, threshold=0.5, n_samples=5)
+    result = below_threshold_for_n_consecutive_samples(arr, threshold=0.5, n_samples=5)
     expected = np.zeros(100)
     expected[95:100] = 1
     assert np.array_equal(result, expected)

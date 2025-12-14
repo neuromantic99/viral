@@ -216,6 +216,8 @@ class BayesianDecodingConfig:
     event_duration: Tuple[float, float]  # min, max (frames)
     bin_size_time_offline: int  # frames
     bin_size_time_online: int  # frames
+    start_spatial: int  # cms
+    end_spatial: int  # cms
     bin_size_spatial: int  # cms
     en_bloc: bool  # whether to decode en bloc or pse event by pse event
     online: (

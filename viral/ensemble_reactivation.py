@@ -43,11 +43,11 @@ from viral.utils import (
     split_continuous_chunks,
     threshold_detect,
     threshold_detect_continuous,
-    trial_is_imaged,
 )
 from viral.imaging_utils import (
     compute_speed_grosmark,
     split_fluoresence_online_freeze,
+    trial_is_imaged,
 )
 from viral.grosmark_analysis import get_place_cells
 
@@ -665,6 +665,7 @@ def get_ssp_vectors(
     mode: Literal["above", "below", "all"] = "above",
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
+    min_chunk_length: int | None = 2 * 30,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
@@ -679,7 +680,7 @@ def get_ssp_vectors(
     """
     ssp_vectors = []
     position_vectors = []
-    trial_start_indices = [0]
+    trial_start_indices = []
     current_idx = 0
 
     for trial in trials:
@@ -700,6 +701,9 @@ def get_ssp_vectors(
 
         speed = compute_speed_grosmark(position)
 
+        # safely map indices in the ssp vector to indices in the position/speed vectors
+        frame_to_pos_index = {int(f): idx for idx, f in enumerate(frame_position)}
+
         if mode == "above":
             idx_keep = above_threshold_for_n_consecutive_samples(
                 speed, threshold=speed_threshold, n_samples=n_consecutive_samples
@@ -711,39 +715,74 @@ def get_ssp_vectors(
         elif mode == "all":
             # don't filter for speed
             idx_keep = np.ones_like(speed, dtype=bool)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
         # Take the ITI out
         idx_keep = idx_keep & (position < 180)
         frames_keep = np.unique(frame_position[idx_keep])
 
+        if frames_keep.size == 0:
+            # skip trial if there aren't any valid frames
+            continue
+
+        trial_start_idx = None
+        trial_has_chunks = False
         # Don't smooth across non-continuous chunks
         for chunk in split_continuous_chunks(frames_keep):
-            if len(chunk) < 2 * 30:  # Arbitrary removal of short chunks
+            if min_chunk_length is not None and len(chunk) < min_chunk_length:
                 continue
-            ssp_vectors.append(
-                gaussian_filter1d(
-                    input=place_cells[:, chunk],
-                    sigma=sigma,
-                    axis=1,
+
+            if np.any(np.array(chunk) < 0) or np.any(
+                np.array(chunk) >= place_cells.shape[1]
+            ):
+                raise IndexError(
+                    "Ssp chunk contains invalid frame indices for place_cells"
                 )
+
+            segment = gaussian_filter1d(
+                input=place_cells[:, chunk],
+                sigma=sigma,
+                axis=1,
             )
+
+            ssp_vectors.append(segment)
+
+            pos_idx = [frame_to_pos_index.get(int(f), None) for f in chunk]
+            if any(x is None for x in pos_idx):
+                raise IndexError("Missing frames")
+
             chunk_positions = position[np.searchsorted(frame_position, chunk)]
             position_vectors.append(chunk_positions)
 
-            current_idx += len(chunk)
+            trial_start_idx = current_idx
 
-        trial_start_indices.append(current_idx)
+            # treat the beginning of the first valid chunk found as the trial start idx
+            if not trial_has_chunks:
+                trial_start_idx = current_idx
+                trial_has_chunks = True
+            current_idx += segment.shape[1]
 
-    trial_start_indices = trial_start_indices[:-1]  # remove last index after data
-    assert len(trial_start_indices) == len(trials)
-    assert trial_start_indices[-1] < np.hstack(ssp_vectors).shape[1]
+        # only append the trial start idx if there are valid chunks within the trial
+        if trial_has_chunks:
+            trial_start_indices.append(trial_start_idx)
 
-    assert len(ssp_vectors) == len(position_vectors)
+    if len(ssp_vectors) == 0:
+        return np.array([]), np.array([]), np.array([])
+    else:
+        total_length = np.hstack(ssp_vectors).shape[1]
+        assert all(
+            0 <= s <= total_length for s in trial_start_indices
+        ), "Invalid trial start indices"
+        assert len(trial_start_indices) <= len(trials), "Too many trial start indices"
 
-    return (
-        np.hstack(ssp_vectors),
-        np.hstack(position_vectors),
-        np.array(trial_start_indices),
-    )
+        assert len(ssp_vectors) == len(position_vectors)
+
+        return (
+            np.hstack(ssp_vectors),
+            np.hstack(position_vectors),
+            np.array(trial_start_indices),
+        )
 
 
 def main(mouse: str, date: str, plot: bool = True) -> None:

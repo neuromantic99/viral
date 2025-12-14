@@ -1,5 +1,6 @@
 import os
 from typing import List, Literal, Optional, Tuple
+from matplotlib.lines import Line2D
 import numpy as np
 import sys
 import time
@@ -52,7 +53,120 @@ def get_population_vector(ssp_smoothed: np.ndarray) -> np.ndarray:
     z_scored = np.nan_to_num(z_scored)
 
     # TODO: check axis?
-    return zscore(np.mean(z_scored, axis=0))
+    # return zscore(np.mean(z_scored, axis=0))
+    population_vector = zscore(np.mean(z_scored, axis=0))
+    population_vector_sd = np.std(population_vector)
+    # TODO: remove after debugging
+    plt.figure(figsize=(30, 20))
+    plt.plot(population_vector)
+    plt.hlines(
+        population_vector_sd * bayesian_config.peak_threshold,
+        xmin=0,
+        xmax=len(population_vector),
+        colors="r",
+        linestyles="dashed",
+        label="Peak threshold",
+    )
+    plt.hlines(
+        population_vector_sd * bayesian_config.edge_threshold,
+        xmin=0,
+        xmax=len(population_vector),
+        colors="g",
+        linestyles="dashed",
+        label="Edge threshold",
+    )
+    plt.title("Population vector")
+    plt.savefig(
+        PLOT_PATH
+        / "pse_events"
+        / f"{mouse_name}_{date}_{"online" if bayesian_config.online else "offline"}_population_vector.png",
+        dpi=600,
+    )
+    plt.close()
+    return population_vector
+
+
+def detect_candidate_events(
+    population_vector: np.ndarray, config: BayesianDecodingConfig
+) -> List[Tuple[int, int]]:
+    # based on detect_candidate_spindles from James & Jana
+    candidate_events: List[Tuple[int, int]] = list()
+    peak_threshold = np.mean(population_vector) + config.peak_threshold * np.std(
+        population_vector
+    )
+    edge_threshold = np.mean(population_vector) + config.edge_threshold * np.std(
+        population_vector
+    )
+
+    in_event = False
+    peak_exceeded = False
+    peak_value = -np.inf
+
+    for idx, value in enumerate(population_vector):
+
+        # look for candidate event start
+        if value > edge_threshold and not in_event:
+            start_event = idx
+            in_event = True
+
+        # update peak amplitude
+        if in_event and value > peak_value:
+            peak_value = value
+
+        # check if peak value exceeded peak threshold
+        if in_event and peak_value >= peak_threshold:
+            peak_exceeded = True
+
+        # check for candidate event end
+        if in_event and peak_exceeded and (value < edge_threshold):
+            in_event = False
+            peak_exceeded = False
+            candidate_events.append((start_event, idx))
+            peak_value = -np.inf
+            continue
+
+        # discard candidate events if peak threshold is never exceeded
+        if in_event and not peak_exceeded and value < edge_threshold:
+            in_event = False
+            peak_exceeded = False
+            peak_value = -np.inf
+
+        # discard candidate events if edge threshold is never crossed
+        if in_event and not peak_exceeded and value < edge_threshold:
+            in_event = False
+            peak_exceeded = False
+            peak_value = -np.inf
+
+    return candidate_events
+
+
+def merge_close_events(
+    candidate_events: List[Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    events = sorted(candidate_events, key=lambda x: x[0])  # events sorted by start time
+    merged_events = [events[0]]  # need the first event as a starting point
+    for current_start, current_end in events:
+        last_start, last_end = merged_events[-1]
+        if current_start - last_end < 6:  # less than 0.2s apart
+            merged_events[-1] = (
+                last_start,
+                current_end,
+            )  # merge two events that are too close to each other
+        else:
+            # not too close, keep the event
+            merged_events.append((current_start, current_end))
+    return merged_events
+
+
+def additional_pc_check(
+    filtered_events: List[Tuple[int, int]], ssp: np.ndarray
+) -> List[Tuple[int, int]]:
+    additionally_checked = list()
+    for start_idx, end_idx in filtered_events:
+        pcs_with_spikes = np.where(np.sum(ssp[:, start_idx:end_idx], axis=1) >= 1)[0]
+        if len(pcs_with_spikes) >= 5:
+            additionally_checked.append((start_idx, end_idx))
+    return additionally_checked
 
 
 def find_pse_events(
@@ -69,57 +183,16 @@ def find_pse_events(
     """
 
     # TODO: is the z_scored population activity vector the one with the z_scored means????
-    # TODO: is this always one??
-    population_vector_sd = np.std(population_vector)
-    # find all peaks above 3.5 SD
-    peaks = above_threshold_for_n_consecutive_samples(
-        arr=population_vector,
-        threshold=config.peak_threshold * population_vector_sd,
-        n_samples=1,
+    candidate_events = detect_candidate_events(population_vector, config)
+    print(
+        f"Found {len(candidate_events)} candidate events (before filtering for speed)"
     )
-
-    peak_indices = np.where(peaks)[0]
-
-    # find event edges above 1 SD
-    events = list()
-    for peak_idx in peak_indices:
-        # look for start (go backwards until below 1 SD)
-        start_idx = peak_idx
-        while (
-            start_idx > 0
-            and population_vector[start_idx]
-            > config.edge_threshold * population_vector_sd
-        ):
-            start_idx -= 1
-        # look for end (go forwards until below 1 SD)
-        end_idx = peak_idx
-        while (
-            end_idx < len(population_vector) - 1
-            and population_vector[end_idx]
-            > config.edge_threshold * population_vector_sd
-        ):
-            end_idx += 1
-        events.append((start_idx, end_idx))
-
-    print(f"Found {len(events)} events")
-    if len(events) == 0:
-        return events
+    if len(candidate_events) == 0:
+        return []
 
     # merge events that are too close together (< 0.2s, i.e. 6 frames)
-    events = sorted(events, key=lambda x: x[0])  # events sorted by start time
-
-    merged_events = [events[0]]  # need the first event as a starting point
-    for current_start, current_end in events:
-        last_start, last_end = merged_events[-1]
-        if current_start - last_end < 6:  # less than 0.2s apart
-            merged_events[-1] = (
-                last_start,
-                current_end,
-            )  # merge two events that are too close to each other
-        else:
-            # not too close, keep the event
-            merged_events.append((current_start, current_end))
-
+    # TODO: should we even merge them? or discard if the inter-event-time is too short?
+    merged_events = merge_close_events(candidate_events)
     print(f"Merged into {len(merged_events)} events")
 
     if duration_filter:
@@ -127,6 +200,11 @@ def find_pse_events(
         filtered_events = list()
         for start_idx, end_idx in merged_events:
             duration = end_idx - start_idx + 1
+            # TODO: just for debugging, remove later
+            if duration < config.event_duration[0]:
+                print("Event too short:", duration)
+            elif duration > config.event_duration[1]:
+                print("Event too long:", duration)
             if config.event_duration[0] <= duration <= config.event_duration[1]:
                 filtered_events.append((start_idx, end_idx))
 
@@ -139,12 +217,7 @@ def find_pse_events(
 
     # TODO: ssp is estimated spikes, right?
     # perform additional check: at least 5 distinct PCs each fired at least one estimated spike
-    additionally_checked = list()
-    for start_idx, end_idx in filtered_events:
-        pcs_with_spikes = np.where(np.sum(ssp[:, start_idx:end_idx], axis=1) >= 1)[0]
-        if len(pcs_with_spikes) >= 5:
-            additionally_checked.append((start_idx, end_idx))
-
+    additionally_checked = additional_pc_check(filtered_events, ssp)
     print(f"{len(additionally_checked)} events remaining after additional PC check")
 
     return additionally_checked
@@ -468,7 +541,12 @@ def plot_pse_event(
     )
 
 
-def main(mouse_name: str, date: str) -> BayesianDecodingResult:
+def main(
+    mouse_name: str,
+    date: str,
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
+) -> BayesianDecodingResult:
     """
     'Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
@@ -503,33 +581,7 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
     # mouse = "JB034"
     # date = "2025-07-04"
 
-    # TODO: time bin 2, spatial bin 5 or 10 cm
-
-    # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
-    # so, 33 ms would be 1 frame for offline (changed it to 2 frames) and 333 ms would be 10 frames for online decoding
-    bayesian_config = BayesianDecodingConfig(
-        en_bloc=True,
-        online=True,
-        # TODO: or is the 125 ms sigma also just offline and 1 s for online????
-        sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
-        sigma_online=30,  # "1 s Gaussian kernel"
-        peak_threshold=3.5,
-        # peak_threshold=2,
-        # edge_threshold=0,
-        edge_threshold=1,
-        event_duration=(6, 30),
-        bin_size_time_offline=2,
-        bin_size_time_online=10,
-        bin_size_spatial=5,
-    )
-
     train_size = 0.5  # fraction of trials used to get place cells (online only)
-
-    grosmark_config = GrosmarkConfig(
-        bin_size=bayesian_config.bin_size_spatial,
-        start=0,
-        end=180,
-    )
 
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -597,7 +649,8 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
 
     place_cells = spks[pcs_mask, :]
 
-    total_length = grosmark_config.end - grosmark_config.start
+    # TODO: Think about this! Grosmark used metres instead of centimetres
+    total_length = grosmark_config.end - grosmark_config.start / 100
 
     get_cache_path = lambda variable_name: (
         SERVER_PATH
@@ -615,20 +668,24 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
         # all trial frames
         # ssp_test, positions_test = get_ssp_vectors(trials_test, place_cells, bayesian_config.sigma_online, "all", 5, 3 * 30)
 
+        # TODO: change back!
         # phases of mobility
-        ssp_test, positions_test, trial_start_indices = get_ssp_vectors(
-            trials_test, place_cells, bayesian_config.sigma_online, "above", 5, 3 * 30
-        )
-
-        # phases of immobility
-        # ssp_test = get_ssp_vectors(
-        #     trials=trials_test,
-        #     place_cells=spks,
-        #     sigma=bayesian_config.sigma_online,
-        #     mode="below",
-        #     speed_threshold=1,
-        #     n_consecutive_samples=3 * 30,
+        # ssp_test, positions_test, trial_start_indices = get_ssp_vectors(
+        #     trials_test, place_cells, bayesian_config.sigma_online, "above", 5, 3 * 30
         # )
+
+        # TODO: do we want to increase the speed threshold, and should it be below it for 3 consecutive seconds?
+        # phases of immobility
+        ssp_test, positions_test, trial_start_indices_test = get_ssp_vectors(
+            trials=trials_test,
+            place_cells=spks,
+            sigma=bayesian_config.sigma_online,
+            mode="below",
+            speed_threshold=1,
+            n_consecutive_samples=3 * 30,
+        )
+        # TODO: is this correct?
+        ssp_test = ssp_test[pcs_mask, :]
     else:
         # getting just the post-session wheel freeze
         _, _, offline = split_fluoresence_online_freeze(
@@ -674,12 +731,17 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
             )
             linear_corr_coeff = calculate_linear_weighted_correlation(
                 posterior_probability_matrix=posterior_probability_matrix,
-                xy=construct_xy_by_bin(posterior_probability_matrix, mode="linear"),
+                xy=construct_xy_by_bin(
+                    posterior_probability_matrix,
+                    mode="linear",
+                    total_length=total_length,
+                ),
             )
             linear_sign = check_significance(
                 posterior_probability_matrix,
                 linear_corr_coeff,
                 "linear",
+                total_length,
                 2000,
                 0.05,
             )
@@ -690,6 +752,7 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
                 posterior_probability_matrix,
                 circular_corr_coeff,
                 "circular",
+                total_length,
                 2000,
                 0.05,
             )
@@ -729,10 +792,10 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
             trial_pr_maxs = list()
             linear_corr_coeffs: List[Tuple[float, bool]] = list()
             circular_corr_coeffs: List[Tuple[float, bool]] = list()
-            for trial_idx in range(len(trial_start_indices)):
-                start = trial_start_indices[trial_idx]
-                if trial_idx < len(trial_start_indices) - 1:
-                    end = trial_start_indices[trial_idx + 1]
+            for trial_idx in range(len(trial_start_indices_test)):
+                start = trial_start_indices_test[trial_idx]
+                if trial_idx < len(trial_start_indices_test) - 1:
+                    end = trial_start_indices_test[trial_idx + 1]
                 else:
                     end = posterior_probability_matrix.shape[0]
                 trial_actual_positions.append(positions_test[start:end])
@@ -750,6 +813,7 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
                     trial_ppm,
                     linear_corr_coeff,
                     "linear",
+                    total_length,
                     2000,
                     0.05,
                 )
@@ -759,6 +823,7 @@ def main(mouse_name: str, date: str) -> BayesianDecodingResult:
                     trial_ppm,
                     circular_corr_coeff,
                     "circular",
+                    total_length,
                     2000,
                     0.05,
                 )
@@ -891,53 +956,15 @@ def plot_decoded_vs_actual_position(
     )
 
 
-# TODO: this needs to be refactored as main() changed
-def get_statistics_actual_vs_decoded_position(genotype: str) -> pd.DataFrame:
-    result = {"stage": [], "r2": [], "f1": [], "mouse_id": [], "genotype": []}
-    for mouse_name in SESSIONS_KEEP.keys():
-        if get_genotype(mouse_name) != genotype:
-            continue
-        for stage in ["unsupervised", "learning", "learned"]:
-            print(f"Doing {mouse_name} at {stage} stage")
-            date = SESSIONS_KEEP[mouse_name][stage]
-            if date is None:
-                continue
-            if os.path.exists(
-                f"data/cache/{mouse_name}_{date}_online_en_bloc_decoding.npz"
-            ):
-                with np.load(
-                    f"data/cache/{mouse_name}_{date}_online_en_bloc_decoding.npz"
-                ) as npz:
-                    positions = npz["positions"]
-                    pr_max = npz["pr_max"]
-            else:
-                try:
-                    positions, pr_max = main(mouse_name, date)
-                except (ValueError, FileNotFoundError, KeyError) as e:
-                    print(f"Error processing {mouse_name} at {stage} stage: {e}")
-                    continue
-            if positions is None or pr_max is None:
-                continue
-            r_square = r2_score(y_true=positions, y_pred=pr_max)
-            # TODO: bin_size_spatial is hardcoded here, as is n_bins
-            y_true_bins = bin_for_classification(positions, 5, 180 // 5)
-            y_pred_bins = bin_for_classification(pr_max, 5, 180 // 5)
-            # TODO: think about the averaging method
-            f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
-            # f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="macro")
-            result["stage"].append(stage)
-            result["r2"].append(r_square)
-            result["f1"].append(f1)
-            result["mouse_id"].append(mouse_name)
-            result["genotype"].append(genotype)
-    return pd.DataFrame(result)
-
-
-def get_statistics_correlation(genotype: str) -> pd.DataFrame:
+def get_statistics_correlation(
+    genotype: str, bayesian_config: BayesianDecodingConfig
+) -> pd.DataFrame:
     result = {
         "stage": [],
         "circular_weighted_r": [],
         "linear_weighted_r": [],
+        "f1": [],
+        "r2": [],
         "mouse_id": [],
         "genotype": [],
     }
@@ -984,17 +1011,45 @@ def get_statistics_correlation(genotype: str) -> pd.DataFrame:
                 except (ValueError, FileNotFoundError, KeyError) as e:
                     print(f"Error processing {mouse_name} at {stage} stage: {e}")
                     continue
+
+            actual_positions_flattened = np.array([])
+            pr_max_flattened = np.array([])
+            for trial_position in bayesian.actual_positions:
+                actual_positions_flattened = np.concatenate(
+                    (actual_positions_flattened, np.array(trial_position))
+                )
+            for trial_pr_max in bayesian.pr_max_matrices:
+                pr_max_flattened = np.concatenate(
+                    (pr_max_flattened, np.array(trial_pr_max))
+                )
+
+            assert actual_positions_flattened.shape == pr_max_flattened.shape
+
+            # TODO: are we ok with this binning here?
+            y_true_bins = bin_for_classification(
+                actual_positions_flattened, bayesian_config=bayesian_config
+            )
+
+            y_pred_bins = pr_max_flattened.astype(int)
+
+            # TODO: think about the averaging method
+            f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
+            r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
             result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
             result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
+            result["f1"].append(f1)
+            result["r2"].append(r_square)
             result["mouse_id"].append(mouse_name)
             result["genotype"].append(genotype)
             result["stage"].append(stage)
     return pd.DataFrame(result)
 
 
-def plot_decoded_vs_actual_position_rsquare() -> None:
-    wt = get_statistics_actual_vs_decoded_position("WT")
-    nlgf = get_statistics_actual_vs_decoded_position("NLGF")
+def plot_decoded_vs_actual_position_rsquare(
+    bayesian_config: BayesianDecodingConfig,
+) -> None:
+    wt = get_statistics_correlation("WT", bayesian_config)
+    nlgf = get_statistics_correlation("NLGF", bayesian_config)
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
     fig = plt.figure()
@@ -1049,9 +1104,9 @@ def plot_decoded_vs_actual_position_rsquare() -> None:
     )
 
 
-def plot_decoded_vs_actual_position_f1() -> None:
-    wt = get_statistics_actual_vs_decoded_position("WT")
-    nlgf = get_statistics_actual_vs_decoded_position("NLGF")
+def plot_decoded_vs_actual_position_f1(bayesian_config: BayesianDecodingConfig) -> None:
+    wt = get_statistics_correlation("WT", bayesian_config)
+    nlgf = get_statistics_correlation("NLGF", bayesian_config)
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
     fig = plt.figure()
@@ -1060,12 +1115,13 @@ def plot_decoded_vs_actual_position_f1() -> None:
 
     p_values = {}
 
-    for stage in ["Baseline", "Trained"]:
+    for stage in ["unsupervised", "learning", "learned"]:
         subset = all_data[all_data["stage"] == stage]
-        assert len(subset) > 100, "make sure nothing weird happend"
+        # assert len(subset) > 100, "make sure nothing weird happend"
+        assert len(subset) > 4, "make sure nothing weird happend"
         p_value = mixed_effects(
             df=subset,
-            dependent_var="correlation",
+            dependent_var="f1",
             independent_var="genotype",
             group_name="mouse_id",
         ).filter(like="C(genotype)")
@@ -1109,11 +1165,24 @@ def plot_decoded_vs_actual_position_f1() -> None:
 
 
 def bin_for_classification(
-    position_array: np.ndarray, bin_size_spatial: int, n_bins: int
+    position_array: np.ndarray,
+    bayesian_config: BayesianDecodingConfig,
 ) -> np.ndarray:
-    binned_positions = np.floor(position_array / bin_size_spatial).astype(int)
-    # clip to valid spatial bins
-    return np.clip(binned_positions, 0, n_bins - 1)
+    bin_edges = np.arange(
+        bayesian_config.start_spatial,
+        bayesian_config.end_spatial + bayesian_config.bin_size_spatial,
+        bayesian_config.bin_size_spatial,
+    )
+
+    bin_edges = np.arange(
+        bayesian_config.start_spatial,
+        bayesian_config.end_spatial + bayesian_config.bin_size_spatial,
+        bayesian_config.bin_size_spatial,
+    )
+
+    bin_indices = np.digitize(position_array, bin_edges) - 1
+
+    return np.clip(bin_indices, 0, len(bin_edges) - 2)
 
 
 def plot_confusion_matrix_actual_vs_decoded_position(
@@ -1126,13 +1195,12 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     landmarks_cm = [45, 90, 135]
     landmarks = [l / bayesian_config.bin_size_spatial for l in landmarks_cm]
 
-    print("N_bins", np.max(actual_position) // bayesian_config.bin_size_spatial)
-
     y_true_bins = bin_for_classification(
         actual_position,
         bayesian_config.bin_size_spatial,
         np.max(actual_position) // bayesian_config.bin_size_spatial,
     )
+
     y_pred_bins = bin_for_classification(
         decoded_position,
         bayesian_config.bin_size_spatial,
@@ -1165,7 +1233,7 @@ def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
     nlgf = get_statistics_correlation("NLGF")
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
-    fig = plt.figure()
+    fig, ax = plt.subplots()
     colors = sns.color_palette(n_colors=2)
     palette = {"WT": colors[0], "NLGF": colors[1]}
 
@@ -1192,6 +1260,243 @@ def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
         palette=palette,
         showfliers=False,
     )
+    offset = {
+        "WT": -0.2,
+        "NLGF": +0.2,
+    }
+
+    x_positions = {
+        stage: i for i, stage in enumerate(["unsupervised", "learning", "learned"])
+    }
+
+    for genotype in ["WT", "NLGF"]:
+        sub = all_data[all_data["genotype"] == genotype]
+        xs = [x_positions[s] + offset[genotype] for s in sub["stage"]]
+
+        ax.scatter(
+            xs,
+            sub[f"{mode}_weighted_r"],
+            alpha=1,
+            s=40,
+            color=palette[genotype],
+            edgecolor="black",
+            label=None,
+            zorder=10,
+        )
+
+    plt.tight_layout()
+    sns.despine()
+    # plt.ylim(None, 1.49)
+    ax = plt.gca()
+    ymin_plot, ymax_plot = ax.get_ylim()
+    plot_range = ymax_plot - ymin_plot
+    text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
+    # for i, stage in enumerate(["Baseline", "Trained"]):
+    for i, stage in enumerate(["unsupervised", "learning", "learned"]):
+        p_text = f"P = {round(p_values[stage].values[0], 2)}"
+        ax.text(i, text_y, p_text, ha="center", va="top")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+        # place legend centered relative to the axes (not the whole figure)
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
+
+    plt.savefig(
+        SERVER_PATH / "viral_plots" / "sequence_en_bloc" / f"{mode}_weighted_r.png"
+    )
+
+
+def plot_correlation_across_stages_trajectories(
+    mode: Literal["linear", "circular"],
+) -> None:
+    wt = get_statistics_correlation("WT")
+    nlgf = get_statistics_correlation("NLGF")
+    all_data = pd.concat([wt, nlgf], ignore_index=True)
+
+    stages = ["unsupervised", "learning", "learned"]
+    genotypes = ["WT", "NLGF"]
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    all_data["stage"] = pd.Categorical(
+        all_data["stage"], categories=stages, ordered=True
+    )
+    all_data = all_data.sort_values(["mouse_id", "stage"])
+
+    for genotype in genotypes:
+        sub = all_data[all_data["genotype"] == genotype]
+        for mouse_id, df_mouse in sub.groupby("mouse_id"):
+            ax.plot(
+                df_mouse["stage"],
+                df_mouse[f"{mode}_weighted_r"],
+                marker="o",
+                linewidth=1.5,
+                alpha=0.6,
+                color=palette[genotype],
+            )
+
+    ax.set_xlabel("Stage")
+    ax.set_ylabel(f"{mode} weighted r")
+
+    legend_lines = [
+        Line2D([0], [0], color=palette["WT"], lw=2),
+        Line2D([0], [0], color=palette["NLGF"], lw=2),
+    ]
+    ax.legend(legend_lines, ["WT", "NLGF"], title="Genotype")
+
+    sns.despine()
+    plt.tight_layout()
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "sequence_en_bloc"
+        / f"{mode}_weighted_r_trajectories.png"
+    )
+
+
+def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
+    wt = get_statistics_correlation("WT")
+    nlgf = get_statistics_correlation("NLGF")
+    all_data = pd.concat([wt, nlgf], ignore_index=True)
+
+    fig, ax = plt.subplots()
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    p_values = {}
+
+    # for stage in ["Baseline", "Trained"]:
+    for stage in ["unsupervised", "learning", "learned"]:
+        subset = all_data[all_data["stage"] == stage]
+        # assert len(subset) > 100, "make sure nothing weird happend"
+        p_value = mixed_effects(
+            df=subset,
+            dependent_var=f"{mode}_weighted_r",
+            independent_var="genotype",
+            group_name="mouse_id",
+        ).filter(like="C(genotype)")
+        p_values[f"{stage}"] = p_value
+
+    sns.boxplot(
+        data=all_data,
+        x="stage",
+        y=f"{mode}_weighted_r",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+    offset = {
+        "WT": -0.2,
+        "NLGF": +0.2,
+    }
+
+    x_positions = {
+        stage: i for i, stage in enumerate(["unsupervised", "learning", "learned"])
+    }
+
+    for genotype in ["WT", "NLGF"]:
+        sub = all_data[all_data["genotype"] == genotype]
+        xs = [x_positions[s] + offset[genotype] for s in sub["stage"]]
+
+        ax.scatter(
+            xs,
+            sub[f"{mode}_weighted_r"],
+            alpha=1,
+            s=40,
+            color=palette[genotype],
+            edgecolor="black",
+            label=None,
+            zorder=10,
+        )
+
+    plt.tight_layout()
+    sns.despine()
+    # plt.ylim(None, 1.49)
+    ax = plt.gca()
+    ymin_plot, ymax_plot = ax.get_ylim()
+    plot_range = ymax_plot - ymin_plot
+    text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
+    # for i, stage in enumerate(["Baseline", "Trained"]):
+    for i, stage in enumerate(["unsupervised", "learning", "learned"]):
+        p_text = f"P = {round(p_values[stage].values[0], 2)}"
+        ax.text(i, text_y, p_text, ha="center", va="top")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+        # place legend centered relative to the axes (not the whole figure)
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
+
+    plt.savefig(
+        SERVER_PATH / "viral_plots" / "sequence_en_bloc" / f"{mode}_weighted_r.png"
+    )
+
+
+def plot_correlation_against_f1_score_across_stages(
+    mode: Literal["linear", "circular"],
+    bayesian_config: BayesianDecodingConfig,
+) -> None:
+    wt = get_statistics_correlation("WT", bayesian_config=bayesian_config)
+    nlgf = get_statistics_correlation("NLGF", bayesian_config=bayesian_config)
+    all_data = pd.concat(
+        [wt, nlgf],
+        ignore_index=True,
+    )
+
+    fig, ax = plt.subplots()
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    p_values = {}
+
+    # for stage in ["Baseline", "Trained"]:
+    for stage in ["unsupervised", "learning", "learned"]:
+        subset = all_data[all_data["stage"] == stage]
+        # assert len(subset) > 100, "make sure nothing weird happend"
+        p_value = mixed_effects(
+            df=subset,
+            dependent_var=f"{mode}_weighted_r",
+            independent_var="genotype",
+            group_name="mouse_id",
+        ).filter(like="C(genotype)")
+        p_values[f"{stage}"] = p_value
+
+    sns.boxplot(
+        data=all_data,
+        x="stage",
+        y=f"{mode}_weighted_r",
+        hue="genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+    offset = {
+        "WT": -0.2,
+        "NLGF": +0.2,
+    }
+
+    x_positions = {
+        stage: i for i, stage in enumerate(["unsupervised", "learning", "learned"])
+    }
+
+    for genotype in ["WT", "NLGF"]:
+        sub = all_data[all_data["genotype"] == genotype]
+        xs = [x_positions[s] + offset[genotype] for s in sub["stage"]]
+
+        ax.scatter(
+            xs,
+            sub[f"{mode}_weighted_r"],
+            alpha=1,
+            s=40,
+            color=palette[genotype],
+            edgecolor="black",
+            label=None,
+            zorder=10,
+        )
 
     plt.tight_layout()
     sns.despine()
@@ -1240,16 +1545,50 @@ def create_dummy_ppm_more_complex() -> np.ndarray:
 
 
 if __name__ == "__main__":
+    # TODO: time bin 2, spatial bin 5 or 10 cm
+    # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
+    # so, 33 ms would be 1 frame for offline (changed it to 2 frames) and 333 ms would be 10 frames for online decoding
+    bayesian_config = BayesianDecodingConfig(
+        # en_bloc=True,
+        en_bloc=False,
+        online=True,
+        # TODO: or is the 125 ms sigma also just offline and 1 s for online????
+        sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
+        sigma_online=30,  # "1 s Gaussian kernel"
+        peak_threshold=3.5,
+        edge_threshold=1,
+        # event_duration=(6, 30),
+        event_duration=(6, 120),
+        bin_size_time_offline=2,
+        bin_size_time_online=10,
+        start_spatial=0,
+        end_spatial=180,
+        bin_size_spatial=5,
+    )
+    grosmark_config = GrosmarkConfig(
+        bin_size=bayesian_config.bin_size_spatial,
+        start=bayesian_config.start_spatial,
+        end=bayesian_config.end_spatial,
+    )
+
     for mouse_name in SESSIONS_KEEP.keys():
+        # for mouse_name in ["JB036"]:
         for stage, date in SESSIONS_KEEP[mouse_name].items():
             print(f"Processing {mouse_name} - {stage} - {date}")
             if date:
                 try:
-                    main(mouse_name, date)
+                    main(mouse_name, date, bayesian_config, grosmark_config)
                 except Exception as e:
                     print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
 
     # plot_correlation_across_stages(mode="linear")
     # plot_correlation_across_stages(mode="circular")
+    # plot_correlation_across_stages_trajectories(mode="linear")
+    # plot_correlation_across_stages_trajectories(mode="circular")
+    # plot_decoded_vs_actual_position_f1(bayesian_config)
+    # plot_confusion_matrix_actual_vs_decoded_position(bayesian_config)
+    # plot_correlation_against_f1_score_across_stages(
+    #     "circular", bayesian_config=bayesian_config
+    # )
     # plot_decoded_vs_actual_position_rsquare()
     # plot_decoded_vs_actual_position_f1()
