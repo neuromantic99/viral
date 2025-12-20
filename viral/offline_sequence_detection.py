@@ -158,6 +158,22 @@ def merge_close_events(
     return merged_events
 
 
+def filter_candidate_events_by_duration(
+    candidate_events: List[Tuple[int, int]], event_duration_thresholds: Tuple[int]
+) -> List[Tuple[int, int]]:
+    filtered_events = list()
+    for start_idx, end_idx in candidate_events:
+        duration = end_idx - start_idx + 1
+        # TODO: just for debugging, remove later
+        if duration < event_duration_thresholds[0]:
+            print("Event too short:", duration)
+        elif duration > event_duration_thresholds[1]:
+            print("Event too long:", duration)
+        if event_duration_thresholds[0] <= duration <= event_duration_thresholds[1]:
+            filtered_events.append((start_idx, end_idx))
+    return filtered_events
+
+
 def additional_pc_check(
     filtered_events: List[Tuple[int, int]], ssp: np.ndarray
 ) -> List[Tuple[int, int]]:
@@ -185,7 +201,7 @@ def find_pse_events(
     # TODO: is the z_scored population activity vector the one with the z_scored means????
     candidate_events = detect_candidate_events(population_vector, config)
     print(
-        f"Found {len(candidate_events)} candidate events (before filtering for speed)"
+        f"Found {len(candidate_events)} candidate events (before filtering for duration and additional PC check)"
     )
     if len(candidate_events) == 0:
         return []
@@ -197,17 +213,10 @@ def find_pse_events(
 
     if duration_filter:
         # filter events by duration e.g. (0.2s - 1s) -> (6 - 30 frames)
-        filtered_events = list()
-        for start_idx, end_idx in merged_events:
-            duration = end_idx - start_idx + 1
-            # TODO: just for debugging, remove later
-            if duration < config.event_duration[0]:
-                print("Event too short:", duration)
-            elif duration > config.event_duration[1]:
-                print("Event too long:", duration)
-            if config.event_duration[0] <= duration <= config.event_duration[1]:
-                filtered_events.append((start_idx, end_idx))
-
+        filtered_events = filter_candidate_events_by_duration(
+            candidate_events=merged_events,
+            event_duration_thresholds=config.event_duration,
+        )
         print(f"Filtered to {len(filtered_events)} events by duration")
         if len(filtered_events) == 0:
             return filtered_events
@@ -464,7 +473,7 @@ def check_significance(
     total_length: float | None = None,
     n_shuffles: int = 2000,
     significance: float = 0.05,
-) -> bool:
+) -> Tuple[float, bool]:
     """
     "For each event, the observed weighted circo-linear correlation coefficients weightedr(circular), hereafter referred to as weighted-r,
     was compared to a distribution of 2,000 null weighted-r values either by z-scoring the observed value by the null values (rZ score) or
@@ -499,7 +508,7 @@ def check_significance(
     empirical_p = np.mean(r_shuffled >= r_real)
     rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
     print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
-    return empirical_p < significance
+    return empirical_p, empirical_p < significance
     # TODO: they use Radon whatever, do we need it as well? (I think because of using the absolute values, the direction isn't correctly accounted for)
 
 
@@ -510,6 +519,7 @@ def plot_pse_event(
     session: Cached2pSession,
     grosmark_config: GrosmarkConfig,
     bayesian_config: BayesianDecodingConfig,
+    additional_text: str | None = None,
 ) -> None:
     plt.figure(figsize=(5, 4))
     plt.imshow(
@@ -533,10 +543,13 @@ def plot_pse_event(
     #         )
     #     ],
     # )
+    if additional_text is not None:
+        plt.title(additional_text)
     plt.tight_layout()
     plt.savefig(
         PLOT_PATH
         / "pse_events"
+        # / "pse_events_offline"
         / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_event{idx}.png"
     )
 
@@ -650,7 +663,7 @@ def main(
     place_cells = spks[pcs_mask, :]
 
     # TODO: Think about this! Grosmark used metres instead of centimetres
-    total_length = grosmark_config.end - grosmark_config.start / 100
+    total_length = (grosmark_config.end - grosmark_config.start) / 100
 
     get_cache_path = lambda variable_name: (
         SERVER_PATH
@@ -709,8 +722,6 @@ def main(
         pse_activity = [ssp_test[:, start:end] for start, end in pse_events]
 
         # TODO: why can place_fields contain NaNs???
-
-        # significant_events = list()
         events_ppm = list()
         events_pr_maxs = list()
         linear_corr_coeffs: List[Tuple[float, bool]] = list()
@@ -720,14 +731,6 @@ def main(
                 event,
                 place_fields=place_fields[pcs_mask, :],
                 config=bayesian_config,
-            )
-            plot_pse_event(
-                posterior_probability_matrix,
-                pr_max,
-                idx,
-                session,
-                grosmark_config,
-                bayesian_config,
             )
             linear_corr_coeff = calculate_linear_weighted_correlation(
                 posterior_probability_matrix=posterior_probability_matrix,
@@ -756,11 +759,20 @@ def main(
                 2000,
                 0.05,
             )
+            plot_pse_event(
+                posterior_probability_matrix,
+                pr_max,
+                idx,
+                session,
+                grosmark_config,
+                bayesian_config,
+                additional_text=f"Linear r: {linear_corr_coeff:.2f} (p={linear_sign[0]:.4f}), Circular r: {circular_corr_coeff:.2f} (p={circular_sign[0]:.4f})",
+            )
             print(circular_corr_coeff)
             events_ppm.append(posterior_probability_matrix)
             events_pr_maxs.append(pr_max)
-            linear_corr_coeffs.append((linear_corr_coeff, linear_sign))
-            circular_corr_coeffs.append((circular_corr_coeff, circular_sign))
+            linear_corr_coeffs.append((linear_corr_coeff, linear_sign[0]))
+            circular_corr_coeffs.append((circular_corr_coeff, circular_sign[0]))
         # sanity check that the correlations in the events aren't just artifactual
         assert (
             len([corr for (corr, sign) in linear_corr_coeffs if sign]) > 0
@@ -1551,6 +1563,7 @@ if __name__ == "__main__":
     bayesian_config = BayesianDecodingConfig(
         # en_bloc=True,
         en_bloc=False,
+        # online=False,
         online=True,
         # TODO: or is the 125 ms sigma also just offline and 1 s for online????
         sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"

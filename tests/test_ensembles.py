@@ -121,7 +121,10 @@ def test_get_ssp_vectors(mock_trials) -> None:
         "viral.ensemble_reactivation.degrees_to_cm",
         side_effect=lambda x, _: np.array(x),
     ):
-        with patch("viral.utils.get_wheel_circumference_from_rig", return_value=1):
+        with patch(
+            "viral.ensemble_reactivation.get_wheel_circumference_from_rig",
+            return_value=1,
+        ):
             with patch(
                 "viral.ensemble_reactivation.compute_speed_grosmark",
                 side_effect=lambda position: np.ones_like(position, dtype=float) * 10,
