@@ -8,6 +8,8 @@ nohup
 *.png
 *.jpeg
 *.jpg
+*.txt
+*.csv
 
 plots/
 

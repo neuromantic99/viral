@@ -226,6 +226,12 @@ class BayesianDecodingConfig:
     sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
     sigma_online: int  # frames (for the convolving with Gaussian kernel bit)
 
+    @computed_field
+    @property
+    def total_length(self) -> float:
+        # TODO: Think about this! Grosmark used metres instead of centimetres
+        return (self.end_spatial - self.start_spatial) / 100
+
 
 # TODO: rethink this, currently unused
 # @dataclass
