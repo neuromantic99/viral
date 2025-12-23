@@ -1,13 +1,15 @@
 import numpy as np
 import sys
 from pathlib import Path
-from typing import List, Tuple, Optional, Literal
+from typing import List, Tuple, Optional, Literal, cast
+from scipy.ndimage import gaussian_filter1d
+from skimage.transform import radon
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.models import BayesianDecodingConfig
+from viral.models import BayesianDecodingConfig, RadonLUT, RadonReplayResult
 from viral.imaging_utils import shuffle_rows
 
 
@@ -65,7 +67,8 @@ def merge_close_events(
 ) -> List[Tuple[int, int]]:
     events = sorted(candidate_events, key=lambda x: x[0])  # events sorted by start time
     merged_events = [events[0]]  # need the first event as a starting point
-    for current_start, current_end in events:
+    # start to compare the second event onwards
+    for current_start, current_end in events[1:]:
         last_start, last_end = merged_events[-1]
         if current_start - last_end < 6:  # less than 0.2s apart
             merged_events[-1] = (
@@ -311,15 +314,238 @@ def bin_for_classification(
         bayesian_config.bin_size_spatial,
     )
 
-    bin_edges = np.arange(
-        bayesian_config.start_spatial,
-        bayesian_config.end_spatial + bayesian_config.bin_size_spatial,
-        bayesian_config.bin_size_spatial,
-    )
-
     bin_indices = np.digitize(position_array, bin_edges) - 1
 
     return np.clip(bin_indices, 0, len(bin_edges) - 2)
+
+
+def pol2cart(rho, phi):
+    """https://stackoverflow.com/questions/20924085/python-conversion-between-coordinates"""
+    x = rho * np.cos(phi)
+    y = rho * np.sin(phi)
+    return (x, y)
+
+
+def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
+    """
+    Essentially a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/makeRadonLookupTable.m.
+    """
+
+    # (spatial_bins, time_bins)
+    template = np.ones((n_spatial_bins, n_time_bins), float)
+
+    theta = np.arange(0, 179.5, 0.5)
+    all_slopes = 1 / np.tan(np.deg2rad(theta))
+
+    # In Grosmark's MATLAB implementation, they manually set the offsets for the radon transform to try.
+    # As this would make it integral to have our own implementation of the radon transform and/or mess with the input to the radon function here,
+    # I have decided to not match the MATLAB code exactly but to use the skimage radon implementation instead.
+    # -> if you set line 37 in the MATLAB implementation to `[RO, xp] = radon(O1(:, 1:nTemporalBins(S)), rad2deg(theta));` instead,
+    # the radon transform implementation is almost the same as in skimage
+
+    # By default, MATLAB is enforcing an odd offset count. I.e., you radon trabsform here could have one more offset than in MATLAB.
+    radon_transform = radon(template, theta=theta, circle=False)
+    # radon_transform = radon(template, theta=theta, circle=True)
+
+    n_offsets = radon_transform.shape[0]
+    xp = np.arange(-(n_offsets // 2), n_offsets // 2 + n_offsets % 2)
+    n_radon_points = radon_transform.shape[0]
+    assert n_radon_points == len(xp)
+    # TODO: in test: assert here not more than one offset more compared to matlab
+
+    # TODO: which way should it be?
+    # center_x = (n_time_bins - 1) / 2
+    # center_y = (n_spatial_bins - 1) / 2
+
+    # % centerX = floor((nTemporalBins(S) + 1)/2);
+    # % centerY = floor((nSpatialBins + 1)/2);
+    center_x = (n_time_bins + 1) // 2
+    center_y = (n_spatial_bins + 1) // 2
+    # center_x = n_time_bins // 2
+    # center_y = n_spatial_bins // 2
+
+    point1x = np.zeros(shape=(len(xp), len(theta)))
+    point1y = np.zeros(shape=(len(xp), len(theta)))
+    point2x = np.zeros(shape=(len(xp), len(theta)))
+    point2y = np.zeros(shape=(len(xp), len(theta)))
+    for b_idx, b in enumerate(xp):
+        for t_idx, t in enumerate(theta):
+            x, y = pol2cart(b, np.deg2rad(theta[t_idx]))
+
+            x2 = center_x + x
+            y2 = center_y - y
+
+            m = all_slopes[t_idx]
+            intercept = y2 - m * x2
+
+            # % calculate the 4 possible points which may intersect the edge
+            # % of the rectangle defined by the event size:
+            top_edge = n_spatial_bins + 0.5
+            right_edge = n_time_bins + 0.5
+            left_point = np.array([0.0, intercept])
+            right_point = np.array([right_edge, right_edge * m + intercept])
+            # handle division by zero for bottom_point and top_point
+            if np.isfinite(m) and m != 0:
+                bottom_point = np.array([-intercept / m, 0.0])
+                top_point = np.array([(top_edge - intercept) / m, top_edge])
+            else:
+                # m==0 or m is infinite, compute points safely
+                if m == 0:
+                    # horizontal line y = intercept, intersects left and right edges at y=intercept
+                    bottom_point = np.array([np.nan, np.nan])
+                    top_point = np.array([np.nan, np.nan])
+                else:
+                    # m is infinite -> vertical line x = x2, intersects top/bottom at that x
+                    bottom_point = np.array([x2, 0.0])
+                    top_point = np.array([x2, top_edge])
+
+            possible_points = np.vstack(
+                [left_point, right_point, bottom_point, top_point]
+            )
+
+            # % then pick the two points which actually intersect the
+            # % event-rectangle
+            valid = np.isfinite(possible_points).all(axis=1)
+            inside = (
+                (possible_points[:, 0] >= 0)
+                & (possible_points[:, 0] <= right_edge)
+                & (possible_points[:, 1] >= 0)
+                & (possible_points[:, 1] <= top_edge)
+            )
+            k = np.where(valid & inside)[0]
+
+            if k.size >= 2:
+                point1x[b_idx, t_idx] = possible_points[k[0], 0]
+                point1y[b_idx, t_idx] = possible_points[k[0], 1]
+                point2x[b_idx, t_idx] = possible_points[k[1], 0]
+                point2y[b_idx, t_idx] = possible_points[k[1], 1]
+
+    path_length_from_points = np.hypot(point2x - point1x, point2y - point1y)
+    space_offset = point2y - point1y
+    temp_offset = point2x - point1x
+    space_offset_round = np.round(space_offset)
+    temp_offset_round = np.round(temp_offset)
+    temp_offset_round_perc = 100 * np.abs(np.floor(temp_offset)) / n_time_bins
+    # temp_offset_round_perc = 100 * (abs(temp_offset) / n_time_bins)
+
+    return RadonLUT(
+        path_length=radon_transform,
+        xp=xp,
+        theta=theta,
+        n_radon_points=n_radon_points,
+        point1x=point1x,
+        point1y=point1y,
+        point2x=point2x,
+        point2y=point2y,
+        slope=all_slopes,
+        path_length_from_points=path_length_from_points,
+        space_offset=space_offset,
+        temp_offset=temp_offset,
+        space_offset_round=space_offset_round,
+        temp_offset_round=temp_offset_round,
+        temp_offset_round_perc=temp_offset_round_perc,
+    )
+
+
+def calculate_radon_replay(
+    posterior_probability_matrix: np.ndarray, bayesian_config: BayesianDecodingConfig
+) -> RadonReplayResult:
+    """
+    "To determine the precise trajectory content of each sequence, a modified 'line casting' or Radon transformation approach was employed.
+    Briefly, for each event, the posterior probabilities were tiled twice by position to account for 'edge' spanning sequences and smoothed
+    with a 5-cm Gaussian kernel across positions within each time bin. Subsequently, lines, restricted to those crossing all bins,
+    were densely cast along this matrix and the mean of the posterior probability for each of these lines was calculated.
+    The trajectory was defined as the casted line with the highest mean posterior probability value, and the sign of the slope
+    of the trajectory line defined whether it was a forward or reverse sequence."
+
+    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcRadonReplay.m.
+    """
+    # TODO: careful: axes??!
+    n_time, n_pos = posterior_probability_matrix.shape
+
+    # TODO: check: is it really like matlab?
+    tiled_posterior_probability_matrix = np.tile(posterior_probability_matrix.T, (2, 1))
+
+    # TODO: careful axes?!
+    sigma = 5 / bayesian_config.bin_size_spatial  # 5 cm
+    smoothed_tiled_posterior_probability_matrix = gaussian_filter1d(
+        input=tiled_posterior_probability_matrix, sigma=sigma, axis=0
+    )
+
+    # TODO: check if that works with our data
+    min_spatial_disp = 0  # % minimum spatial displacement of valid lines (in bins)
+    # TODO: this was set to 100 in MATLAB, but will that work?
+    min_n_bin_perc = (
+        100.0  # % minimum percentage of temporal bins that valid lines must cross
+    )
+
+    # TODO: is that right?
+    radon_lut = create_radon_lut(n_spatial_bins=n_pos * 2, n_time_bins=n_time)
+
+    # checked this against MATLAB, it works
+    min_path_length = np.sqrt(
+        (np.floor(n_time * (min_n_bin_perc / 100.0)) + 1) ** 2 + min_spatial_disp**2
+    )
+
+    good_lines = (
+        (np.abs(radon_lut.space_offset) >= min_spatial_disp)
+        & (np.abs(radon_lut.temp_offset_round_perc) >= min_n_bin_perc)
+        & (radon_lut.path_length_from_points >= min_path_length)
+    )
+
+    theta = radon_lut.theta
+    n_radon_points = radon_lut.n_radon_points
+
+    radon_transform = radon(
+        smoothed_tiled_posterior_probability_matrix, theta=theta, circle=False
+    )
+    assert radon_transform.shape[0] == n_radon_points
+
+    radon_transform[~good_lines] = 0
+
+    # normalise by path length
+    radon_transform_mean = radon_transform / radon_lut.path_length
+    # TODO: a bit dangerous, but path lenghts often are zero, i.e. leading to zero divisions with NaNs as result
+    radon_transform_mean = np.nan_to_num(radon_transform_mean, nan=0)
+
+    # find the line with the highest mean posterior probability
+    pos_mean_max = np.max(radon_transform_mean)
+    linear_index = np.argmax(radon_transform_mean)
+
+    # convert linear index to 2D indices
+    line_idx, theta_idx = np.unravel_index(linear_index, radon_transform.shape)
+
+    # extract properties of the best line
+    slope = radon_lut.slope[theta_idx]
+    path_length = radon_lut.path_length_from_points[line_idx, theta_idx]
+    point1x = radon_lut.point1x[line_idx, theta_idx]
+    point1y = radon_lut.point1y[line_idx, theta_idx]
+    point2x = radon_lut.point2x[line_idx, theta_idx]
+    point2y = radon_lut.point2y[line_idx, theta_idx]
+
+    distance = ((point2y - point1y) - 0.5) * bayesian_config.bin_size_spatial
+    time = (
+        ((point2x - point1x) - 0.5) * bayesian_config.bin_size_time_online
+        if bayesian_config.online
+        else bayesian_config.bin_size_time_offline
+    ) / 30
+    slope_metres_per_sec = distance / time
+
+    replay_type = cast(
+        Literal["forward", "reverse"], "forward" if slope >= 0 else "reverse"
+    )
+
+    return RadonReplayResult(
+        pos_mean=pos_mean_max,
+        path_length=path_length,
+        point1x=point1x,
+        point1y=point1y,
+        point2x=point2x,
+        point2y=point2y,
+        slope=slope,
+        slope_metres_per_sec=slope_metres_per_sec,
+        replay_type=replay_type,
+    )
 
 
 def test_construct_xy_by_bin_against_matlab() -> None:
@@ -332,14 +558,18 @@ def test_construct_xy_by_bin_against_matlab() -> None:
     assert np.all(np.isclose(matlab_xy, python_xy))
 
 
-def create_dummy_ppm_perfect_diagonal() -> np.ndarray:
-    ppm = np.zeros(shape=(10, 10))
+def create_dummy_ppm_perfect_diagonal(
+    n_spatial_bins: int, n_time_bins: int
+) -> np.ndarray:
+    # (n_time_bins, n_spatial_bins)
+    ppm = np.zeros(shape=(n_time_bins, n_spatial_bins))
     np.fill_diagonal(ppm, 0.5)
     return ppm
 
 
-def create_dummy_ppm_more_complex() -> np.ndarray:
-    ppm = np.zeros(shape=(10, 10))
+def create_dummy_ppm_more_complex(n_spatial_bins: int, n_time_bins: int) -> np.ndarray:
+    # (n_time_bins, n_spatial_bins)
+    ppm = np.zeros(shape=(n_time_bins, n_spatial_bins))
     np.fill_diagonal(ppm, 0.5)
     ppm[3, 5] = 0.7
     return ppm

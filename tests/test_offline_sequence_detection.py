@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 from unittest.mock import Mock, patch
 
-from viral.offline_sequence_detection import (
+from viral.sequence_utils import (
     detect_candidate_events,
     merge_close_events,
     filter_candidate_events_by_duration,

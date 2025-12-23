@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Literal
 from pydantic import BaseModel, computed_field
 from datetime import datetime
 import numpy as np
@@ -252,3 +252,36 @@ class BayesianDecodingResult:
     linear_weighted_r: List[float]
     circular_weighted_r: List[float]
     actual_positions: List[np.ndarray] | None = None
+
+
+@dataclass
+class RadonLUT:
+    path_length: np.ndarray
+    xp: np.ndarray
+    theta: np.ndarray
+    n_radon_points: int
+    point1x: np.ndarray
+    point1y: np.ndarray
+    point2x: np.ndarray
+    point2y: np.ndarray
+    slope: np.ndarray
+    path_length_from_points: np.ndarray
+    space_offset: np.ndarray
+    temp_offset: np.ndarray
+    space_offset_round: np.ndarray
+    temp_offset_round: np.ndarray
+    temp_offset_round_perc: np.ndarray
+
+
+@dataclass
+class RadonReplayResult:
+    pos_mean: float  # mean posterior probability of best line
+    # max_id: int  # linear index of best line
+    path_length: float
+    point1x: float
+    point1y: float
+    point2x: float
+    point2y: float
+    slope: float
+    slope_metres_per_sec: float
+    replay_type: Literal["forward", "reverse"]

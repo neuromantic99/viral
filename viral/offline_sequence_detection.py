@@ -731,7 +731,7 @@ def get_statistics_correlation(
             date = SESSIONS_KEEP[mouse_name][stage]
             if date is None:
                 continue
-            # TODO: this needs refacoring
+            # TODO: this needs refactoring
             if os.path.exists(
                 SERVER_PATH
                 / "viral_caches"
@@ -762,7 +762,7 @@ def get_statistics_correlation(
                 )
             else:
                 try:
-                    bayesian = main(mouse_name, date)
+                    bayesian = main(mouse_name, date, bayesian_config, grosmark_config)
                 except (ValueError, FileNotFoundError, KeyError) as e:
                     print(f"Error processing {mouse_name} at {stage} stage: {e}")
                     continue
@@ -929,17 +929,9 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     landmarks_cm = [45, 90, 135]
     landmarks = [l / bayesian_config.bin_size_spatial for l in landmarks_cm]
 
-    y_true_bins = bin_for_classification(
-        actual_position,
-        bayesian_config.bin_size_spatial,
-        np.max(actual_position) // bayesian_config.bin_size_spatial,
-    )
+    y_true_bins = bin_for_classification(actual_position, bayesian_config)
 
-    y_pred_bins = bin_for_classification(
-        decoded_position,
-        bayesian_config.bin_size_spatial,
-        np.max(actual_position) // bayesian_config.bin_size_spatial,
-    )
+    y_pred_bins = bin_for_classification(decoded_position, bayesian_config)
 
     cm = confusion_matrix(y_true=y_true_bins, y_pred=y_pred_bins)
     plt.figure(figsize=(8, 6))
@@ -1088,85 +1080,6 @@ def plot_correlation_across_stages_trajectories(
         / "viral_plots"
         / "sequence_en_bloc"
         / f"{mode}_weighted_r_trajectories.png"
-    )
-
-
-def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
-    wt = get_statistics_correlation("WT")
-    nlgf = get_statistics_correlation("NLGF")
-    all_data = pd.concat([wt, nlgf], ignore_index=True)
-
-    fig, ax = plt.subplots()
-    colors = sns.color_palette(n_colors=2)
-    palette = {"WT": colors[0], "NLGF": colors[1]}
-
-    p_values = {}
-
-    # for stage in ["Baseline", "Trained"]:
-    for stage in ["unsupervised", "learning", "learned"]:
-        subset = all_data[all_data["stage"] == stage]
-        # assert len(subset) > 100, "make sure nothing weird happend"
-        p_value = mixed_effects(
-            df=subset,
-            dependent_var=f"{mode}_weighted_r",
-            independent_var="genotype",
-            group_name="mouse_id",
-        ).filter(like="C(genotype)")
-        p_values[f"{stage}"] = p_value
-
-    sns.boxplot(
-        data=all_data,
-        x="stage",
-        y=f"{mode}_weighted_r",
-        hue="genotype",
-        hue_order=["WT", "NLGF"],
-        palette=palette,
-        showfliers=False,
-    )
-    offset = {
-        "WT": -0.2,
-        "NLGF": +0.2,
-    }
-
-    x_positions = {
-        stage: i for i, stage in enumerate(["unsupervised", "learning", "learned"])
-    }
-
-    for genotype in ["WT", "NLGF"]:
-        sub = all_data[all_data["genotype"] == genotype]
-        xs = [x_positions[s] + offset[genotype] for s in sub["stage"]]
-
-        ax.scatter(
-            xs,
-            sub[f"{mode}_weighted_r"],
-            alpha=1,
-            s=40,
-            color=palette[genotype],
-            edgecolor="black",
-            label=None,
-            zorder=10,
-        )
-
-    plt.tight_layout()
-    sns.despine()
-    # plt.ylim(None, 1.49)
-    ax = plt.gca()
-    ymin_plot, ymax_plot = ax.get_ylim()
-    plot_range = ymax_plot - ymin_plot
-    text_y = ymax_plot - plot_range * 0.1  # place text just below the top of the axis
-    # for i, stage in enumerate(["Baseline", "Trained"]):
-    for i, stage in enumerate(["unsupervised", "learning", "learned"]):
-        p_text = f"P = {round(p_values[stage].values[0], 2)}"
-        ax.text(i, text_y, p_text, ha="center", va="top")
-
-    handles, labels = ax.get_legend_handles_labels()
-    if ax.get_legend() is not None:
-        ax.get_legend().remove()
-        # place legend centered relative to the axes (not the whole figure)
-    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=2)
-
-    plt.savefig(
-        SERVER_PATH / "viral_plots" / "sequence_en_bloc" / f"{mode}_weighted_r.png"
     )
 
 
