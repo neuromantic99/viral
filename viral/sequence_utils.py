@@ -10,7 +10,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 from viral.models import BayesianDecodingConfig, RadonLUT, RadonReplayResult
-from viral.imaging_utils import shuffle_rows
+from viral.utils import shuffle_rows
 
 
 def detect_candidate_events(
@@ -326,6 +326,7 @@ def pol2cart(rho, phi):
     return (x, y)
 
 
+# TODO: TEST ALL THIS against MATLAB implementation!!!!!! You could manually set nRadonPoints to match exactly!
 def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
     """
     Essentially a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/makeRadonLookupTable.m.
@@ -340,7 +341,7 @@ def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
     # In Grosmark's MATLAB implementation, they manually set the offsets for the radon transform to try.
     # As this would make it integral to have our own implementation of the radon transform and/or mess with the input to the radon function here,
     # I have decided to not match the MATLAB code exactly but to use the skimage radon implementation instead.
-    # -> if you set line 37 in the MATLAB implementation to `[RO, xp] = radon(O1(:, 1:nTemporalBins(S)), rad2deg(theta));` instead,
+    # TODO: change this, it doesn't apply -> if you set line 37 in the MATLAB implementation to `[RO, xp] = radon(O1(:, 1:nTemporalBins(S)), rad2deg(theta));` instead,
     # the radon transform implementation is almost the same as in skimage
 
     # By default, MATLAB is enforcing an odd offset count. I.e., you radon trabsform here could have one more offset than in MATLAB.
@@ -523,13 +524,18 @@ def calculate_radon_replay(
     point2x = radon_lut.point2x[line_idx, theta_idx]
     point2y = radon_lut.point2y[line_idx, theta_idx]
 
-    distance = ((point2y - point1y) - 0.5) * bayesian_config.bin_size_spatial
-    time = (
-        ((point2x - point1x) - 0.5) * bayesian_config.bin_size_time_online
+    # TODO: this seems off: check units
+    # distance = ((point2y - point1y) - 0.5) * bayesian_config.bin_size_spatial / 100
+    bin_size_time = (
+        bayesian_config.bin_size_time_online
         if bayesian_config.online
         else bayesian_config.bin_size_time_offline
-    ) / 30
-    slope_metres_per_sec = distance / time
+    )
+    time = ((point2x - point1x) - 0.5) * bin_size_time / 30
+    # slope_metres_per_sec = distance / time
+    slope_metres_per_sec = (
+        slope * bayesian_config.bin_size_spatial / 100 / (bin_size_time / 30)
+    )
 
     replay_type = cast(
         Literal["forward", "reverse"], "forward" if slope >= 0 else "reverse"

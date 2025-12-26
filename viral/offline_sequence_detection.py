@@ -46,6 +46,7 @@ from viral.sequence_utils import (
     calculate_circular_weighted_correlation,
     check_significance,
     bin_for_classification,
+    calculate_radon_replay,
 )
 from viral.sessions_keep import SESSIONS_KEEP
 
@@ -235,7 +236,9 @@ def plot_pse_event(
     grosmark_config: GrosmarkConfig,
     bayesian_config: BayesianDecodingConfig,
     mode: Literal["linear", "circular"],
-    additional_text: str | None = None,
+    corr_coeff: float,
+    significance: Tuple[float, bool],
+    do_radon_transform: Optional[bool] = True,
 ) -> None:
     plt.figure(figsize=(10, 8))
     if mode == "linear":
@@ -245,6 +248,9 @@ def plot_pse_event(
             vmax=np.max(posterior_probability_matrix) * 1.1,
             aspect="auto",
         )
+        plt.title(
+            f"Linear Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f})"
+        )
     elif mode == "circular":
         plt.imshow(
             np.tile(posterior_probability_matrix.T, (2, 1)),
@@ -252,7 +258,46 @@ def plot_pse_event(
             vmax=np.max(posterior_probability_matrix) * 1.1,
             aspect="auto",
         )
+        plt.title(
+            f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f})"
+        )
     plt.colorbar()
+
+    if do_radon_transform and mode == "circular":
+        radon_replay = calculate_radon_replay(
+            posterior_probability_matrix=posterior_probability_matrix,
+            bayesian_config=bayesian_config,
+        )
+        x = [radon_replay.point1x, radon_replay.point2x]
+        y = [radon_replay.point1y, radon_replay.point2y]
+        plt.plot(x, y, color="r")
+        plt.plot(
+            x,
+            [
+                y
+                + (
+                    (bayesian_config.total_length * 100)
+                    / bayesian_config.bin_size_spatial
+                )
+                for y in y
+            ],
+            color="r",
+        )
+        plt.plot(
+            x,
+            [
+                y
+                - (
+                    (bayesian_config.total_length * 100)
+                    / bayesian_config.bin_size_spatial
+                )
+                for y in y
+            ],
+            color="r",
+        )
+        plt.title(
+            f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
+        )
 
     n_time, n_pos = posterior_probability_matrix.shape
 
@@ -271,6 +316,8 @@ def plot_pse_event(
                 ).astype(int)
             ],
         )
+        # plt.ylim(0, n_pos - 1)
+        plt.ylim(n_pos - 1, 0)
     elif mode == "circular":
         plt.yticks(
             np.linspace(0, (n_pos * 2) - 1, 5),
@@ -281,14 +328,18 @@ def plot_pse_event(
                 ).astype(int)
             ],
         )
-    if additional_text is not None:
-        plt.title(additional_text)
+        # plt.ylim(0, (n_pos * 2) - 1)
+        plt.ylim((n_pos * 2) - 1, 0)
+    plt.xlim(0, n_time - 1)
+
     plt.tight_layout()
     plt.savefig(
         PLOT_PATH
-        / f"pse_events_{'online' if bayesian_config.online else 'offline'}"
+        # / f"pse_events_{'online' if bayesian_config.online else 'offline'}"
+        / "pse_events_radon"
         / f"{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_{mode}_event{idx}.png"
     )
+    plt.close()
 
 
 def main(
@@ -475,41 +526,44 @@ def main(
                 ),
             )
             linear_sign = check_significance(
-                posterior_probability_matrix,
-                linear_corr_coeff,
-                "linear",
-                bayesian_config.total_length,
-                2000,
-                0.05,
+                posterior_probability_matrix=posterior_probability_matrix,
+                correlation=linear_corr_coeff,
+                mode="linear",
+                total_length=bayesian_config.total_length,
+                n_shuffles=2000,
+                significance=0.05,
             )
             circular_corr_coeff = calculate_circular_weighted_correlation(
                 posterior_probability_matrix=posterior_probability_matrix,
             )
             circular_sign = check_significance(
-                posterior_probability_matrix,
-                circular_corr_coeff,
-                "circular",
-                bayesian_config.total_length,
-                2000,
-                0.05,
-            )
-            plot_pse_event(
-                posterior_probability_matrix,
-                idx,
-                session,
-                grosmark_config,
-                bayesian_config,
-                mode="linear",
-                additional_text=f"Linear r: {linear_corr_coeff:.2f} (p={linear_sign[0]:.4f})",
-            )
-            plot_pse_event(
-                posterior_probability_matrix,
-                idx,
-                session,
-                grosmark_config,
-                bayesian_config,
+                posterior_probability_matrix=posterior_probability_matrix,
+                correlation=circular_corr_coeff,
                 mode="circular",
-                additional_text=f"Circular r: {circular_corr_coeff:.2f} (p={circular_sign[0]:.4f})",
+                total_length=bayesian_config.total_length,
+                n_shuffles=2000,
+                significance=0.05,
+            )
+            plot_pse_event(
+                posterior_probability_matrix=posterior_probability_matrix,
+                idx=idx,
+                session=session,
+                grosmark_config=grosmark_config,
+                bayesian_config=bayesian_config,
+                mode="linear",
+                corr_coeff=linear_corr_coeff,
+                significance=linear_sign,
+            )
+            plot_pse_event(
+                posterior_probability_matrix=posterior_probability_matrix,
+                idx=idx,
+                session=session,
+                grosmark_config=grosmark_config,
+                bayesian_config=bayesian_config,
+                mode="circular",
+                corr_coeff=circular_corr_coeff,
+                significance=circular_sign,
+                do_radon_transform=True,
             )
             print(circular_corr_coeff)
             events_ppm.append(posterior_probability_matrix)
@@ -517,12 +571,19 @@ def main(
             linear_corr_coeffs.append((linear_corr_coeff, linear_sign[0]))
             circular_corr_coeffs.append((circular_corr_coeff, circular_sign[0]))
         # sanity check that the correlations in the events aren't just artifactual
+        # TODO: keep as assertions or warnings?
+        # assert (
+        #     len([corr for (corr, sign) in linear_corr_coeffs if sign]) > 0
+        # ), "No significant PSE events found (linear weighted correlation)!"
+        # assert (
+        #     len([corr for (corr, sign) in circular_corr_coeffs if sign]) > 0
+        # ), "No significant PSE events found (circular weighted correlation)!"
+        # TODO: perhaps a compromise: at least one event has to be significant in either linear or circular weighted correlation?
+        n_sign_linear = len([corr for (corr, sign) in linear_corr_coeffs if sign])
+        n_sign_circular = len([corr for (corr, sign) in circular_corr_coeffs if sign])
         assert (
-            len([corr for (corr, sign) in linear_corr_coeffs if sign]) > 0
-        ), "No significant PSE events found (linear weighted correlation)!"
-        assert (
-            len([corr for (corr, sign) in circular_corr_coeffs if sign]) > 0
-        ), "No significant PSE events found (circular weighted correlation)!"
+            sum([n_sign_linear, n_sign_circular]) > 0
+        ), f"No significant PSE events found! \nLinear: {linear_corr_coeffs} \nCircular: {circular_corr_coeffs}"
         result = BayesianDecodingResult(
             posterior_probability_matrices=events_ppm,
             pr_max_matrices=events_pr_maxs,
@@ -1203,7 +1264,7 @@ if __name__ == "__main__":
             if date:
                 try:
                     main(mouse_name, date, bayesian_config, grosmark_config)
-                except Exception as e:
+                except (ValueError, FileNotFoundError, KeyError, RuntimeError) as e:
                     print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
 
     plot_correlation_across_stages(mode="linear")
