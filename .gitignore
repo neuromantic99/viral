@@ -10,6 +10,7 @@ nohup
 *.jpg
 *.txt
 *.csv
+*.mat
 
 plots/
 

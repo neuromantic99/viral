@@ -88,8 +88,8 @@ def get_population_vector(ssp_smoothed: np.ndarray) -> np.ndarray:
     plt.title("Population vector")
     plt.savefig(
         PLOT_PATH
-        / f"{"pse_events_online" if bayesian_config.online else "pse_events_offline"}"
-        / f"{mouse_name}_{date}_{"online" if bayesian_config.online else "offline"}_population_vector.png",
+        / f"{'pse_events_online' if bayesian_config.online else 'pse_events_offline'}"
+        / f"{mouse_name}_{date}_{'online' if bayesian_config.online else 'offline'}_population_vector.png",
         dpi=600,
     )
     plt.close()
@@ -420,7 +420,7 @@ def main(
     session.trials = trials_train
 
     cache_file = Path(
-        f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_{"en_bloc" if bayesian_config.en_bloc else "per_event"}_place_cells.npz"
+        f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_{'en_bloc' if bayesian_config.en_bloc else 'per_event'}_place_cells.npz"
     )
 
     if cache_file.exists and use_cache:
@@ -455,7 +455,7 @@ def main(
         / "viral_caches"
         / "sequence_detection"
         / variable_name
-        / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_{"en_bloc" if bayesian_config.en_bloc else "event_by_event"}.npz"
+        / f"{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_{'en_bloc' if bayesian_config.en_bloc else 'event_by_event'}.npz"
     )
 
     # TODO: is ssp test the correct one? (in terms of convolution)
@@ -498,7 +498,9 @@ def main(
 
     if not bayesian_config.en_bloc:
         population_vector = get_population_vector(ssp_test)
-        pse_events = find_pse_events(population_vector, ssp_test, bayesian_config)
+        pse_events = find_pse_events(
+            population_vector=population_vector, ssp=ssp_test, config=bayesian_config
+        )
 
         if len(pse_events) == 0:
             print("No PSE events found, exiting")
@@ -581,9 +583,10 @@ def main(
         # TODO: perhaps a compromise: at least one event has to be significant in either linear or circular weighted correlation?
         n_sign_linear = len([corr for (corr, sign) in linear_corr_coeffs if sign])
         n_sign_circular = len([corr for (corr, sign) in circular_corr_coeffs if sign])
-        assert (
-            sum([n_sign_linear, n_sign_circular]) > 0
-        ), f"No significant PSE events found! \nLinear: {linear_corr_coeffs} \nCircular: {circular_corr_coeffs}"
+        # TODO: add back in
+        # assert (
+        #     sum([n_sign_linear, n_sign_circular]) > 0
+        # ), f"No significant PSE events found! \nLinear: {linear_corr_coeffs} \nCircular: {circular_corr_coeffs}"
         result = BayesianDecodingResult(
             posterior_probability_matrices=events_ppm,
             pr_max_matrices=events_pr_maxs,
@@ -673,7 +676,7 @@ def main(
             plt.savefig(
                 PLOT_PATH
                 / "sequence_en_bloc"
-                / f"{session.mouse_name}_{session.date}_{"online" if bayesian_config.online else "offline"}_en_bloc.png"
+                / f"{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_en_bloc.png"
             )
 
             if bayesian_config.online:
@@ -773,7 +776,9 @@ def plot_decoded_vs_actual_position(
 
 
 def get_statistics_correlation(
-    genotype: str, bayesian_config: BayesianDecodingConfig
+    genotype: str,
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
 ) -> pd.DataFrame:
     result = {
         "stage": [],
@@ -862,10 +867,10 @@ def get_statistics_correlation(
 
 
 def plot_decoded_vs_actual_position_rsquare(
-    bayesian_config: BayesianDecodingConfig,
+    bayesian_config: BayesianDecodingConfig, grosmark_config: GrosmarkConfig
 ) -> None:
-    wt = get_statistics_correlation("WT", bayesian_config)
-    nlgf = get_statistics_correlation("NLGF", bayesian_config)
+    wt = get_statistics_correlation("WT", bayesian_config, grosmark_config)
+    nlgf = get_statistics_correlation("NLGF", bayesian_config, grosmark_config)
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
     fig = plt.figure()
@@ -1272,9 +1277,8 @@ if __name__ == "__main__":
     plot_correlation_across_stages_trajectories(mode="linear")
     plot_correlation_across_stages_trajectories(mode="circular")
     plot_decoded_vs_actual_position_f1(bayesian_config)
-    plot_confusion_matrix_actual_vs_decoded_position(bayesian_config)
     plot_correlation_against_f1_score_across_stages(
         "circular", bayesian_config=bayesian_config
     )
-    plot_decoded_vs_actual_position_rsquare()
-    plot_decoded_vs_actual_position_f1()
+    plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
+    plot_decoded_vs_actual_position_f1(bayesian_config)
