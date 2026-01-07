@@ -270,7 +270,7 @@ def plot_pse_event(
         )
         x = [radon_replay.point1x, radon_replay.point2x]
         y = [radon_replay.point1y, radon_replay.point2y]
-        plt.plot(x, y, color="r")
+        plt.plot(x, y, color="r", linestyle="--")
         plt.plot(
             x,
             [
@@ -282,6 +282,7 @@ def plot_pse_event(
                 for y in y
             ],
             color="r",
+            linestyle="--",
         )
         plt.plot(
             x,
@@ -294,6 +295,7 @@ def plot_pse_event(
                 for y in y
             ],
             color="r",
+            linestyle="--",
         )
         plt.title(
             f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
@@ -1272,13 +1274,13 @@ if __name__ == "__main__":
                 except (ValueError, FileNotFoundError, KeyError, RuntimeError) as e:
                     print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
 
-    plot_correlation_across_stages(mode="linear")
-    plot_correlation_across_stages(mode="circular")
-    plot_correlation_across_stages_trajectories(mode="linear")
-    plot_correlation_across_stages_trajectories(mode="circular")
-    plot_decoded_vs_actual_position_f1(bayesian_config)
-    plot_correlation_against_f1_score_across_stages(
-        "circular", bayesian_config=bayesian_config
-    )
-    plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
-    plot_decoded_vs_actual_position_f1(bayesian_config)
+    # plot_correlation_across_stages(mode="linear")
+    # plot_correlation_across_stages(mode="circular")
+    # plot_correlation_across_stages_trajectories(mode="linear")
+    # plot_correlation_across_stages_trajectories(mode="circular")
+    # plot_decoded_vs_actual_position_f1(bayesian_config)
+    # plot_correlation_against_f1_score_across_stages(
+    #     "circular", bayesian_config=bayesian_config
+    # )
+    # plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
+    # plot_decoded_vs_actual_position_f1(bayesian_config)
