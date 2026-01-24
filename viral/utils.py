@@ -1,14 +1,19 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import List, Tuple, TypeVar, Any
+from typing import Dict, List, Literal, Tuple, TypeVar, Any
 import warnings
 from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
+import seaborn as sns
+from statsmodels.formula.api import mixedlm
 import numpy as np
 from enum import Enum
 import pandas as pd
+from scipy import stats
+from scipy.ndimage import gaussian_filter1d
 
+from scipy.linalg import issymmetric
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import (
     Cached2pSession,
@@ -18,17 +23,30 @@ from viral.models import (
 )
 
 
+def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
+    return np.convolve(arr, np.ones(window), "valid") / window
+
+
 def shaded_line_plot(
     arr: np.ndarray,
     x_axis: np.ndarray | List[float],
     color: str,
     label: str,
+    do_moving_average: bool = False,
+    axis: plt.Axes | None = None,
 ) -> None:
 
-    mean = np.mean(arr, 0)
-    sem = np.std(arr, 0) / np.sqrt(arr.shape[1])
-    plt.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
-    plt.fill_between(
+    plotter = axis if axis is not None else plt
+
+    if do_moving_average:
+        mean = gaussian_filter1d(np.nanmean(arr, 0), sigma=1)
+        sem = gaussian_filter1d(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), sigma=1)
+    else:
+        mean = np.nanmean(arr, 0)
+        sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[1])
+
+    plotter.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
+    plotter.fill_between(
         x_axis,
         np.subtract(
             mean,
@@ -207,7 +225,7 @@ def threshold_detect_edges(
 
 
 def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
-    return list(directory.glob("*.tif"))
+    return list(directory.glob("*.tif*"))
 
 
 def extract_TTL_chunks(
@@ -259,7 +277,7 @@ def time_list_to_datetime(time_list: List[float]) -> datetime:
     )
 
 
-def find_chunk(chunk_lens: List[int], index: int) -> int:
+def find_chunk(chunk_lens: List[int] | np.ndarray, index: int) -> int:
     """Given a list of chunk lengths and an index, find the chunk that contains the index"""
     cumulative_length = 0
     for i, length in enumerate(chunk_lens):
@@ -301,12 +319,14 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
     return np.nanmean(data, axis=0)
 
 
-def get_genotype(mouse_name: str) -> str:
+def get_genotype(
+    mouse_name: str,
+) -> Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
-    elif mouse_name in {"JB034", "JB035"}:
+    if mouse_name in {"JB034", "JB035"}:
         return "Neuronal-BACE1-KO"
-    elif mouse_name in {
+    if mouse_name in {
         "JB011",
         "JB012",
         "JB013",
@@ -319,7 +339,7 @@ def get_genotype(mouse_name: str) -> str:
     }:
         return "NLGF"
 
-    elif mouse_name in {
+    if mouse_name in {
         "JB024",
         "JB025",
         "JB026",
@@ -330,8 +350,8 @@ def get_genotype(mouse_name: str) -> str:
         "JB033",
     }:
         return "WT"
-    else:
-        raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
+
+    raise ValueError(f"Unknown genotype for mouse: {mouse_name}")
 
 
 def get_sex(mouse_name: str) -> str:
@@ -412,7 +432,6 @@ class SessionType(Enum):
     RECALL_REVERSAL = "recall_reversal"
     RECALL = "recall"
     LEARNING = "learning"
-    UNSUPERVISED = "unsupervised"
 
 
 def get_session_type(session_name: str) -> str:
@@ -425,8 +444,6 @@ def get_session_type(session_name: str) -> str:
         )
     elif "recall" in session_name:
         return SessionType.RECALL.value
-    elif "unsupervised" in session_name:
-        return SessionType.UNSUPERVISED.value
     elif "learning" in session_name:
         return SessionType.LEARNING.value
     else:
@@ -442,7 +459,7 @@ def shuffle(x: np.ndarray) -> np.ndarray:
 
 
 def sort_matrix_peak(matrix: np.ndarray) -> np.ndarray:
-    peak_indices = np.argmax(matrix, axis=1)
+    peak_indices = np.nanargmax(matrix, axis=1)
     sorted_order = np.argsort(peak_indices)
     return matrix[sorted_order]
 
@@ -544,6 +561,31 @@ def uk_to_utc(dt: datetime) -> datetime:
     )
 
 
+def below_threshold_for_n_consecutive_samples(
+    arr: np.ndarray,
+    threshold: float,
+    n_samples: int,
+) -> np.ndarray:
+    """
+    Returns a boolean mask where True indicates the array element is within a bout of being
+    above threshold for n_samples length (all elements in any qualifying window are True).
+
+    Returns:
+        np.ndarray: Boolean mask, same length as arr.
+    """
+    below = arr < threshold
+    # Rolling sum to find windows of n_samples below threshold
+    run_lengths = np.convolve(
+        below.astype(int), np.ones(n_samples, dtype=int), mode="valid"
+    )
+    # Find start indices of valid runs
+    valid_starts = np.where(run_lengths >= n_samples)[0]
+    mask = np.zeros_like(arr, dtype=bool)
+    for start in valid_starts:
+        mask[start : start + n_samples] = True
+    return mask
+
+
 def above_threshold_for_n_consecutive_samples(
     arr: np.ndarray,
     threshold: float,
@@ -569,32 +611,6 @@ def above_threshold_for_n_consecutive_samples(
     return mask
 
 
-# TODO: this is probably extremly verbose as it is essentially duplicating the funciton above. But keep as it minimises risk of error?
-def below_threshold_for_n_consecutive_samples(
-    arr: np.ndarray,
-    threshold: float,
-    n_samples: int,
-) -> np.ndarray:
-    """
-    Returns a boolean mask where True indicates the array element is within a bout of being
-    below threshold for n_samples length (all elements in any qualifying window are True).
-
-    Returns:
-        np.ndarray: Boolean mask, same length as arr.
-    """
-    below = arr < threshold
-    # Rolling sum to find windows of n_samples below threshold
-    run_lengths = np.convolve(
-        below.astype(int), np.ones(n_samples, dtype=int), mode="valid"
-    )
-    # Find start indices of valid runs
-    valid_starts = np.where(run_lengths >= n_samples)[0]
-    mask = np.zeros_like(arr, dtype=bool)
-    for start in valid_starts:
-        mask[start : start + n_samples] = True
-    return mask
-
-
 def split_continuous_chunks(arr: np.ndarray) -> List[np.ndarray]:
     """Split an array into continuous chunks"""
     split_indices = np.where(np.diff(arr) != 1)[0] + 1
@@ -607,3 +623,84 @@ def check_trial_file_sorting(trial_files: List[Path]) -> None:
         this_number = int(trial.stem.split("trial")[-1])
         next_number = int(next_trial.stem.split("trial")[-1])
         assert next_number == this_number + 1
+
+
+def basic_normalise(data: np.ndarray) -> np.ndarray:
+    return (data - np.min(data)) / (np.max(data) - np.min(data))
+
+
+def imshow(matrix: np.ndarray, vmax: float | None = None) -> None:
+    """Wrapper with the settings we use everytime"""
+    plt.imshow(matrix, aspect="auto", interpolation="none", vmax=vmax)
+    plt.colorbar()
+
+
+def exp_model(t: np.ndarray, A: float, tau: float, C: float) -> np.ndarray:
+    return A * np.exp(-t / tau) + C
+
+
+def corr_vs_distance(A: np.ndarray) -> np.ndarray:
+    assert A.shape[0] == A.shape[1]
+    assert issymmetric(A, atol=0.01), "Input matrix must be symmetric"
+    n = A.shape[0]
+    return np.array([np.diag(A, k).mean() for k in range(n)])
+
+
+def round_up_to_base(x: float, base: int) -> int:
+    return base * math.ceil(x / base)
+
+
+def compute_linear_slope(
+    x: np.ndarray, y: np.ndarray, plot: bool = False, title: str = ""
+) -> float:
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    if plot:
+        plt.figure()
+        plt.plot(x, y, label="data")
+        plt.plot(x, slope * x + intercept, label="fit")
+        plt.title(f"{title} slope: {slope:.4f}, p: {p_value:.4f}")
+        plt.legend()
+    return slope
+
+
+def boxplot(result: Dict[str, Any]) -> None:
+    sns.boxplot(result, showfliers=False)
+    sns.stripplot(result, edgecolor="black", linewidth=1)
+    plt.tight_layout()
+
+
+def upper_triangle_no_diagonal(matrix: np.ndarray) -> np.ndarray:
+    """Return the upper triangle of a square matrix, excluding the diagonal."""
+    return matrix[np.triu_indices(matrix.shape[0], k=1)]
+
+
+def mixed_effects(
+    df: pd.DataFrame,
+    dependent_var: str,
+    independent_var: str,
+    group_name: str,
+) -> pd.Series:
+
+    df[independent_var] = df[independent_var].astype("category")
+
+    md = mixedlm(
+        f"{dependent_var} ~ C({independent_var})",
+        df,
+        groups=df[group_name],
+    )
+    mdf = md.fit(reml=False)
+    assert mdf.converged, "MixedLM did not converge for resting baseline firing rates"
+    return mdf.pvalues
+
+
+def interpolate_nans_vector(arr: np.ndarray) -> np.ndarray:
+    assert arr.ndim == 1, "Input array must be one-dimensional"
+    # arr = np.asarray(arr, dtype=float)
+    nans = np.isnan(arr)
+
+    if not nans.any():
+        return arr  # nothing to do
+
+    x = np.arange(len(arr))
+    arr[nans] = np.interp(x[nans], x[~nans], arr[~nans])
+    return arr
