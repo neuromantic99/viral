@@ -51,7 +51,9 @@ from viral.sequence_utils import (
 from viral.sessions_keep import SESSIONS_KEEP
 
 
-def get_population_vector(ssp_smoothed: np.ndarray) -> np.ndarray:
+def get_population_vector(
+    ssp_smoothed: np.ndarray, mouse_name: str, date: str
+) -> np.ndarray:
     """
     Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
@@ -349,7 +351,7 @@ def main(
     date: str,
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
-) -> BayesianDecodingResult:
+) -> BayesianDecodingResult | None:
     """
     'Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
@@ -414,41 +416,26 @@ def main(
         trials_train, trials_test = train_test_split(
             trials, train_size=train_size, random_state=42
         )
+        use_train_test_split = True
     else:
         # otherwise just keep all imaged trials
         trials_train = trials
+        use_train_test_split = False
 
     # do the place cell template only on the training data!
     session.trials = trials_train
 
-    cache_file = Path(
-        f"{SERVER_PATH}/viral_caches/sequence_detection/{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_{'en_bloc' if bayesian_config.en_bloc else 'per_event'}_place_cells.npz"
+    t0 = time.time()
+    pcs_mask, place_fields, place_threshold = get_place_cells(
+        session=session,
+        spks=spks,
+        rewarded=None,
+        use_cache=True,
+        config=grosmark_config,
+        plot=False,
+        use_train_test_split=use_train_test_split,  # careful there when changing the train-test-split!!!
     )
-
-    if cache_file.exists and use_cache:
-        npz = np.load(cache_file)
-        pcs_mask = npz["pcs_mask"]
-        place_fields = npz["place_fields"]
-        place_threshold = npz["place_threshold"]
-        print("Loaded place cells from cache")
-
-    else:
-        t0 = time.time()
-        pcs_mask, place_fields, place_threshold = get_place_cells(
-            session=session,
-            spks=spks,
-            rewarded=None,
-            use_cache=True,  # TODO: change to False for online!!!
-            config=grosmark_config,
-            plot=False,
-        )
-        print(f"Time to get place cells: {time.time() - t0}")
-        np.savez(
-            cache_file,
-            pcs_mask=pcs_mask,
-            place_fields=place_fields,
-            place_threshold=place_threshold,
-        )
+    print(f"Time to get place cells: {time.time() - t0}")
 
     place_cells = spks[pcs_mask, :]
 
@@ -484,7 +471,10 @@ def main(
             speed_threshold=1,
             n_consecutive_samples=3 * 30,
         )
-        # TODO: is this correct?
+        # TODO: is the use of ssp correct?
+        if ssp_test.size == 0:
+            print("Empty ssp vector, returning None")
+            return None
         ssp_test = ssp_test[pcs_mask, :]
     else:
         # getting just the post-session wheel freeze
@@ -499,7 +489,9 @@ def main(
         )
 
     if not bayesian_config.en_bloc:
-        population_vector = get_population_vector(ssp_test)
+        population_vector = get_population_vector(
+            ssp_smoothed=ssp_test, mouse_name=mouse_name, date=date
+        )
         pse_events = find_pse_events(
             population_vector=population_vector, ssp=ssp_test, config=bayesian_config
         )
@@ -594,11 +586,13 @@ def main(
             pr_max_matrices=events_pr_maxs,
             linear_weighted_r=[corr for (corr, _) in linear_corr_coeffs],
             circular_weighted_r=[corr for (corr, _) in circular_corr_coeffs],
+            actual_positions=positions_test if bayesian_config.online else None,
         )
         #     if check_significance_pse_event(posterior_probability_matrix):
         #         significant_events.append(posterior_probability_matrix)
         # print(f"Found {len(significant_events)} significant events")
         # TODO: this certainly is wrong so change later
+        # TODO: what is?
     else:
         if not os.path.exists(get_cache_path("bayesian")) or not use_cache:
             # TODO: do the circular or linear weighted correlation on the trials as "events"
@@ -777,6 +771,27 @@ def plot_decoded_vs_actual_position(
     )
 
 
+def f1_score_by_position(y_true: np.ndarray, y_pred: np.ndarray) -> List[float]:
+    """f1 score by actual position (position bins in ascending order)"""
+    y_true_bins = bin_for_classification(y_true, bayesian_config)
+    y_pred_bins = bin_for_classification(y_pred, bayesian_config)
+    f1_scores = list()
+    for bin_value in sorted(np.unique(y_true_bins)):
+        # do f1 score for all the values of a unique y_true_bin
+        mask = y_true_bins == bin_value
+        assert np.count_nonzero(mask) > 0
+        # TODO: remove after debugging
+        print(y_true_bins[mask])
+        print(y_pred_bins[mask])
+        # TODO: again, which averaging method?
+        f1_scores.append(
+            f1_score(
+                y_true=y_true_bins[mask], y_pred=y_pred_bins[mask], average="weighted"
+            ),
+        )
+    return f1_scores
+
+
 def get_statistics_correlation(
     genotype: str,
     bayesian_config: BayesianDecodingConfig,
@@ -799,13 +814,16 @@ def get_statistics_correlation(
             date = SESSIONS_KEEP[mouse_name][stage]
             if date is None:
                 continue
-            # TODO: this needs refactoring
-            if os.path.exists(
-                SERVER_PATH
-                / "viral_caches"
-                / "sequence_detection"
-                / "bayesian"
-                / f"{mouse_name}_{date}_online_en_bloc.npz"
+            use_cache = False
+            if (
+                os.path.exists(
+                    SERVER_PATH
+                    / "viral_caches"
+                    / "sequence_detection"
+                    / "bayesian"
+                    / f"{mouse_name}_{date}_online_en_bloc.npz"
+                )
+                and use_cache
             ):
                 npz = np.load(
                     SERVER_PATH
@@ -857,9 +875,13 @@ def get_statistics_correlation(
 
             # TODO: think about the averaging method
             f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
+            result["f1_score_by_position"] = f1_score_by_position(
+                y_true=actual_positions_flattened, y_pred=pr_max_flattened
+            )
             r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
-            result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
-            result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
+            # TODO: this function will unfortunately ave to be specific to en_bloc and per_event or entail both
+            # result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
+            # result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
             result["f1"].append(f1)
             result["r2"].append(r_square)
             result["mouse_id"].append(mouse_name)
@@ -1154,9 +1176,14 @@ def plot_correlation_across_stages_trajectories(
 def plot_correlation_against_f1_score_across_stages(
     mode: Literal["linear", "circular"],
     bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
 ) -> None:
-    wt = get_statistics_correlation("WT", bayesian_config=bayesian_config)
-    nlgf = get_statistics_correlation("NLGF", bayesian_config=bayesian_config)
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
     all_data = pd.concat(
         [wt, nlgf],
         ignore_index=True,
@@ -1241,8 +1268,8 @@ if __name__ == "__main__":
     # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
     # so, 33 ms would be 1 frame for offline (changed it to 2 frames) and 333 ms would be 10 frames for online decoding
     bayesian_config = BayesianDecodingConfig(
-        # en_bloc=True,
-        en_bloc=False,
+        en_bloc=True,
+        # en_bloc=False,
         # online=False,
         online=True,
         # TODO: or is the 125 ms sigma also just offline and 1 s for online????
@@ -1264,15 +1291,28 @@ if __name__ == "__main__":
         end=bayesian_config.end_spatial,
     )
 
-    for mouse_name in SESSIONS_KEEP.keys():
-        # for mouse_name in ["JB036"]:
-        for stage, date in SESSIONS_KEEP[mouse_name].items():
-            print(f"Processing {mouse_name} - {stage} - {date}")
-            if date:
-                try:
-                    main(mouse_name, date, bayesian_config, grosmark_config)
-                except (ValueError, FileNotFoundError, KeyError, RuntimeError) as e:
-                    print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+
+    # for mouse_name in SESSIONS_KEEP.keys():
+    #     # for mouse_name in ["JB036"]:
+    #     for stage, date in SESSIONS_KEEP[mouse_name].items():
+    #         print(f"Processing {mouse_name} - {stage} - {date}")
+    #         if date:
+    #             try:
+    #                 main(mouse_name, date, bayesian_config, grosmark_config)
+    #             except (
+    #                 ValueError,
+    #                 FileNotFoundError,
+    #                 KeyError,
+    #                 RuntimeError,
+    #                 # AssertionError,
+    #             ) as e:
+    #                 print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
 
     # plot_correlation_across_stages(mode="linear")
     # plot_correlation_across_stages(mode="circular")
@@ -1280,7 +1320,7 @@ if __name__ == "__main__":
     # plot_correlation_across_stages_trajectories(mode="circular")
     # plot_decoded_vs_actual_position_f1(bayesian_config)
     # plot_correlation_against_f1_score_across_stages(
-    #     "circular", bayesian_config=bayesian_config
+    #     "circular", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     # )
     # plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
     # plot_decoded_vs_actual_position_f1(bayesian_config)

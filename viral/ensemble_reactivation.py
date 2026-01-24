@@ -768,6 +768,7 @@ def get_ssp_vectors(
             trial_start_indices.append(trial_start_idx)
 
     if len(ssp_vectors) == 0:
+        print("No frames matched the criteria, returning empty ssp vector")
         return np.array([]), np.array([]), np.array([])
     else:
         total_length = np.hstack(ssp_vectors).shape[1]

@@ -85,7 +85,7 @@ def merge_close_events(
 
 
 def filter_candidate_events_by_duration(
-    candidate_events: List[Tuple[int, int]], event_duration_thresholds: Tuple[int]
+    candidate_events: List[Tuple[int, int]], event_duration_thresholds: Tuple[int, int]
 ) -> List[Tuple[int, int]]:
     filtered_events = list()
     for start_idx, end_idx in candidate_events:
@@ -286,14 +286,14 @@ def check_significance(
         xy = construct_xy_by_bin(
             posterior_probability_matrix, mode="linear", total_length=total_length
         )
-        for i in range(n_shuffles):
+        for _ in range(n_shuffles):
             shuffled = shuffle_rows(posterior_probability_matrix)
             shuffled_weighted_rs.append(
                 calculate_linear_weighted_correlation(shuffled, xy)
             )
     elif mode == "circular":
         shuffled_weighted_rs = list()
-        for i in range(n_shuffles):
+        for _ in range(n_shuffles):
             shuffled = shuffle_rows(posterior_probability_matrix)
             shuffled_weighted_rs.append(
                 calculate_circular_weighted_correlation(shuffled)
@@ -302,6 +302,7 @@ def check_significance(
     # TODO: it isn't clear, should the raw pse activity or the ppm be shuffled?
     r_shuffled = np.abs(shuffled_weighted_rs)
     empirical_p = np.mean(r_shuffled >= r_real)
+    assert empirical_p >= 0
     rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
     print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
     return empirical_p, empirical_p < significance
@@ -667,8 +668,6 @@ def create_dummy_ppm_more_complex(n_spatial_bins: int, n_time_bins: int) -> np.n
 
 
 def compare_radon_against_matlab() -> None:
-    from scipy.io import savemat, loadmat
-
     bayesian_config = BayesianDecodingConfig(
         en_bloc=True,  #
         online=False,

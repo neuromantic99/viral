@@ -251,7 +251,7 @@ class BayesianDecodingResult:
     pr_max_matrices: List[np.ndarray]
     linear_weighted_r: List[float]
     circular_weighted_r: List[float]
-    actual_positions: List[np.ndarray] | None = None
+    actual_positions: List[np.ndarray] | None
 
 
 @dataclass
