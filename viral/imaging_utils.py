@@ -7,6 +7,7 @@ from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
+    below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
@@ -72,6 +73,7 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
 
 
 def trial_is_imaged(trial: TrialInfo) -> bool:
+
     # This is a temporary fix for JB015 "2024-10-24".
     # The imaging was started during the spacers, which assigns the wrong tiff epoch to the trial.
     # TODO: come up with a proper fix for this.
@@ -172,7 +174,7 @@ def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
     return speed
 
 
-def get_online_position_and_frames(
+def get_resting_position_and_frames(
     trial: TrialInfo, wheel_circumference: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
@@ -195,22 +197,49 @@ def get_online_position_and_frames(
     assert len(position) == len(frame_position)
 
     speed = compute_speed_grosmark(position)
-
-    speed_threshold = 5
-    idx_keep = above_threshold_for_n_consecutive_samples(
+    speed_threshold = 1
+    idx_keep = below_threshold_for_n_consecutive_samples(
         speed, threshold=speed_threshold, n_samples=3 * 30
     )
-
-    # Taken this out for now as it doesn't seem to be such a big
-    # issue with the new smoothing. Keep and eye on the place cells
-    # plots though
-
-    # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
-    # trial_onset = frame_position < frame_position[0] + 60
-    # idx_keep = idx_keep & ~trial_onset
-
     position = position[idx_keep]
     frame_position = frame_position[idx_keep]
+    assert len(position) == len(frame_position)
+
+    return position, frame_position
+
+
+def get_online_position_and_frames(
+    trial: TrialInfo,
+    wheel_circumference: float,
+    threshold_speed: bool = True,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
+    for at least 3 consecutive seconds."""
+
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
+    )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+    assert len(position) == len(frame_position)
+
+    if threshold_speed:
+        speed = compute_speed_grosmark(position)
+        speed_threshold = 5
+        idx_keep = above_threshold_for_n_consecutive_samples(
+            speed, threshold=speed_threshold, n_samples=3 * 30
+        )
+        position = position[idx_keep]
+        frame_position = frame_position[idx_keep]
 
     assert len(position) == len(frame_position)
 
@@ -226,6 +255,8 @@ def activity_trial_position(
     max_position: int = 170,
     verbose: bool = False,
     do_shuffle: bool = False,
+    threshold_speed: bool = True,
+    bin_occupancy_divide: bool = False,
 ) -> np.ndarray:
     """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
     trial: TrialInfo
@@ -238,8 +269,9 @@ def activity_trial_position(
     verbose: if True, print the binning information
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
+    assert trial_is_imaged(trial), "Trial does not have imaging data"
     position, frame_position = get_online_position_and_frames(
-        trial, wheel_circumference
+        trial, wheel_circumference, threshold_speed
     )
 
     dff_position_list = []
@@ -251,6 +283,10 @@ def activity_trial_position(
             ]
         )
         dff_bin = flu[:, frame_idx_bin]
+        if bin_occupancy_divide:
+            dff_bin = (
+                dff_bin / len(frame_idx_bin) if len(frame_idx_bin) > 0 else dff_bin
+            )
 
         if verbose:
             print(f"bin_start: {bin_start}")
