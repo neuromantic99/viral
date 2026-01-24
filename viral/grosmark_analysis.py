@@ -28,11 +28,14 @@ from viral.imaging_utils import (
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 
 from viral.utils import (
+    compute_linear_slope,
     cross_correlation_pandas,
     degrees_to_cm,
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
+    interpolate_nans_vector,
+    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -98,9 +101,8 @@ def get_place_cells(
     spks: np.ndarray,
     config: GrosmarkConfig,
     rewarded: bool | None,
-    use_cache: bool = True,
+    bin_occupancy_divide: bool = False,
     plot: bool = True,
-    use_train_test_split: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     From Grosmark et al.:
@@ -118,9 +120,8 @@ def get_place_cells(
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
 
     Returns:
-    - pcs_combined:     boolean mask of shape (n_cells,) where True indicates a place cell
-    - smoothed_matrix:  smoothed firing rate by position matrix of shape (n_cells, n_bins)
-    - place_threshold:  place threshold matrix of shape (n_cells, n_bins)
+    - place_cell_mask: boolean mask of shape (n_cells,) where True indicates a place cell
+    - smoothed_matrix: smoothed firing rate by position matrix of shape (n_cells, n_bins)
     """
 
     n_cells_total = spks.shape[0]
@@ -145,6 +146,8 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
+                threshold_speed=False if bin_occupancy_divide else True,
+                bin_occupancy_divide=bin_occupancy_divide,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
@@ -155,23 +158,16 @@ def get_place_cells(
     smoothed_matrix = gaussian_filter1d(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
-    if not use_train_test_split:
-        get_cache_path = lambda variable_name: (
-            SERVER_PATH
-            / "viral_caches"
-            / "place_cells"
-            / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
-        )
-    else:
-        # train-test split
-        get_cache_path = lambda variable_name: (
-            SERVER_PATH
-            / "viral_caches"
-            / "place_cells"
-            / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_train-test-split_{variable_name}.npy"
-        )
+
+    use_cache = True
+
+    get_cache_path = lambda variable_name: (
+        SERVER_PATH
+        / "viral_caches"
+        / "place_cells"
+        / variable_name
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+    )
 
     if use_cache and get_cache_path("place_threshold").exists():
         print("Found cached place threshold")
@@ -199,6 +195,8 @@ def get_place_cells(
                             max_position=config.end,
                             verbose=False,
                             do_shuffle=True,
+                            threshold_speed=False if bin_occupancy_divide else True,
+                            bin_occupancy_divide=bin_occupancy_divide,
                         )
                         for trial in session.trials
                         if trial_is_imaged(trial)
@@ -213,8 +211,7 @@ def get_place_cells(
             shuffled_matrices[shuffle_idx, :, :] = smoothed_shuffle
 
         place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
-        if use_cache:
-            np.save(get_cache_path("place_threshold"), place_threshold)
+        np.save(get_cache_path("place_threshold"), place_threshold)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -256,9 +253,8 @@ def get_place_cells(
             / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}.png"
         )
 
-    if use_cache:
-        np.save(get_cache_path("smoothed_matrix"), smoothed_matrix)
-        np.save(get_cache_path("pcs_combined"), pcs_combined)
+    np.save(get_cache_path("smoothed_matrix"), smoothed_matrix)
+    np.save(get_cache_path("pcs_combined"), pcs_combined)
     return pcs_combined, smoothed_matrix, place_threshold
 
 
@@ -421,19 +417,19 @@ def get_offline_correlation_matrix(
 def correlations_vs_peak_distance(
     corrs: np.ndarray,
     peak_position_cm: np.ndarray,
+    bin_starts: np.ndarray,
     colour: str | None = None,
     label: str | None = None,
-    plot: bool = True,
-) -> tuple[float, float]:
+    plot: bool = False,
+) -> tuple[float, tuple[np.ndarray, np.ndarray]]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
-    distance between their place field peaks.
-
+        distance between their place field peaks.
     Args:
-    corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
-    peak_position_cm: the position of the peak firing rate of each neuron in cm
-    colour: colour for the plot
-    label: label for the plot
-    plot: whether to plot
+        corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
+        peak_position_cm: the position of the peak firing rate of each neuron in cm
+        colour: colour for the plot
+        label: label for the plot
+        plot: whether to plot
     """
 
     n_cells = corrs.shape[0]
@@ -453,17 +449,30 @@ def correlations_vs_peak_distance(
     x = []
     y = []
 
-    for bin_start in np.arange(0, 100):
+    bin_width = bin_starts[1] - bin_starts[0]
+    for bin_start in bin_starts:
         in_bin = np.logical_and(
-            peak_distances >= bin_start, peak_distances < bin_start + 20
+            peak_distances >= bin_start, peak_distances < bin_start + bin_width
         )
         x.append(bin_start)
         y.append(np.mean(cell_corrs[in_bin]))
 
     if plot:
-        plt.plot(x, y, color=colour, label=label)
-    r, p = pearsonr(x, y)
-    return r, p
+        plt.figure()
+        plt.plot(np.array(x) / 60, y, color=colour, label=label)
+        plt.legend()
+
+    # Need to put this back if grosmarking
+    # r, p = pearsonr(x, y)
+    # return r, p
+    x = np.array(x)
+    y = np.array(y)
+
+    y = interpolate_nans_vector(y)
+
+    m = compute_linear_slope((x / 60), y / y[0])
+
+    return m, (np.array(x), np.array(y))
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
