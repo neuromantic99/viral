@@ -10,7 +10,12 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.models import BayesianDecodingConfig, RadonLUT, RadonReplayResult
+from viral.constants import SERVER_PATH
+from viral.models import (
+    BayesianDecodingConfig,
+    RadonLUT,
+    RadonReplayResult,
+)
 from viral.utils import shuffle_rows
 
 
@@ -916,6 +921,19 @@ def compare_radon_functions() -> None:
     savemat("radon_transform.mat", {"radon_transform": radon_transform})
     savemat(
         "radon_transform_circle.mat", {"radon_transform_circle": radon_transform_circle}
+    )
+
+
+def get_cache_path(
+    mouse_name: str, date: str, bayesian_config: BayesianDecodingConfig
+) -> Path:
+    return (
+        SERVER_PATH
+        / "viral_caches"
+        / "sequence_detection"
+        / "bayesian"
+        # / f"{mouse_name}_{date}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
+        / f"{mouse_name}_{date}_{'online' if bayesian_config.online else 'offline'}_{'en_bloc' if bayesian_config.en_bloc else 'events'}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
     )
 
 

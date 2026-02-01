@@ -101,6 +101,7 @@ def get_place_cells(
     spks: np.ndarray,
     config: GrosmarkConfig,
     rewarded: bool | None,
+    use_cache: bool = True,
     bin_occupancy_divide: bool = False,
     plot: bool = True,
     use_train_test_split: bool = False,
@@ -159,8 +160,6 @@ def get_place_cells(
     smoothed_matrix = gaussian_filter1d(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
-
-    use_cache = True
 
     if not use_train_test_split:
         get_cache_path = lambda variable_name: (

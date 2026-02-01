@@ -432,6 +432,7 @@ class SessionType(Enum):
     RECALL_REVERSAL = "recall_reversal"
     RECALL = "recall"
     LEARNING = "learning"
+    UNSUPERVISED = "unsupervised"
 
 
 def get_session_type(session_name: str) -> str:
@@ -444,6 +445,8 @@ def get_session_type(session_name: str) -> str:
         )
     elif "recall" in session_name:
         return SessionType.RECALL.value
+    elif "unsupervised" in session_name:
+        return SessionType.UNSUPERVISED.value
     elif "learning" in session_name:
         return SessionType.LEARNING.value
     else:
@@ -568,7 +571,7 @@ def below_threshold_for_n_consecutive_samples(
 ) -> np.ndarray:
     """
     Returns a boolean mask where True indicates the array element is within a bout of being
-    above threshold for n_samples length (all elements in any qualifying window are True).
+    below threshold for n_samples length (all elements in any qualifying window are True).
 
     Returns:
         np.ndarray: Boolean mask, same length as arr.

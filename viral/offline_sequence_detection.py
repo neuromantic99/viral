@@ -25,11 +25,7 @@ from viral.models import (
     BayesianDecodingResult,
 )
 
-from viral.utils import (
-    get_session_type,
-    get_genotype,
-    mixed_effects,
-)
+from viral.utils import get_session_type, get_genotype, mixed_effects, shaded_line_plot
 from viral.imaging_utils import (
     split_fluoresence_online_freeze,
     trial_is_imaged,
@@ -47,6 +43,7 @@ from viral.sequence_utils import (
     check_significance,
     bin_for_classification,
     calculate_radon_replay,
+    get_cache_path,
 )
 from viral.sessions_keep import SESSIONS_KEEP
 
@@ -401,6 +398,12 @@ def main(
     print(f"Analysing {"online" if bayesian_config.online else "offline"} activity")
     print(f"Decoding {"en bloc" if bayesian_config.en_bloc else "per PSE event"}")
 
+    cache_path = get_cache_path(
+        mouse_name=session.mouse_name,
+        date=session.date,
+        bayesian_config=bayesian_config,
+    )
+
     spks = np.load(
         TIFF_UMBRELLA
         / session.date
@@ -438,14 +441,6 @@ def main(
     print(f"Time to get place cells: {time.time() - t0}")
 
     place_cells = spks[pcs_mask, :]
-
-    get_cache_path = lambda variable_name: (
-        SERVER_PATH
-        / "viral_caches"
-        / "sequence_detection"
-        / variable_name
-        / f"{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_{'en_bloc' if bayesian_config.en_bloc else 'event_by_event'}.npz"
-    )
 
     # TODO: is ssp test the correct one? (in terms of convolution)
 
@@ -594,7 +589,7 @@ def main(
         # TODO: this certainly is wrong so change later
         # TODO: what is?
     else:
-        if not os.path.exists(get_cache_path("bayesian")) or not use_cache:
+        if not os.path.exists(cache_path) or not use_cache:
             # TODO: do the circular or linear weighted correlation on the trials as "events"
             posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
                 ssp_test,
@@ -695,7 +690,7 @@ def main(
                 )
 
             np.savez(
-                get_cache_path("bayesian"),
+                cache_path,
                 posterior_probability_matrices=np.array(
                     result.posterior_probability_matrices, dtype=object
                 ),
@@ -709,7 +704,7 @@ def main(
                 ),
             )
         else:
-            npz = np.load(get_cache_path("bayesian"), allow_pickle=True)
+            npz = np.load(cache_path, allow_pickle=True)
             result = BayesianDecodingResult(
                 posterior_probability_matrices=npz[
                     "posterior_probability_matrices"
@@ -771,24 +766,32 @@ def plot_decoded_vs_actual_position(
     )
 
 
-def f1_score_by_position(y_true: np.ndarray, y_pred: np.ndarray) -> List[float]:
+def f1_score_by_position(
+    y_true_bins: np.ndarray, y_pred_bins: np.ndarray, n_bins: int
+) -> List[float]:
     """f1 score by actual position (position bins in ascending order)"""
-    y_true_bins = bin_for_classification(y_true, bayesian_config)
-    y_pred_bins = bin_for_classification(y_pred, bayesian_config)
+    # TODO: at the moment, this is super dependent on the spatial bin size (I have seen some predictions being off by one bin, hence still getting an f1 score of 0.0)
     f1_scores = list()
-    for bin_value in sorted(np.unique(y_true_bins)):
-        # do f1 score for all the values of a unique y_true_bin
-        mask = y_true_bins == bin_value
-        assert np.count_nonzero(mask) > 0
-        # TODO: remove after debugging
-        print(y_true_bins[mask])
-        print(y_pred_bins[mask])
-        # TODO: again, which averaging method?
-        f1_scores.append(
-            f1_score(
-                y_true=y_true_bins[mask], y_pred=y_pred_bins[mask], average="weighted"
-            ),
-        )
+    unique_true_bins = np.unique(y_true_bins)
+    for bin_value in range(n_bins):
+        if not bin_value in unique_true_bins:
+            f1_scores.append(np.nan)
+            continue
+        else:
+            # get f1 score for all the values of a unique y_true_bin
+            mask = y_true_bins == bin_value
+            assert np.count_nonzero(mask) > 0
+            # TODO: remove after debugging
+            print(y_true_bins[mask])
+            print(y_pred_bins[mask])
+            # TODO: again, which averaging method?
+            f1_scores.append(
+                f1_score(
+                    y_true=y_true_bins[mask],
+                    y_pred=y_pred_bins[mask],
+                    average="weighted",
+                ),
+            )
     return f1_scores
 
 
@@ -799,9 +802,10 @@ def get_statistics_correlation(
 ) -> pd.DataFrame:
     result = {
         "stage": [],
-        "circular_weighted_r": [],
-        "linear_weighted_r": [],
+        # "circular_weighted_r": [],
+        # "linear_weighted_r": [],
         "f1": [],
+        "f1_score_by_position": [],
         "r2": [],
         "mouse_id": [],
         "genotype": [],
@@ -814,23 +818,15 @@ def get_statistics_correlation(
             date = SESSIONS_KEEP[mouse_name][stage]
             if date is None:
                 continue
-            use_cache = False
-            if (
-                os.path.exists(
-                    SERVER_PATH
-                    / "viral_caches"
-                    / "sequence_detection"
-                    / "bayesian"
-                    / f"{mouse_name}_{date}_online_en_bloc.npz"
-                )
-                and use_cache
-            ):
+            use_cache = True
+            cache_path = get_cache_path(
+                mouse_name=mouse_name,
+                date=date,
+                bayesian_config=bayesian_config,
+            )
+            if os.path.exists(cache_path) and use_cache:
                 npz = np.load(
-                    SERVER_PATH
-                    / "viral_caches"
-                    / "sequence_detection"
-                    / "bayesian"
-                    / f"{mouse_name}_{date}_online_en_bloc.npz",
+                    cache_path,
                     allow_pickle=True,
                 )
                 bayesian = BayesianDecodingResult(
@@ -870,19 +866,25 @@ def get_statistics_correlation(
             y_true_bins = bin_for_classification(
                 actual_positions_flattened, bayesian_config=bayesian_config
             )
-
             y_pred_bins = pr_max_flattened.astype(int)
+
+            n_bins = int(
+                (bayesian_config.end_spatial - bayesian_config.start_spatial)
+                / bayesian_config.bin_size_spatial
+            )
+            assert np.max(y_true_bins) < n_bins and np.max(y_pred_bins) < n_bins
 
             # TODO: think about the averaging method
             f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
-            result["f1_score_by_position"] = f1_score_by_position(
-                y_true=actual_positions_flattened, y_pred=pr_max_flattened
+            f1_by_position = f1_score_by_position(
+                y_true_bins=y_true_bins, y_pred_bins=y_pred_bins, n_bins=n_bins
             )
             r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
             # TODO: this function will unfortunately ave to be specific to en_bloc and per_event or entail both
             # result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
             # result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
             result["f1"].append(f1)
+            result["f1_score_by_position"].append(f1_by_position)
             result["r2"].append(r_square)
             result["mouse_id"].append(mouse_name)
             result["genotype"].append(genotype)
@@ -1263,8 +1265,162 @@ def plot_correlation_against_f1_score_across_stages(
     )
 
 
+def plot_f1_score_by_position_per_session(
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
+) -> None:
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    all_data = pd.concat(
+        [wt, nlgf],
+        ignore_index=True,
+    )
+
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    # p_values = {}
+
+    # for stage in ["Baseline", "Trained"]:
+    stages = ["unsupervised", "learning", "learned"]
+
+    for genotype in ["WT", "NLGF"]:
+        genotype_data = all_data[all_data["genotype"] == genotype]
+        for mouse in genotype_data["mouse_id"].unique():
+            mouse_data = genotype_data[genotype_data["mouse_id"] == mouse]
+            fig, axes = plt.subplots(
+                nrows=1, ncols=len(mouse_data), sharex=True, sharey=True
+            )
+            axes = np.atleast_1d(axes)
+            for ax, stage in zip(axes, stages):
+                subset = mouse_data[mouse_data["stage"] == stage][
+                    "f1_score_by_position"
+                ]
+                values = subset.iloc[0]
+                plot_df = pd.DataFrame(
+                    {
+                        "position": range(len(values)),
+                        "f1_score": values,
+                    }
+                )
+                if len(subset) == 0:
+                    continue
+                sns.scatterplot(
+                    data=plot_df,
+                    x="position",
+                    y="f1_score",
+                    # colors=palette[genotype],
+                    ax=ax,
+                )
+                ax.set_title(f"{stage}")
+            plt.suptitle(f"{mouse}")
+            plt.tight_layout()
+            sns.despine()
+            plt.savefig(
+                SERVER_PATH
+                / "viral_plots"
+                / "f1_score"
+                / f"{mouse}_f1_score_by_position.png"
+            )
+
+
+def plot_f1_score_by_position(
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
+) -> None:
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    all_data = pd.concat(
+        [wt, nlgf],
+        ignore_index=True,
+    )
+
+    stages = ["unsupervised", "learning", "learned"]
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    fig, axes = plt.subplots(
+        1,
+        len(stages),
+        figsize=(6 * len(stages), 4),
+        sharey=True,
+    )
+
+    axes = np.atleast_1d(axes)
+
+    # unpack f1_score_by_position lists
+    tidy = all_data.copy()
+
+    tidy["position"] = tidy["f1_score_by_position"].apply(lambda x: list(range(len(x))))
+
+    tidy = tidy.explode(["f1_score_by_position", "position"])
+    tidy = tidy.reset_index(drop=True)
+
+    tidy["f1_score_by_position"] = tidy["f1_score_by_position"].astype(float)
+    tidy["position"] = tidy["position"].astype(int)
+
+    for ax, stage in zip(axes, stages):
+        stage_data = tidy[tidy["stage"] == stage]
+        for genotype in ["WT", "NLGF"]:
+            genotype_data = stage_data[stage_data["genotype"] == genotype]
+            pivot_data = genotype_data.pivot_table(
+                index="mouse_id",
+                columns="position",
+                values="f1_score_by_position",
+            )
+            arr = pivot_data.values
+            x_axis = pivot_data.columns.values
+            shaded_line_plot(
+                arr=arr,
+                x_axis=x_axis,
+                axis=ax,
+                color=palette[genotype],
+                label=genotype,
+            )
+        # sns.boxplot(
+        #     data=stage_data,
+        #     x="position",
+        #     y="f1_score_by_position",
+        #     hue="genotype",
+        #     hue_order=["WT", "NLGF"],
+        #     palette=palette,
+        #     showfliers=False,
+        #     ax=ax,
+        # )
+
+        ax.set_title(stage)
+        ax.set_xlabel("Position")
+
+    axes[0].set_ylabel("F1 score")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    # for ax in axes:
+    #     ax.legend_.remove()
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=2,
+        # bbox_to_anchor=(0.5, 1.05),
+    )
+
+    # plt.tight_layout()
+    sns.despine()
+    plt.savefig(SERVER_PATH / "viral_plots" / "f1_score" / "f1_score_by_position.png")
+
+
 if __name__ == "__main__":
     # TODO: time bin 2, spatial bin 5 or 10 cm
+
     # we recorded @30 fps, i.e. 0.2 sec = 6 frames, 1 sec = 30 frames
     # so, 33 ms would be 1 frame for offline (changed it to 2 frames) and 333 ms would be 10 frames for online decoding
     bayesian_config = BayesianDecodingConfig(
@@ -1283,21 +1439,17 @@ if __name__ == "__main__":
         bin_size_time_online=10,
         start_spatial=0,
         end_spatial=180,
-        bin_size_spatial=5,
+        # bin_size_spatial=5,
+        bin_size_spatial=10,
     )
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
         start=bayesian_config.start_spatial,
         end=bayesian_config.end_spatial,
     )
-
-    wt = get_statistics_correlation(
-        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    )
-    nlgf = get_statistics_correlation(
-        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    )
-
+    plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
+    plot_f1_score_by_position(bayesian_config, grosmark_config)
+    # 1 / 0
     # for mouse_name in SESSIONS_KEEP.keys():
     #     # for mouse_name in ["JB036"]:
     #     for stage, date in SESSIONS_KEEP[mouse_name].items():

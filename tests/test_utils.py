@@ -252,6 +252,11 @@ def test_get_session_type() -> None:
     result = get_session_type(session_name)
     assert result == expected
 
+    session_name = "Unsupervised learning day 1"
+    expected = "unsupervised"
+    result = get_session_type(session_name)
+    assert result == expected
+
 
 def test_array_bin_mean() -> None:
     input = np.array([[1, 2, 3, 4], [4, 5, 6, 7]])
