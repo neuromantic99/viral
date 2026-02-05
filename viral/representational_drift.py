@@ -59,7 +59,6 @@ sns.set_context("talk")
 def do_classify(
     session: Cached2pSession, spks: np.ndarray, plot: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
-
     bin_size = 10
     start = 0
     max_position = 180
@@ -82,6 +81,7 @@ def do_classify(
             do_shuffle=False,
             threshold_speed=False,
         )
+
         X_list.append(data)
         if trial.texture_rewarded:
             # if random.random() > 0.5:

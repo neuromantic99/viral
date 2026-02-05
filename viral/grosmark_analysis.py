@@ -242,7 +242,7 @@ def get_place_cells(
         f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"
     )
     if plot:
-        plot_place_cells(
+        plot_place_cell_heatmap(
             smoothed_matrix=smoothed_matrix[pcs_combined, :],
             config=config,
         )
@@ -484,7 +484,7 @@ def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
     plt.xlabel("Cell number")
 
 
-def plot_place_cells(
+def plot_place_cell_heatmap(
     smoothed_matrix: np.ndarray,
     config: GrosmarkConfig,
 ) -> None:

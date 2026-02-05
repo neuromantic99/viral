@@ -10,7 +10,6 @@ sys.path.append(str(HERE.parent.parent))
 
 from viral.imaging_utils import get_ITI_start_frame, load_imaging_data, trial_is_imaged
 from viral.utils import (
-    trial_is_imaged,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
 )

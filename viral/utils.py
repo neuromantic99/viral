@@ -133,7 +133,7 @@ def get_speed_positions(
         # TODO: This will often be zero after the reward is triggered. Deal with this
         n = np.sum(np.logical_and(position >= start, position < stop))
         if n == 0 and start < 180:
-            raise ValueError("Likely the rotary encoder has jumped in a weird way.")
+            warnings.warn("Likely the rotary encoder has jumped in a weird way.")
 
         speed_position.append(
             SpeedPosition(
@@ -287,28 +287,6 @@ def find_chunk(chunk_lens: List[int] | np.ndarray, index: int) -> int:
     return -1  # If index is out of bounds
 
 
-def trial_is_imaged(trial: TrialInfo) -> bool:
-    trigger_panda_states = [
-        state
-        for state in trial.states_info
-        if state.name
-        in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
-    ]
-    start_times_bpod = [state.start_time for state in trigger_panda_states]
-    length_trial_bpod = start_times_bpod[-1] - start_times_bpod[0]
-
-    start_time_frames = [state.closest_frame_start for state in trigger_panda_states]
-
-    assert start_time_frames[-1] is not None
-    assert start_time_frames[0] is not None
-
-    length_trial_frames = (start_time_frames[-1] - start_time_frames[0]) / 30
-
-    # A little but of a error in this calculation is allowed here as the frame rate is not exactly 30.
-    # Possibly you will get a false positive if the trial is stopped exactly at the end but unlikely
-    return length_trial_bpod - 0.5 <= length_trial_frames <= length_trial_bpod + 0.5
-
-
 def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
     max_length = max(len(d) for d in data)
 
@@ -385,8 +363,7 @@ def get_sex(mouse_name: str) -> str:
         "JB035",
     }:
         return "female"
-    else:
-        raise ValueError(f"Unknown sex for mouse: {mouse_name}")
+    raise ValueError(f"Unknown sex for mouse: {mouse_name}")
 
 
 class SetupType(Enum):
@@ -704,3 +681,8 @@ def interpolate_nans_vector(arr: np.ndarray) -> np.ndarray:
     x = np.arange(len(arr))
     arr[nans] = np.interp(x[nans], x[~nans], arr[~nans])
     return arr
+
+
+def save_figure(path: Path):
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.savefig(path, bbox_inches="tight", transparent=True)

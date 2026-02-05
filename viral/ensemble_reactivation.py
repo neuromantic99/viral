@@ -45,11 +45,11 @@ from viral.utils import (
     threshold_detect,
     threshold_detect_continuous,
     threshold_detect_edges,
-    trial_is_imaged,
 )
 from viral.imaging_utils import (
     compute_speed_grosmark,
     split_fluoresence_online_freeze,
+    trial_is_imaged,
 )
 from viral.grosmark_analysis import get_place_cells
 

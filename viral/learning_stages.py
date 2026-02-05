@@ -24,7 +24,7 @@ from viral.constants import (
     grosmark_config,
 )
 from viral.ensemble_reactivation import main as ensemble_main
-from viral.grosmark_analysis import get_place_cells
+from viral.grosmark_analysis import get_place_cells, plot_place_cell_heatmap
 from viral.gsheets_importer import gsheet2df
 from viral.imaging_utils import trial_is_imaged
 from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
@@ -163,18 +163,31 @@ class PlaceCellResults:
         cache_umbrella: Path,
         genotype: str,
         plot_type: Literal["corridor_activity", "tuning"],
+        bod: bool = False,
         verbose: bool = False,
     ) -> None:
-        self.smoothed_matrix_files = list(
-            (cache_umbrella / "smoothed_matrix").glob("*npy")
-        )
-        self.pcs_combined_files = list((cache_umbrella / "pcs_combined").glob("*npy"))
-        self.place_threshold_files = list(
-            (cache_umbrella / "place_threshold").glob("*npy")
-        )
-        self.unsupervised: Dict[str, List] = {"rewarded": [], "unrewarded": []}
-        self.learning: Dict[str, List] = {"rewarded": [], "unrewarded": []}
-        self.learned: Dict[str, List] = {"rewarded": [], "unrewarded": []}
+
+        filter_files = lambda dir: [
+            p
+            for p in dir.iterdir()
+            if p.is_file()
+            and p.suffix == ".npy"
+            and "split" not in p.name
+            and ("BOD" not in p.name if not bod else "BOD_True" in p.name)
+        ]
+
+        self.smoothed_matrix_files = filter_files(cache_umbrella / "smoothed_matrix")
+        self.pcs_combined_files = filter_files(cache_umbrella / "pcs_combined")
+        self.place_threshold_files = filter_files(cache_umbrella / "place_threshold")
+
+        self.unsupervised: Dict[str, List] = {
+            "rewarded": [],
+            "unrewarded": [],
+            "both": [],
+        }
+        self.learning: Dict[str, List] = {"rewarded": [], "unrewarded": [], "both": []}
+        self.learned: Dict[str, List] = {"rewarded": [], "unrewarded": [], "both": []}
+
         self.plot_type = plot_type
         self.genotype = genotype
         self.verbose = verbose
@@ -185,7 +198,9 @@ class PlaceCellResults:
         files_match = [
             file
             for file in file_list
-            if f"{mouse}_{date}" in file.name and f"rewarded_{rewarded}" in file.name
+            if f"{mouse}_{date}" in file.name
+            and f"rewarded_{rewarded}" in file.name
+            and f"{grosmark_config}" in file.name
         ]
         if not files_match:
             raise FileNotFoundError(
@@ -285,20 +300,24 @@ class PlaceCellResults:
                 if self.verbose:
                     print(f"Mouse is {self.genotype} genotype, processing {mouse_name}")
 
-                for rewarded in [False, True]:
+                for rewarded in [False, True, None]:
                     try:
                         result = self.collapsed_matrix_result(
                             mouse_name, stage=stage, rewarded=rewarded
                         )
                     except FileNotFoundError:
                         continue
-                    store["rewarded" if rewarded else "unrewarded"].append(result)
+                    if rewarded is None:
+                        store["both"].append(result)
+                    else:
+                        store["rewarded" if rewarded else "unrewarded"].append(result)
 
     def plot_result(
         self,
         stage_data: List,
         label: str,
         color: str,
+        axis: plt.Axes | None = None,
     ) -> None:
         matrix = np.vstack(stage_data)
         shaded_line_plot(
@@ -306,9 +325,11 @@ class PlaceCellResults:
             x_axis=np.linspace(0, 180, matrix.shape[1]),
             color=color,
             label=label,
+            axis=axis,
         )
         for landmark_center in [45, 90, 135]:
-            plt.axvspan(
+            plotter = axis if axis is not None else plt
+            plotter.axvspan(
                 landmark_center - 2.5, landmark_center + 2.5, color="red", alpha=0.5
             )
 
@@ -340,13 +361,65 @@ def get_speed_summary(
     )
 
 
+def tuning_comparison_plot() -> None:
+
+    1 / 0
+
+    wt = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="WT",
+        plot_type="corridor_activity",
+    )
+    wt.driver()
+    nlgf = PlaceCellResults(
+        SERVER_PATH / "viral_caches" / "place_cells",
+        genotype="NLGF",
+        plot_type="corridor_activity",
+    )
+    nlgf.driver()
+
+    colors = sns.color_palette(n_colors=2)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    wt.plot_result(wt.unsupervised["both"], "WT Unsupervised", colors[0], axis=axes[0])
+    nlgf.plot_result(
+        nlgf.unsupervised["both"], "NLGF Unsupervised", colors[1], axis=axes[0]
+    )
+
+    wt.plot_result(wt.learned["both"], "WT Unsupervised", colors[0], axis=axes[1])
+    nlgf.plot_result(nlgf.learned["both"], "NLGF Unsupervised", colors[1], axis=axes[1])
+
+    axes[0].set_ylim(0, 0.5)
+
+    axes[1].set_xlabel("Corridor position (cm)")
+    axes[0].set_xlabel("Corridor position (cm)")
+
+    axes[0].set_ylabel("Fraction cells\nsignificantly active")
+    axes[0].legend()
+    axes[0].set_title("Before learning")
+    axes[1].set_title("After learning")
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "visual_tuning"
+        / f"visual_tuning_genotype_comparison.pdf",
+        bbox_inches="tight",
+        transparent=True,
+    )
+
+    1 / 0
+
+
 def plot_place_cell_results(
     genotype: str, plot_type: Literal["corridor_activity", "tuning"]
 ) -> None:
+
     place_cell_result = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
         genotype=genotype,
         plot_type=plot_type,
+        bod=False,
     )
     place_cell_result.driver()
 
@@ -356,10 +429,10 @@ def plot_place_cell_results(
         axes,
         [
             place_cell_result.unsupervised,
-            place_cell_result.learning,
+            # place_cell_result.learning,
             place_cell_result.learned,
         ],
-        ["unsupervised", "learning", "learned"],
+        ["unsupervised", "learned"],
     ):
         plt.sca(ax)
         if plot_type == "tuning":
@@ -389,11 +462,12 @@ def plot_place_cell_results(
 
         if plot_type == "corridor_activity":
             place_cell_result.plot_result(
-                data["unrewarded"],
-                "unrewarded",
-                "green",
+                # data["unrewarded"],
+                data["both"],
+                "both",
+                "black",
             )
-            place_cell_result.plot_result(data["rewarded"], "rewarded", "blue")
+            # place_cell_result.plot_result(data["rewarded"], "rewarded", "blue")
             ax.set_ylim(0, 0.5)
             ax.set_xlabel("Corridor position (cm)")
             if ax is axes[0]:
@@ -607,17 +681,20 @@ def reward_discrimination_comparison_plot() -> None:
     )
 
 
-def landmark_comparison_plot() -> None:
+def landmark_comparison_plot(bod: bool = False) -> None:
+
     wt = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
         genotype="WT",
         plot_type="tuning",
+        bod=bod,
     )
     wt.driver()
     nlgf = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
         genotype="NLGF",
         plot_type="tuning",
+        bod=bod,
     )
     nlgf.driver()
 
@@ -634,23 +711,29 @@ def landmark_comparison_plot() -> None:
         ):
             stage_name = "Baseline" if stage == "unsupervised" else "Trained"
             result["genotype"].extend(
-                [genotype_name] * (len(data["rewarded"]) + len(data["unrewarded"]))
+                [genotype_name]
+                * (len(data["rewarded"]) + len(data["unrewarded"]) + len(data["both"]))
             )
             result["stage_name"].extend(
-                [stage_name] * (len(data["rewarded"]) + len(data["unrewarded"]))
+                [stage_name]
+                * (len(data["rewarded"]) + len(data["unrewarded"]) + len(data["both"]))
             )
-            result["landmark_tuning"].extend(data["rewarded"] + data["unrewarded"])
+            result["landmark_tuning"].extend(
+                data["rewarded"] + data["unrewarded"] + data["both"]
+            )
             result["rewarded"].extend(
-                [True] * len(data["rewarded"]) + [False] * len(data["unrewarded"])
+                [True] * len(data["rewarded"])
+                + [False] * len(data["unrewarded"])
+                + ["Both"] * len(data["both"])
             )
     df = pd.DataFrame(result)
 
     plt.clf()
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 5), sharey=True)
     colors = sns.color_palette(n_colors=2)
     palette = {"WT": colors[0], "NLGF": colors[1]}
 
-    for rewarded, ax in zip([True, False], axes):
+    for rewarded, ax in zip(["Both", True, False], axes):
         sns.boxplot(
             data=df[df["rewarded"] == rewarded],
             x="stage_name",
@@ -673,7 +756,11 @@ def landmark_comparison_plot() -> None:
             edgecolor="black",
             ax=ax,
         )
-        ax.set_title("Rewarded" if rewarded else "Unrewarded")
+        ax.set_title(
+            "Rewarded"
+            if rewarded is True
+            else "Unrewarded" if rewarded is False else "Both"
+        )
         ax.set_xlabel("Stage")
 
         if ax is axes[0]:
@@ -683,15 +770,14 @@ def landmark_comparison_plot() -> None:
 
     handles, labels = axes[1].get_legend_handles_labels()
     # remove per-axis legends
-    if axes[0].get_legend() is not None:
-        axes[0].get_legend().remove()
-    if axes[1].get_legend() is not None:
-        axes[1].get_legend().remove()
+    for ax in axes:
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
     fig.legend(handles[:2], labels[:2], loc="upper center", ncol=2)
     sns.despine()
     plt.ylim(None, 1.6)
 
-    for idx, rewarded in enumerate([True, False]):
+    for idx, rewarded in enumerate([True, False, "Both"]):
         ymin_plot, ymax_plot = axes[idx].get_ylim()
         plot_range = ymax_plot - ymin_plot
         text_y = (
@@ -715,18 +801,77 @@ def landmark_comparison_plot() -> None:
             axes[idx].text(i, text_y, p_text, ha="center", va="top")
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.rcParams["pdf.fonttype"] = 42
     plt.savefig(
         SERVER_PATH
         / "viral_plots"
         / "landmark_tuning"
-        / f"landmark_tuning_comparison_plot.png"
+        / f"landmark_tuning_comparison_plot_bod_{bod}.pdf",
+        bbox_inches="tight",
+        transparent=True,
     )
 
-    1 / 0
 
+def plot_place_cell_heatmaps() -> None:
 
-if __name__ == "__main__":
+    rewarded = None
+    bod = True
+
     for mouse_name, dates in SESSIONS_KEEP.items():
 
         for stage, date in dates.items():
-            store_place_cell_result(mouse_name, date, config=grosmark_config)
+            if date is None:
+                continue
+            smoothed_matrix = np.load(
+                SERVER_PATH
+                / "viral_caches"
+                / "place_cells"
+                / "smoothed_matrix"
+                / f"{mouse_name}_{date}_rewarded_{rewarded}_{grosmark_config}_smoothed_matrix{"_BOD_True" if bod else ""}.npy"
+            )
+            pcs_combined = np.load(
+                SERVER_PATH
+                / "viral_caches"
+                / "place_cells"
+                / "pcs_combined"
+                / f"{mouse_name}_{date}_rewarded_{rewarded}_{grosmark_config}_pcs_combined{"_BOD_True" if bod else ""}.npy"
+            )
+            smoothed_matrix = smoothed_matrix[pcs_combined, :]
+
+            plot_place_cell_heatmap(
+                smoothed_matrix,
+                grosmark_config,
+            )
+            plt.title(f"{mouse_name} {stage} rewarded={rewarded} BOD = {bod}")
+            plt.tight_layout()
+            plt.savefig(
+                SERVER_PATH
+                / "viral_plots"
+                / "place_cell_heatmaps"
+                / f"{mouse_name}_{date}_rewarded_{rewarded}_bod_{bod}.png",
+                dpi=300,
+            )
+
+
+def do_stuff():
+    a = 1
+    b = 2
+    1 / 0
+
+
+def stuff2():
+    a = 100
+    do_stuff()
+
+
+if __name__ == "__main__":
+    stuff2()
+    # plot_place_cell_heatmaps()
+    # landmark_comparison_plot(bod=False)
+    # tuning_comparison_plot()
+    1 / 0
+
+    # for mouse_name, dates in SESSIONS_KEEP.items():
+
+    #     for stage, date in dates.items():
+    #         store_place_cell_result(mouse_name, date, config=grosmark_config)
