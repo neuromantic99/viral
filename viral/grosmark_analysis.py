@@ -162,7 +162,7 @@ def get_place_cells(
     use_cache = True
 
     get_cache_path = lambda variable_name: (
-        SERVER_PATH
+        DAN ADD YOUR PATH!
         / "viral_caches"
         / "place_cells"
         / variable_name
@@ -596,7 +596,9 @@ if __name__ == "__main__":
     mouse = "JB027"
     date = "2025-02-26"
 
-    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
+    with open(
+        SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
+    ) as f:
         session = Cached2pSession.model_validate_json(f.read())
 
     print(f"Total number of trials: {len(session.trials)}")
