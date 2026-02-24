@@ -210,6 +210,23 @@ class MultipleSessionsConfig:
 
 
 @dataclass
+class SSPConfig:
+    mode: Literal["below", "above"]
+    speed_threshold: float
+    n_consecutive_samples: int
+
+
+@dataclass
+class SSPVectorData:
+    ssp_vectors: np.ndarray
+    position_vectors: np.ndarray
+    trial_start_indices: np.ndarray
+    chunk_start_indices: List[
+        List[int]
+    ]  # list of chunk start indices with each trial being an element in the outer list
+
+
+@dataclass
 class BayesianDecodingConfig:
     peak_threshold: float  # SDs above mean
     edge_threshold: float  # SDs above mean

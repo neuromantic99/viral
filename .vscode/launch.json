@@ -65,14 +65,14 @@
       "justMyCode": true
     },
     {
-      "name": "Ensemble reactivation",
+      "name": "ensemble reactivation",
       "type": "debugpy",
       "request": "launch",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "program": "viral/ensemble_reactivation.py"
     },
     {
-      "name": "Offline sequence",
+      "name": "offline sequence",
       "type": "debugpy",
       "request": "launch",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },

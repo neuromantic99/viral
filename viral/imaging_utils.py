@@ -233,6 +233,8 @@ def get_online_position_and_frames(
     assert len(position) == len(frame_position)
 
     if threshold_speed:
+        # TODO: just for debugging
+        print("thresholding speed for getting traces for online epochs")
         speed = compute_speed_grosmark(position)
         speed_threshold = 5
         idx_keep = above_threshold_for_n_consecutive_samples(

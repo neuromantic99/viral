@@ -25,10 +25,9 @@ from viral.models import (
     GrosmarkConfig,
     SortedPlaceCells,
     TrialInfo,
+    SSPVectorData,
 )
 from viral.rastermap_utils import (
-    get_frame_position,
-    get_speed_frame,
     align_validate_data,
     process_trials_data,
     filter_speed_position,
@@ -41,7 +40,6 @@ from viral.utils import (
     shaded_line_plot,
     shuffle_rows,
     split_continuous_chunks,
-    threshold_detect,
     threshold_detect_continuous,
 )
 from viral.imaging_utils import (
@@ -666,7 +664,7 @@ def get_ssp_vectors(
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
     min_chunk_length: int | None = 2 * 30,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> SSPVectorData:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
     The place cell finding step is run in grosmark_analysis/get_place_cells
@@ -681,9 +679,11 @@ def get_ssp_vectors(
     ssp_vectors = []
     position_vectors = []
     trial_start_indices = []
+    chunk_start_indices = []
     current_idx = 0
 
     for trial in trials:
+        trial_chunk_start_indices = []
         position = degrees_to_cm(
             np.array(trial.rotary_encoder_position),
             get_wheel_circumference_from_rig("2P"),
@@ -755,21 +755,27 @@ def get_ssp_vectors(
             chunk_positions = position[np.searchsorted(frame_position, chunk)]
             position_vectors.append(chunk_positions)
 
-            trial_start_idx = current_idx
-
+            trial_chunk_start_indices.append(current_idx)
             # treat the beginning of the first valid chunk found as the trial start idx
             if not trial_has_chunks:
                 trial_start_idx = current_idx
                 trial_has_chunks = True
+
             current_idx += segment.shape[1]
 
         # only append the trial start idx if there are valid chunks within the trial
         if trial_has_chunks:
             trial_start_indices.append(trial_start_idx)
+            chunk_start_indices.append((trial_chunk_start_indices))
 
     if len(ssp_vectors) == 0:
         print("No frames matched the criteria, returning empty ssp vector")
-        return np.array([]), np.array([]), np.array([])
+        return SSPVectorData(
+            ssp_vectors=np.array([]),
+            position_vectors=np.array([]),
+            trial_start_indices=np.array([]),
+            chunk_start_indices=np.array([]),
+        )
     else:
         total_length = np.hstack(ssp_vectors).shape[1]
         assert all(
@@ -779,10 +785,14 @@ def get_ssp_vectors(
 
         assert len(ssp_vectors) == len(position_vectors)
 
-        return (
-            np.hstack(ssp_vectors),
-            np.hstack(position_vectors),
-            np.array(trial_start_indices),
+        assert len(chunk_start_indices) == len(
+            trial_start_indices
+        ), "For each valid trial, there must be an array of chunk start indices"
+        return SSPVectorData(
+            ssp_vectors=np.hstack(ssp_vectors),
+            position_vectors=np.hstack(position_vectors),
+            trial_start_indices=np.array(trial_start_indices),
+            chunk_start_indices=chunk_start_indices,
         )
 
 
@@ -856,10 +866,12 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
 
         trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-        ssp_vectors, _, _ = get_ssp_vectors(
+        ssp_result = get_ssp_vectors(
             trials=trials,
             place_cells=place_cells,
         )
+
+        ssp_vectors = ssp_result.ssp_vectors
 
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
         # TODO: are we returning the right thing here?

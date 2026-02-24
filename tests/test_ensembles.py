@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from viral.utils import shuffle_rows
 from viral.ensemble_reactivation import get_ssp_vectors
+from viral.models import SSPVectorData
 
 
 def offline_reactivation_mocked(
@@ -133,11 +134,7 @@ def test_get_ssp_vectors(mock_trials) -> None:
                     "viral.ensemble_reactivation.gaussian_filter1d",
                     side_effect=lambda input, sigma, axis: input,
                 ):
-                    (
-                        result_ssp_vectors,
-                        result_position_vectors,
-                        result_trial_start_indices,
-                    ) = get_ssp_vectors(
+                    result = get_ssp_vectors(
                         trials,
                         place_cells,
                         sigma,
@@ -154,9 +151,17 @@ def test_get_ssp_vectors(mock_trials) -> None:
         [0, 10, 20, 30, 40, 50, 60, 0, 15, 25, 35, 45, 55, 80]
     )
     expected_trial_start_indices = np.array([0, 7])
-    assert np.array_equal(result_ssp_vectors, expected_ssp_vectors)
-    assert np.array_equal(result_position_vectors, expected_position_vectors)
-    assert np.array_equal(result_trial_start_indices, expected_trial_start_indices)
+    expected_chunk_indices = [[0], [7]]
+    expected = SSPVectorData(
+        ssp_vectors=expected_ssp_vectors,
+        position_vectors=expected_position_vectors,
+        trial_start_indices=expected_trial_start_indices,
+        chunk_start_indices=expected_chunk_indices,
+    )
+    assert np.array_equal(expected.ssp_vectors, result.ssp_vectors)
+    assert np.array_equal(expected.position_vectors, result.position_vectors)
+    assert np.array_equal(expected.trial_start_indices, result.trial_start_indices)
+    assert np.array_equal(expected.chunk_start_indices, result.chunk_start_indices)
 
 
 @pytest.fixture
@@ -205,11 +210,7 @@ def test_get_ssp_vectors_min_chunk_length(mock_trials_min_chunk_length) -> None:
                     "viral.ensemble_reactivation.gaussian_filter1d",
                     side_effect=lambda input, sigma, axis: input,
                 ):
-                    (
-                        result_ssp_vectors,
-                        result_position_vectors,
-                        result_trial_start_indices,
-                    ) = get_ssp_vectors(
+                    result = get_ssp_vectors(
                         trials,
                         place_cells,
                         sigma,
@@ -223,9 +224,17 @@ def test_get_ssp_vectors_min_chunk_length(mock_trials_min_chunk_length) -> None:
     expected_ssp_vectors[:, 0:7] = 2  # activity in trial 2
     expected_position_vectors = np.array([0, 15, 25, 35, 45, 55, 80])
     expected_trial_start_indices = np.array([0])
-    assert np.array_equal(result_ssp_vectors, expected_ssp_vectors)
-    assert np.array_equal(result_position_vectors, expected_position_vectors)
-    assert np.array_equal(result_trial_start_indices, expected_trial_start_indices)
+    expected_chunk_indices = [[0]]
+    expected = SSPVectorData(
+        ssp_vectors=expected_ssp_vectors,
+        position_vectors=expected_position_vectors,
+        trial_start_indices=expected_trial_start_indices,
+        chunk_start_indices=expected_chunk_indices,
+    )
+    assert np.array_equal(expected.ssp_vectors, result.ssp_vectors)
+    assert np.array_equal(expected.position_vectors, result.position_vectors)
+    assert np.array_equal(expected.trial_start_indices, result.trial_start_indices)
+    assert np.array_equal(expected.chunk_start_indices, result.chunk_start_indices)
 
 
 @pytest.fixture
@@ -279,11 +288,7 @@ def test_get_ssp_vectors_first_chunk_filtered_out(
                     "viral.ensemble_reactivation.gaussian_filter1d",
                     side_effect=lambda input, sigma, axis: input,
                 ):
-                    (
-                        result_ssp_vectors,
-                        result_position_vectors,
-                        result_trial_start_indices,
-                    ) = get_ssp_vectors(
+                    result = get_ssp_vectors(
                         trials,
                         place_cells,
                         sigma,
@@ -298,9 +303,17 @@ def test_get_ssp_vectors_first_chunk_filtered_out(
     expected_ssp_vectors[:, 3:11] = 2  # activity in trial 2
     expected_position_vectors = np.array([30, 40, 50, 60, 0, 15, 25, 35, 45, 55, 80])
     expected_trial_start_indices = np.array([0, 4])
-    assert np.array_equal(result_ssp_vectors, expected_ssp_vectors)
-    assert np.array_equal(result_position_vectors, expected_position_vectors)
-    assert np.array_equal(result_trial_start_indices, expected_trial_start_indices)
+    expected_chunk_indices = [[0], [4]]
+    expected = SSPVectorData(
+        ssp_vectors=expected_ssp_vectors,
+        position_vectors=expected_position_vectors,
+        trial_start_indices=expected_trial_start_indices,
+        chunk_start_indices=expected_chunk_indices,
+    )
+    assert np.array_equal(expected.ssp_vectors, result.ssp_vectors)
+    assert np.array_equal(expected.position_vectors, result.position_vectors)
+    assert np.array_equal(expected.trial_start_indices, result.trial_start_indices)
+    assert np.array_equal(expected.chunk_start_indices, result.chunk_start_indices)
 
 
 @pytest.fixture
@@ -354,11 +367,7 @@ def test_get_ssp_vectors_all_chunks_filtered_out(
                     "viral.ensemble_reactivation.gaussian_filter1d",
                     side_effect=lambda input, sigma, axis: input,
                 ):
-                    (
-                        result_ssp_vectors,
-                        result_position_vectors,
-                        result_trial_start_indices,
-                    ) = get_ssp_vectors(
+                    result = get_ssp_vectors(
                         trials,
                         place_cells,
                         sigma,
@@ -372,9 +381,99 @@ def test_get_ssp_vectors_all_chunks_filtered_out(
     expected_ssp_vectors[:, 0:7] = 2  # activity in trial 2
     expected_position_vectors = np.array([0, 15, 25, 35, 45, 55, 80])
     expected_trial_start_indices = np.array([0])
-    assert np.array_equal(result_ssp_vectors, expected_ssp_vectors)
-    assert np.array_equal(result_position_vectors, expected_position_vectors)
-    assert np.array_equal(result_trial_start_indices, expected_trial_start_indices)
+    expected_chunk_indices = [[0]]
+    expected = SSPVectorData(
+        ssp_vectors=expected_ssp_vectors,
+        position_vectors=expected_position_vectors,
+        trial_start_indices=expected_trial_start_indices,
+        chunk_start_indices=expected_chunk_indices,
+    )
+    assert np.array_equal(expected.ssp_vectors, result.ssp_vectors)
+    assert np.array_equal(expected.position_vectors, result.position_vectors)
+    assert np.array_equal(expected.trial_start_indices, result.trial_start_indices)
+    assert np.array_equal(expected.chunk_start_indices, result.chunk_start_indices)
 
 
-# no trials won't return any trial indices, position vectors or ssp vectors as per code
+@pytest.fixture
+def mock_trials_chunk_indices() -> list[Mock]:
+    """Creates a list of mocked TrialInfo objects for testing."""
+
+    def mock_state(frame_idx: int, name: str = "trigger_panda") -> Mock:
+        state = Mock()
+        state.closest_frame_start = frame_idx
+        state.name = name
+        return state
+
+    trial1 = Mock()
+    trial1.rotary_encoder_position = [0, 10, 20, 30, 30, 30, 30, 30, 40, 50, 60]
+    trial1.states_info = [mock_state(frame_idx) for frame_idx in np.arange(0, 11)]
+
+    trial2 = Mock()
+    trial2.rotary_encoder_position = [0, 15, 25, 35, 45, 55, 80]
+    trial2.states_info = [mock_state(frame_idx) for frame_idx in np.arange(14, 21)]
+
+    place_cells = np.zeros(shape=(10, 100))
+    place_cells[:, 0:11] = 1  # activity in trial 1
+    place_cells[:, 14:21] = 2  # activity in trial 2
+
+    return [trial1, trial2], place_cells
+
+
+def test_get_ssp_vectors_chunk_indices(
+    mock_trials_chunk_indices,
+) -> None:
+    trials, place_cells = mock_trials_chunk_indices
+    sigma = 30
+    mode = "above"
+    speed_threshold = 5
+    n_consecutive_samples = 1
+    min_chunk_len = 3
+
+    with patch(
+        "viral.ensemble_reactivation.degrees_to_cm",
+        side_effect=lambda x, _: np.array(x),
+    ):
+        with patch("viral.utils.get_wheel_circumference_from_rig", return_value=1):
+            with patch(
+                "viral.ensemble_reactivation.compute_speed_grosmark",
+                side_effect=lambda position: np.append(
+                    np.diff(position), np.diff(position)[-1]
+                ),
+            ):
+                with patch(
+                    "viral.ensemble_reactivation.gaussian_filter1d",
+                    side_effect=lambda input, sigma, axis: input,
+                ):
+                    result = get_ssp_vectors(
+                        trials,
+                        place_cells,
+                        sigma,
+                        mode,
+                        speed_threshold,
+                        n_consecutive_samples,
+                        min_chunk_len,
+                    )
+
+    expected_ssp_vectors = np.zeros(shape=(10, 14))
+    expected_ssp_vectors[:, 0:7] = 1  # activity in trial 1
+    expected_ssp_vectors[:, 7:14] = 2  # activity in trial 2
+    # [0, 10, 20, 30, 30, 30, 30, 30, 40, 50, 60]
+    expected_position_vectors = np.array(
+        [0, 10, 20, 30, 40, 50, 60, 0, 15, 25, 35, 45, 55, 80]
+    )
+    expected_trial_start_indices = np.array([0, 7])
+    expected_chunk_indices = [[0, 3], [7]]
+    expected = SSPVectorData(
+        ssp_vectors=expected_ssp_vectors,
+        position_vectors=expected_position_vectors,
+        trial_start_indices=expected_trial_start_indices,
+        chunk_start_indices=expected_chunk_indices,
+    )
+    assert np.array_equal(expected.ssp_vectors, result.ssp_vectors)
+    assert np.array_equal(expected.position_vectors, result.position_vectors)
+    assert np.array_equal(expected.trial_start_indices, result.trial_start_indices)
+    for e, r in zip(expected.chunk_start_indices, result.chunk_start_indices):
+        np.testing.assert_array_equal(e, r)
+
+
+# no trials won't return any trial indices, position vectors or ssp vectors as per code, hence not tested
