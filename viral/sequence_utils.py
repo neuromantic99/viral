@@ -604,7 +604,7 @@ def calculate_radon_replay(
     # TODO: this seems off: check units
     bin_size_time_frames = (
         bayesian_config.bin_size_time_online
-        if bayesian_config.online
+        if bayesian_config.epoch == "online"
         else bayesian_config.bin_size_time_offline
     )
     bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
@@ -675,7 +675,7 @@ def create_dummy_ppm_more_complex(n_spatial_bins: int, n_time_bins: int) -> np.n
 def compare_radon_against_matlab() -> None:
     bayesian_config = BayesianDecodingConfig(
         en_bloc=True,  #
-        online=False,
+        epoch="pre",
         sigma_offline=1,  #
         sigma_online=1,  #
         peak_threshold=3.5,  #
@@ -932,8 +932,7 @@ def get_cache_path(
         / "viral_caches"
         / "sequence_detection"
         / "bayesian"
-        # / f"{mouse_name}_{date}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
-        / f"{mouse_name}_{date}_{'online' if bayesian_config.online else 'offline'}_{'en_bloc' if bayesian_config.en_bloc else 'events'}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
+        / f"{mouse_name}_{date}_{bayesian_config.epoch}_{'en_bloc' if bayesian_config.en_bloc else 'events'}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
     )
 
 

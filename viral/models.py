@@ -236,10 +236,8 @@ class BayesianDecodingConfig:
     start_spatial: int  # cms
     end_spatial: int  # cms
     bin_size_spatial: int  # cms
-    en_bloc: bool  # whether to decode en bloc or pse event by pse event
-    online: (
-        bool  # True for the online epoch, False for the offline post wheel freeze epoch
-    )
+    en_bloc: bool  # whether to decode en bloc or pse-event-by-pse-event/trial-chunk-by-trial-chunk
+    epoch: Literal["pre", "online", "post"]
     sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
     sigma_online: int  # frames (for the convolving with Gaussian kernel bit)
 
@@ -250,20 +248,7 @@ class BayesianDecodingConfig:
         return (self.end_spatial - self.start_spatial) / 100
 
 
-# TODO: rethink this, currently unused
-# @dataclass
-# class ReplayEvent:
-#     start_frame: int
-#     end_frame: int
-#     posterior_probability_matrix: np.ndarray
-#     pr_max: np.ndarray
-#     p_value: float
-#     weighted_r: float
-#     rz_score: float
-
-
-@dataclass
-class BayesianDecodingResult:
+class BayesianDecodingResult(BaseModel):
     posterior_probability_matrices: List[np.ndarray]
     pr_max_matrices: List[np.ndarray]
     linear_weighted_r: Optional[List[float]]
@@ -271,6 +256,9 @@ class BayesianDecodingResult:
     actual_positions: Optional[List[np.ndarray]]
     linear_rZ_scores: Optional[List[float]]
     circular_rZ_scores: Optional[List[float]]
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 @dataclass
