@@ -274,7 +274,7 @@ def check_significance(
     total_length: float | None = None,
     n_shuffles: int = 2000,
     significance: float = 0.05,
-) -> Tuple[float, bool]:
+) -> Tuple[float, bool, float]:
     """
     "For each event, the observed weighted circo-linear correlation coefficients weightedr(circular), hereafter referred to as weighted-r,
     was compared to a distribution of 2,000 null weighted-r values either by z-scoring the observed value by the null values (rZ score) or
@@ -310,7 +310,7 @@ def check_significance(
     assert empirical_p >= 0
     rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
     print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
-    return empirical_p, empirical_p < significance
+    return empirical_p, empirical_p < significance, rz_score
 
 
 def bin_for_classification(

@@ -364,8 +364,7 @@ def main(
     en bloc decoding:       Decode the entire period (online or offline) at once
     per PSE event decoding: Detect PSE events, then decode each detected PSE event separately
     """
-    # careful when decoding a train-test-split online session en bloc (place cell thresholds will shift)
-    use_cache = False
+    use_cache = True
 
     # did show a little bit
     # mouse = "JB036"
@@ -443,7 +442,7 @@ def main(
     session.trials = trials_train
 
     t0 = time.time()
-    pcs_mask, place_fields, place_threshold = get_place_cells(
+    pcs_mask, place_fields, _ = get_place_cells(
         session=session,
         spks=spks,
         rewarded=None,
@@ -474,7 +473,7 @@ def main(
             speed_threshold=ssp_config_immobility.speed_threshold,
             n_consecutive_samples=ssp_config_immobility.n_consecutive_samples,
         )
-        ssp_test, positions_test, trial_start_indices_test, chunk_start_indices_test = (
+        ssp_test, positions_test, _, chunk_start_indices_test = (
             ssp_result.ssp_vectors,
             ssp_result.position_vectors,
             ssp_result.trial_start_indices,
@@ -585,103 +584,128 @@ def main(
         result = BayesianDecodingResult(
             posterior_probability_matrices=events_ppm,
             pr_max_matrices=events_pr_maxs,
-            linear_weighted_r=[corr for (corr, _) in linear_corr_coeffs],
-            circular_weighted_r=[corr for (corr, _) in circular_corr_coeffs],
+            linear_weighted_r=[corr for (corr, _, _), in linear_corr_coeffs],
+            circular_weighted_r=[corr for (corr, _, _) in circular_corr_coeffs],
             actual_positions=positions_test if bayesian_config.online else None,
         )
     else:
         if not os.path.exists(cache_path) or not use_cache:
-            # TODO: do the circular or linear weighted correlation on the trials as "events"
             posterior_probability_matrix, pr_max = offline_sequence_bayesian_decoding(
                 ssp_test,
                 place_fields=place_fields[pcs_mask, :],
                 config=bayesian_config,
             )
-            # TODO: is by-trial for correlation correct??? Or would I have to do the decoding on each trial individually???
-            current_chunk_idx = 0
-            all_chunks = [x for xs in chunk_start_indices_test for x in xs]
-            chunk_actual_positions = list()
-            chunk_ppms = list()
-            chunk_pr_maxs = list()
-            linear_corr_coeffs: List[Tuple[float, bool]] = list()
-            circular_corr_coeffs: List[Tuple[float, bool]] = list()
-            # chunk_start_indices_test is a nested list with the outer list being the trial and the inner list being the chunk_start_indices within
-            for trial_idx in tqdm(range(len(chunk_start_indices_test))):
-                for _, start in enumerate(chunk_start_indices_test[trial_idx]):
-                    if current_chunk_idx < len(all_chunks) - 1:
-                        end = all_chunks[current_chunk_idx + 1]
-                    else:
-                        end = posterior_probability_matrix.shape[0]
-                    chunk_actual_positions.append(positions_test[start:end])
-                    chunk_ppm = posterior_probability_matrix[start:end, :]
-                    chunk_ppms.append(chunk_ppm)
-                    chunk_pr_maxs.append(pr_max[start:end])
-                    xy = construct_xy_by_bin(
-                        chunk_ppm,
-                        mode="linear",
-                        total_length=bayesian_config.total_length,
-                    )
-                    linear_corr_coeff = calculate_linear_weighted_correlation(
-                        posterior_probability_matrix=chunk_ppm,
-                        xy=xy,
-                    )
-                    linear_sign = check_significance(
-                        chunk_ppm,
-                        linear_corr_coeff,
-                        "linear",
-                        bayesian_config.total_length,
-                        2000,
-                        0.05,
-                    )
-                    linear_corr_coeffs.append((linear_corr_coeff, linear_sign[1]))
-                    circular_corr_coeff = calculate_circular_weighted_correlation(
-                        chunk_ppm
-                    )
-                    circular_sign = check_significance(
-                        chunk_ppm,
-                        circular_corr_coeff,
-                        "circular",
-                        bayesian_config.total_length,
-                        2000,
-                        0.05,
-                    )
-                    circular_corr_coeffs.append((circular_corr_coeff, circular_sign[1]))
-                    plot_pse_event(
-                        posterior_probability_matrix=chunk_ppm,
-                        idx=current_chunk_idx,
-                        session=session,
-                        grosmark_config=grosmark_config,
-                        bayesian_config=bayesian_config,
-                        mode="linear",
-                        corr_coeff=linear_corr_coeff,
-                        significance=linear_sign,
-                    )
-                    plot_pse_event(
-                        posterior_probability_matrix=chunk_ppm,
-                        idx=current_chunk_idx,
-                        session=session,
-                        grosmark_config=grosmark_config,
-                        bayesian_config=bayesian_config,
-                        mode="circular",
-                        corr_coeff=circular_corr_coeff,
-                        significance=circular_sign,
-                        do_radon_transform=True,
-                    )
-                    current_chunk_idx += 1
-            # sanity check that the correlations in the trials aren't all just artifactual
-            assert (
-                len([corr for (corr, sign) in linear_corr_coeffs if sign]) > 0
-            ), "No significant trial found (linear weighted correlation)!"
-            assert (
-                len([corr for (corr, sign) in circular_corr_coeffs if sign]) > 0
-            ), "No significant trial found (circular weighted correlation)!"
-            result = BayesianDecodingResult(
-                posterior_probability_matrices=chunk_ppms,
-                pr_max_matrices=chunk_pr_maxs,
-                actual_positions=chunk_actual_positions,
-                linear_weighted_r=[corr for (corr, _) in linear_corr_coeffs],
-                circular_weighted_r=[corr for (corr, _) in circular_corr_coeffs],
-            )
+            if not bayesian_config.online:
+                result = BayesianDecodingResult(
+                    posterior_probability_matrices=posterior_probability_matrix,
+                    pr_max_matrices=pr_max,
+                )
+            else:
+                # TODO: is by-trial for correlation correct??? Or would I have to do the decoding on each trial individually???
+                current_chunk_idx = 0
+                all_chunks = [x for xs in chunk_start_indices_test for x in xs]
+                chunk_actual_positions = list()
+                chunk_ppms = list()
+                chunk_pr_maxs = list()
+                linear_corr_coeffs: List[Tuple[float, bool]] = list()
+                circular_corr_coeffs: List[Tuple[float, bool]] = list()
+                # chunk_start_indices_test is a nested list with the outer list being the trial and the inner list being the chunk_start_indices within
+                for trial_idx in tqdm(range(len(chunk_start_indices_test))):
+                    for _, start in enumerate(chunk_start_indices_test[trial_idx]):
+                        if current_chunk_idx < len(all_chunks) - 1:
+                            end = all_chunks[current_chunk_idx + 1]
+                        else:
+                            end = posterior_probability_matrix.shape[0]
+                        chunk_actual_positions.append(positions_test[start:end])
+                        chunk_ppm = posterior_probability_matrix[start:end, :]
+                        chunk_ppms.append(chunk_ppm)
+                        chunk_pr_maxs.append(pr_max[start:end])
+                        xy = construct_xy_by_bin(
+                            chunk_ppm,
+                            mode="linear",
+                            total_length=bayesian_config.total_length,
+                        )
+                        linear_corr_coeff = calculate_linear_weighted_correlation(
+                            posterior_probability_matrix=chunk_ppm,
+                            xy=xy,
+                        )
+                        linear_sign = check_significance(
+                            chunk_ppm,
+                            linear_corr_coeff,
+                            "linear",
+                            bayesian_config.total_length,
+                            2000,
+                            0.05,
+                        )
+                        linear_corr_coeffs.append(
+                            (linear_corr_coeff, linear_sign[1], linear_sign[2])
+                        )
+                        circular_corr_coeff = calculate_circular_weighted_correlation(
+                            chunk_ppm
+                        )
+                        circular_sign = check_significance(
+                            chunk_ppm,
+                            circular_corr_coeff,
+                            "circular",
+                            bayesian_config.total_length,
+                            2000,
+                            0.05,
+                        )
+                        circular_corr_coeffs.append(
+                            (circular_corr_coeff, circular_sign[1], circular_sign[2])
+                        )
+                        plot_pse_event(
+                            posterior_probability_matrix=chunk_ppm,
+                            idx=current_chunk_idx,
+                            session=session,
+                            grosmark_config=grosmark_config,
+                            bayesian_config=bayesian_config,
+                            mode="linear",
+                            corr_coeff=linear_corr_coeff,
+                            significance=linear_sign,
+                        )
+                        plot_pse_event(
+                            posterior_probability_matrix=chunk_ppm,
+                            idx=current_chunk_idx,
+                            session=session,
+                            grosmark_config=grosmark_config,
+                            bayesian_config=bayesian_config,
+                            mode="circular",
+                            corr_coeff=circular_corr_coeff,
+                            significance=circular_sign,
+                            do_radon_transform=True,
+                        )
+                        current_chunk_idx += 1
+                # sanity check that the correlations in the trials aren't all just artifactual
+                assert (
+                    len([corr for (corr, sign, _) in linear_corr_coeffs if sign]) > 0
+                ), "No significant trial found (linear weighted correlation)!"
+                assert (
+                    len([corr for (corr, sign), _ in circular_corr_coeffs if sign]) > 0
+                ), "No significant trial found (circular weighted correlation)!"
+                result = BayesianDecodingResult(
+                    posterior_probability_matrices=chunk_ppms,
+                    pr_max_matrices=chunk_pr_maxs,
+                    actual_positions=chunk_actual_positions,
+                    linear_weighted_r=[corr for (corr, _, _) in linear_corr_coeffs],
+                    circular_weighted_r=[corr for (corr, _, _) in circular_corr_coeffs],
+                    linear_rZ_scores=[score for (_, _, score) in linear_corr_coeffs],
+                    circular_rZ_scores=[
+                        score for (_, _, score) in circular_corr_coeffs
+                    ],
+                )
+                # plot_decoded_vs_actual_position(
+                #     positions=positions_test,
+                #     pr_max=pr_max,
+                #     session=session,
+                #     bayesian_config=bayesian_config,
+                # )
+                plot_confusion_matrix_actual_vs_decoded_position(
+                    actual_position=positions_test,
+                    decoded_position=pr_max * bayesian_config.bin_size_spatial,
+                    session=session,
+                    bayesian_config=bayesian_config,
+                )
             plt.figure(figsize=(25, 4))
             plt.imshow(
                 posterior_probability_matrix.T,
@@ -697,40 +721,23 @@ def main(
                 / f"{session.mouse_name}_{session.date}_{'online' if bayesian_config.online else 'offline'}_en_bloc.png"
             )
 
-            if bayesian_config.online:
-                # plot_decoded_vs_actual_position(
-                #     positions=positions_test,
-                #     pr_max=pr_max,
-                #     session=session,
-                #     bayesian_config=bayesian_config,
-                # )
-                plot_confusion_matrix_actual_vs_decoded_position(
-                    actual_position=positions_test,
-                    decoded_position=pr_max * bayesian_config.bin_size_spatial,
-                    session=session,
-                    bayesian_config=bayesian_config,
-                )
-                np.savez(
-                    f"data/cache/{session.mouse_name}_{session.date}_online_en_bloc_decoding.npz",
-                    positions=positions_test,
-                    pr_max=pr_max * bayesian_config.bin_size_spatial,
-                )
-
-            np.savez(
-                cache_path,
-                posterior_probability_matrices=np.array(
-                    result.posterior_probability_matrices, dtype=object
-                ),
-                pr_max_matrices=np.array(result.pr_max_matrices, dtype=object),
-                linear_weighted_r=np.array(result.linear_weighted_r, dtype=float),
-                circular_weighted_r=np.array(result.circular_weighted_r, dtype=float),
-                actual_positions=(
-                    np.array(result.actual_positions, dtype=object)
-                    if result.actual_positions is not None
-                    else None
-                ),
-            )
+            np.savez(file=cache_path, allow_pickle=True, **result.model_dump())
+            # np.savez(
+            #     cache_path,
+            #     posterior_probability_matrices=np.array(
+            #         result.posterior_probability_matrices, dtype=object
+            #     ),
+            #     pr_max_matrices=np.array(result.pr_max_matrices, dtype=object),
+            #     linear_weighted_r=np.array(result.linear_weighted_r, dtype=float),
+            #     circular_weighted_r=np.array(result.circular_weighted_r, dtype=float),
+            #     actual_positions=(
+            #         np.array(result.actual_positions, dtype=object)
+            #         if result.actual_positions is not None
+            #         else None
+            #     ),
+            # )
         else:
+            # TODO: adjust for the new result class
             npz = np.load(cache_path, allow_pickle=True)
             result = BayesianDecodingResult(
                 posterior_probability_matrices=npz[
@@ -782,7 +789,7 @@ def plot_decoded_vs_actual_position(
 ) -> None:
     assert positions.shape == pr_max.shape
     plt.figure(figsize=(5, 5))
-    plt.scatter(positions, pr_max * 5, s=5, alpha=0.5)
+    plt.scatter(positions, pr_max * bayesian_config.bin_size_spatial, s=5, alpha=0.5)
     plt.xlabel("Actual Position")
     plt.ylabel("Decoded Position")
     plt.title(
@@ -1479,8 +1486,8 @@ if __name__ == "__main__":  #
         start_spatial=0,
         end_spatial=180,
         # bin_size_spatial=5,
-        # bin_size_spatial=10,
-        bin_size_spatial=15,
+        bin_size_spatial=10,
+        # bin_size_spatial=15,
     )
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
@@ -1489,22 +1496,8 @@ if __name__ == "__main__":  #
     )
     plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
     plot_f1_score_by_position(bayesian_config, grosmark_config)
-    # 1 / 0
-    # for mouse_name in SESSIONS_KEEP.keys():
-    #     # for mouse_name in ["JB036"]:
-    #     for stage, date in SESSIONS_KEEP[mouse_name].items():
-    #         print(f"Processing {mouse_name} - {stage} - {date}")
-    #         if date:
-    #             try:
-    #                 main(mouse_name, date, bayesian_config, grosmark_config)
-    #             except (
-    #                 ValueError,
-    #                 FileNotFoundError,
-    #                 KeyError,
-    #                 RuntimeError,
-    #                 # AssertionError,
-    #             ) as e:
-    #                 print(f"Error processing {mouse_name} - {stage} - {date}: {e}")
+    plot_correlation_across_stages(mode="linear")
+    plot_correlation_across_stages(mode="circular")
 
     # plot_correlation_across_stages(mode="linear")
     # plot_correlation_across_stages(mode="circular")
