@@ -3,7 +3,7 @@ from typing import Dict
 
 # TODO: Deal with the None case
 SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
-    # Imaging of poor quality, dont analyse
+    # The unsupervised is bad but the rest is probably fine!!!
     # "JB011": {
     #     "unsupervised": "2024-10-22",
     #     "learning": "2024-10-25",

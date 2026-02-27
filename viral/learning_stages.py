@@ -853,23 +853,12 @@ def plot_place_cell_heatmaps() -> None:
             )
 
 
-def do_stuff():
-    a = 1
-    b = 2
-    1 / 0
-
-
-def stuff2():
-    a = 100
-    do_stuff()
 
 
 if __name__ == "__main__":
-    stuff2()
     # plot_place_cell_heatmaps()
     # landmark_comparison_plot(bod=False)
     # tuning_comparison_plot()
-    1 / 0
 
     # for mouse_name, dates in SESSIONS_KEEP.items():
 
