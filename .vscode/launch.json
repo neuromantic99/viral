@@ -131,6 +131,16 @@
       "console": "integratedTerminal",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "justMyCode": true
+    },
+
+    {
+      "name": "fisher",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fisher.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "justMyCode": true
     }
   ]
 }
