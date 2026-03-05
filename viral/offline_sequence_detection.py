@@ -269,7 +269,7 @@ def plot_pse_event(
         )
         x = [radon_replay.point1x, radon_replay.point2x]
         y = [radon_replay.point1y, radon_replay.point2y]
-        # plt.plot(x, y, color="r", linestyle="--")
+        plt.plot(x, y, color="r", linestyle="--")
         plt.plot(
             x,
             [
