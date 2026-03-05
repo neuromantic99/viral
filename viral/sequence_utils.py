@@ -2,9 +2,13 @@ import numpy as np
 import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Literal, cast
+from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from scipy.io import savemat, loadmat
 from skimage.transform import radon
+from sklearn.decomposition import PCA
+from sklearn.cluster import DBSCAN, KMeans
+from sklearn.metrics import silhouette_samples, silhouette_score
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -378,12 +382,10 @@ def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
     # By default, MATLAB is enforcing an odd offset count. I.e., you radon trabsform here could have one more offset than in MATLAB.
     # radon_transform = radon(template, theta=theta, circle=False)
     radon_transform = radon(template, theta=theta_degrees, circle=False)
-    # savemat("template_python.mat", {"template": template})
-    # savemat("lut_radon_transform.mat", {"radon_transform": radon_transform})
 
     # xp = np.arange(-(n_offsets // 2), n_offsets // 2 + n_offsets % 2)
     xp = compute_xp(image_shape=template.shape)
-    savemat("lut_radon_transform.mat", {"RO": radon_transform, "xp": xp})
+    # savemat("lut_radon_transform.mat", {"RO": radon_transform, "xp": xp})
     n_radon_points = radon_transform.shape[0]
     assert n_radon_points == len(xp)
     # TODO: in test: assert here not more than one offset more compared to matlab
@@ -477,33 +479,36 @@ def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
     # 'pathLength', 'xp', 'theta', 'nRadonPoints', 'point1X', 'point1Y', 'point2X', 'point2Y',
     # 'size', 'slope', 'pathLengthFromPoints', 'spaceOffset', 'tempOffset', 'spaceOffsetRound',
     # 'tempOffsetRound', 'tempOffsetRoundPerc'
-    savemat(
-        "radon_lut_python.mat",
-        {
-            "pathLength": radon_lut.path_length,
-            "xp": radon_lut.xp,
-            "theta": radon_lut.theta,
-            "nRadonPoints": radon_lut.n_radon_points,
-            "point1X": radon_lut.point1x,
-            "point1Y": radon_lut.point1y,
-            "point2X": radon_lut.point2x,
-            "point2Y": radon_lut.point2y,
-            "size": radon_lut.path_length.shape,
-            "slope": radon_lut.slope,
-            "pathLengthFromPoints": radon_lut.path_length_from_points,
-            "spaceOffset": radon_lut.space_offset,
-            "tempOffset": radon_lut.temp_offset,
-            "spaceOffsetRound": radon_lut.space_offset_round,
-            "tempOffsetRound": radon_lut.temp_offset_round,
-            "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
-        },
-    )
+    # savemat(
+    #     "radon_lut_python.mat",
+    #     {
+    #         "pathLength": radon_lut.path_length,
+    #         "xp": radon_lut.xp,
+    #         "theta": radon_lut.theta,
+    #         "nRadonPoints": radon_lut.n_radon_points,
+    #         "point1X": radon_lut.point1x,
+    #         "point1Y": radon_lut.point1y,
+    #         "point2X": radon_lut.point2x,
+    #         "point2Y": radon_lut.point2y,
+    #         "size": radon_lut.path_length.shape,
+    #         "slope": radon_lut.slope,
+    #         "pathLengthFromPoints": radon_lut.path_length_from_points,
+    #         "spaceOffset": radon_lut.space_offset,
+    #         "tempOffset": radon_lut.temp_offset,
+    #         "spaceOffsetRound": radon_lut.space_offset_round,
+    #         "tempOffsetRound": radon_lut.temp_offset_round,
+    #         "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
+    #     },
+    # )
     return radon_lut
 
 
 def calculate_radon_replay(
-    posterior_probability_matrix: np.ndarray, bayesian_config: BayesianDecodingConfig
-) -> RadonReplayResult:
+    posterior_probability_matrix: np.ndarray,
+    bayesian_config: BayesianDecodingConfig,
+    line: Literal["single", "multi"] = "single",
+    n_lines: int = 100,
+) -> List[RadonReplayResult]:
     """
     "To determine the precise trajectory content of each sequence, a modified 'line casting' or Radon transformation approach was employed.
     Briefly, for each event, the posterior probabilities were tiled twice by position to account for 'edge' spanning sequences and smoothed
@@ -512,7 +517,8 @@ def calculate_radon_replay(
     The trajectory was defined as the casted line with the highest mean posterior probability value, and the sign of the slope
     of the trajectory line defined whether it was a forward or reverse sequence."
 
-    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcRadonReplay.m.
+    If using single-line, then this is essentially a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcRadonReplay.m.
+    If using multi-line, then this will return the best n_lines of lines to cluster later.
     """
     # TODO: careful: axes??!
     n_time, n_pos = posterior_probability_matrix.shape
@@ -558,37 +564,12 @@ def calculate_radon_replay(
     )
     assert radon_transform.shape[0] == n_radon_points
 
-    savemat("python_radon_transform.mat", {"radon_transform": radon_transform})
+    # savemat("python_radon_transform.mat", {"radon_transform": radon_transform})
 
     radon_transform[~good_lines] = 0
 
     # normalise by path length
     radon_transform_mean = radon_transform / radon_lut.path_length
-
-    # TODO: wait, how is the MATLAB implementation dealing with this? not changing it!
-    # No this won't work with np.max because it will take NaN as max
-    # radon_transform_mean = np.nan_to_num(radon_transform_mean, nan=0)
-
-    # find the line with the highest mean posterior probability
-    # path lenghts are often, i.e. leading to zero divisions with NaNs as result, hence preventing them from being taken into consideration
-    pos_mean_max = np.nanmax(radon_transform_mean)
-    linear_index = np.nanargmax(radon_transform_mean)
-
-    # convert linear index to 2D indices
-    line_idx, theta_idx = np.unravel_index(linear_index, radon_transform.shape)
-
-    # extract properties of the best line
-    slope = radon_lut.slope[line_idx, theta_idx]
-    path_length = radon_lut.path_length[line_idx, theta_idx]
-    point1x = radon_lut.point1x[line_idx, theta_idx]
-    point1y = radon_lut.point1y[line_idx, theta_idx]
-    point2x = radon_lut.point2x[line_idx, theta_idx]
-    point2y = radon_lut.point2y[line_idx, theta_idx]
-
-    # ensure point1 comes before point2 along the x-axis
-    if point2x < point1x:
-        point1x, point2x = point2x, point1x
-        point1y, point2y = point2y, point1y
 
     # TODO: this seems off: check units
     bin_size_time_frames = (
@@ -597,41 +578,137 @@ def calculate_radon_replay(
         else bayesian_config.bin_size_time_offline
     )
     bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
-    # CircReplayOutput.Radon.slope = CircReplayOutput.Radon.slope...
-    # *(totalMazeLength/synthEvents.params.nSpatialBins)/synthEvents.params.eventBinDuration;
-    # slope_metres_per_sec = (
-    #     slope * (bayesian_config.total_length / n_pos) / (bin_size_time_seconds)
-    # )
-    # n_spatial_bins, n_time_bins = smoothed_tiled_posterior_probability_matrix.shape
-    # slope_metres_per_sec = slope * (
-    #     (bayesian_config.total_length * 2 / n_spatial_bins) / (bin_size_time_seconds)
-    # )  # might be correct as I tile the ppm to span two lengths of the track, right?
 
-    # slope is done using radian -> i.e., slope is in radian/time bin
-    # angular slope to linear speed -> v = omega * r
-    # omega = slope
-    # r = maze radius
-    r = bayesian_config.total_length * 2  # we tiled the posterior_probability matrix
-    v = slope * r
-    v = v * bin_size_time_seconds
+    def get_slope_metres_per_sec(slope: float) -> float:
+        # CircReplayOutput.Radon.slope = CircReplayOutput.Radon.slope...
+        # *(totalMazeLength/synthEvents.params.nSpatialBins)/synthEvents.params.eventBinDuration;
+        # slope_metres_per_sec = (
+        #     slope * (bayesian_config.total_length / n_pos) / (bin_size_time_seconds)
+        # )
+        # n_spatial_bins, n_time_bins = smoothed_tiled_posterior_probability_matrix.shape
+        # slope_metres_per_sec = slope * (
+        #     (bayesian_config.total_length * 2 / n_spatial_bins) / (bin_size_time_seconds)
+        # )  # might be correct as I tile the ppm to span two lengths of the track, right?
 
-    slope_metres_per_sec = v  # I am extremely confused, this looks correct in the plot but is really not what Grosmark does
+        # slope is done using radian -> i.e., slope is in radian/time bin
+        # angular slope to linear speed -> v = omega * r
+        # omega = slope
+        # r = maze radius
+        r = (
+            bayesian_config.total_length * 2
+        )  # we tiled the posterior_probability matrix
+        v = slope * r
+        v = v * bin_size_time_seconds
 
-    replay_type = cast(
-        Literal["forward", "reverse"], "forward" if slope >= 0 else "reverse"
-    )
+        slope_metres_per_sec = v  # I am extremely confused, this looks correct in the plot but is really not what Grosmark does
+        return slope_metres_per_sec
 
-    return RadonReplayResult(
-        pos_mean=pos_mean_max,
-        path_length=path_length,
-        point1x=point1x,
-        point1y=point1y,
-        point2x=point2x,
-        point2y=point2y,
-        slope=slope,
-        slope_metres_per_sec=slope_metres_per_sec,
-        replay_type=replay_type,
-    )
+    def replay_type_from_slope(slope: float) -> Literal["forward", "reverse"]:
+        return cast(
+            Literal["forward", "reverse"], "forward" if slope >= 0 else "reverse"
+        )
+
+    if line == "single":
+        # TODO: wait, how is the MATLAB implementation dealing with this? not changing it!
+        # No this won't work with np.max because it will take NaN as max
+        # radon_transform_mean = np.nan_to_num(radon_transform_mean, nan=0)
+
+        # find the line with the highest mean posterior probability
+        # path lenghts are often, i.e. leading to zero divisions with NaNs as result, hence preventing them from being taken into consideration
+        pos_mean_max = np.nanmax(radon_transform_mean)
+        linear_index = np.nanargmax(radon_transform_mean)
+
+        # convert linear index to 2D indices
+        line_idx, theta_idx = np.unravel_index(linear_index, radon_transform.shape)
+
+        # extract properties of the best line
+        slope = radon_lut.slope[line_idx, theta_idx]
+        path_length = radon_lut.path_length[line_idx, theta_idx]
+        point1x = radon_lut.point1x[line_idx, theta_idx]
+        point1y = radon_lut.point1y[line_idx, theta_idx]
+        point2x = radon_lut.point2x[line_idx, theta_idx]
+        point2y = radon_lut.point2y[line_idx, theta_idx]
+
+        # ensure point1 comes before point2 along the x-axis
+        if point2x < point1x:
+            point1x, point2x = point2x, point1x
+            point1y, point2y = point2y, point1y
+
+        return [
+            RadonReplayResult(
+                pos_mean=pos_mean_max,
+                path_length=path_length,
+                point1x=point1x,
+                point1y=point1y,
+                point2x=point2x,
+                point2y=point2y,
+                slope=slope,
+                slope_metres_per_sec=get_slope_metres_per_sec(slope),
+                replay_type=replay_type_from_slope(slope),
+            )
+        ]
+
+    elif line == "multi":
+        ## instead, now I want to look for n_lines lines
+        radon_replay_lines = list()
+
+        radon_transform_mean_flatted = radon_transform_mean.ravel()
+
+        valid_mask = ~np.isnan(radon_transform_mean_flatted)
+        valid_values = radon_transform_mean_flatted[valid_mask]
+
+        sorted_indices = np.argsort(valid_values)[::-1]
+
+        top_x_sorted = sorted_indices[:n_lines]
+
+        valid_flat_indices = np.where(valid_mask)[0]
+        linear_indices = valid_flat_indices[top_x_sorted]
+
+        # top_values = radon_transform_mean_flatted[linear_indices]
+
+        # convert linear index to 2D indices
+        # line_idx, theta_idx = np.unravel_index(linear_index, radon_transform.shape)
+        line_indices, theta_indices = np.unravel_index(
+            linear_indices, radon_transform.shape
+        )
+
+        # extract properties of the best n_lines lines
+        for line_idx, theta_idx in zip(line_indices, theta_indices):
+            pos_mean_max = radon_transform_mean[line_idx, theta_idx]
+            slope = radon_lut.slope[line_idx, theta_idx]
+            path_length = radon_lut.path_length[line_idx, theta_idx]
+            point1x = radon_lut.point1x[line_idx, theta_idx]
+            point1y = radon_lut.point1y[line_idx, theta_idx]
+            point2x = radon_lut.point2x[line_idx, theta_idx]
+            point2y = radon_lut.point2y[line_idx, theta_idx]
+
+            # ensure point1 comes before point2 along the x-axis
+            if point2x < point1x:
+                point1x, point2x = point2x, point1x
+                point1y, point2y = point2y, point1y
+
+            radon_replay_lines.append(
+                RadonReplayResult(
+                    pos_mean=pos_mean_max,
+                    path_length=path_length,
+                    point1x=point1x,
+                    point1y=point1y,
+                    point2x=point2x,
+                    point2y=point2y,
+                    slope=slope,
+                    slope_metres_per_sec=get_slope_metres_per_sec(slope),
+                    replay_type=replay_type_from_slope(slope),
+                )
+            )
+
+        cluster_labels = cluster_slopes_and_y_intercepts(
+            radon_replay_lines=radon_replay_lines
+        )
+        best_lines = get_best_line_per_cluster(
+            cluster_labels=cluster_labels, radon_replay_lines=radon_replay_lines
+        )
+
+        return best_lines
 
 
 def test_construct_xy_by_bin_against_matlab() -> None:
@@ -936,6 +1013,132 @@ def compare_radon_functions() -> None:
     savemat(
         "radon_transform_circle.mat", {"radon_transform_circle": radon_transform_circle}
     )
+
+
+def cluster_slopes_and_y_intercepts(
+    radon_replay_lines: List[RadonReplayResult], plot: bool = False
+) -> np.ndarray:
+    """Cluster the lines based on slope and y intercept (PCA for n_components, then KMeans). Returns cluster labels."""
+    # slopes_y_intercepts = get_slopes_and_y_intercepts(radon_replay_lines)
+
+    # pca = PCA().fit(slopes_y_intercepts)
+    # n_clusters = pca.n_components_
+    # print(f"n_clusters: {n_clusters}")
+
+    # X = slopes_y_intercepts
+
+    # kmeans = KMeans(n_clusters=n_clusters)
+    # kmeans_y_pred = kmeans.fit_predict(slopes_y_intercepts)
+
+    # if plot:
+    #     dbscan_y_pred = DBSCAN().fit_predict(slopes_y_intercepts)
+
+    #     fig, ax = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(10, 5))
+    #     ax[0].scatter(
+    #         slopes_y_intercepts[:, 0], slopes_y_intercepts[:, 1], c=kmeans_y_pred
+    #     )
+    #     ax[0].set_title("KMeans")
+    #     ax[1].scatter(
+    #         slopes_y_intercepts[:, 0], slopes_y_intercepts[:, 1], c=dbscan_y_pred
+    #     )
+    #     ax[1].set_title("DBSCAN")
+    #     fig.supxlabel("slope")
+    #     fig.supylabel("y-intercept")
+    #     plt.show()
+
+    # return kmeans_y_pred
+
+    slopes_y_intercepts = get_slopes_and_y_intercepts(radon_replay_lines)
+    X = slopes_y_intercepts
+    # TODO: scaling needed?
+
+    random_state = 123
+
+    # n_clusters is unknown, cannot use PCA on slopes and y intercepts because it will always return two clusters (n_features = 2!)
+    # instead using the silhouette score to find the best n_clusters
+    # https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_silhouette_analysis.html
+    range_n_clusters = np.arange(2, len(radon_replay_lines))
+
+    silhouette_scores = list()
+    cluster_labels = list()
+
+    for n_clusters in range_n_clusters:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=random_state)
+        labels = kmeans.fit_predict(X)
+        cluster_labels.append(labels)
+        silhouette_scores.append(silhouette_score(X, labels))
+        # sample_silhouette_values = silhouette_samples(X, cluster_labels)
+
+    best_idx = np.argmax(silhouette_scores)
+    best_n_clusters = range_n_clusters[best_idx]
+    best_clusters = cluster_labels[best_idx]
+    print(f"n_clusters = {best_n_clusters}")
+
+    if plot:
+        dbscan_y_pred = DBSCAN().fit_predict(slopes_y_intercepts)
+
+        fig, ax = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(10, 5))
+        ax[0].scatter(
+            slopes_y_intercepts[:, 0], slopes_y_intercepts[:, 1], c=best_clusters
+        )
+        ax[0].set_title("KMeans")
+        ax[1].scatter(
+            slopes_y_intercepts[:, 0], slopes_y_intercepts[:, 1], c=dbscan_y_pred
+        )
+        ax[1].set_title("DBSCAN")
+        fig.supxlabel("slope")
+        fig.supylabel("y-intercept")
+        plt.show()
+
+    return best_clusters
+
+
+def get_best_line_per_cluster(
+    radon_replay_lines: List[RadonReplayResult],
+    cluster_labels: np.ndarray,
+) -> List[RadonReplayResult]:
+    """Get one representative line per cluster (the one with highest pos_mean)."""
+    unique_clusters = np.unique(cluster_labels)
+
+    best_lines = list()
+    for cluster_id in unique_clusters:
+        mask = cluster_labels == cluster_id
+        cluster_lines = [line for i, line in enumerate(radon_replay_lines) if mask[i]]
+        best_line = max(cluster_lines, key=lambda x: x.pos_mean)
+        best_lines.append(best_line)
+
+    return best_lines
+
+
+def get_slopes_and_y_intercepts(
+    radon_replay_lines: List[RadonReplayResult],
+) -> np.ndarray:
+    """Return array of shape (2, n_lines) with each row being slope and y-intercept of the line, respectively."""
+    radon_slopes = [line.slope for line in radon_replay_lines]
+    slopes = list()
+
+    y_intercepts = list()
+    for line in radon_replay_lines:
+        x = [line.point1x, line.point2x]
+        y = [line.point1y, line.point2y]
+        slope, y_intercept = np.polyfit(x, y, 1)
+        slopes.append(slope)
+        y_intercepts.append(y_intercept)
+
+    # quick sanity check that the slopes we compute with polyfit here are close to the slopes we got in calculate_radon_replay
+    assert np.allclose(radon_slopes, slopes)
+
+    return np.column_stack([np.array(slopes), np.array(y_intercepts)])
+
+
+def plot_slope_against_y_intersect(radon_replay_lines: List[RadonReplayResult]) -> None:
+    """Plot slope against y-intercept for all lines."""
+    slopes_y_intercepts = get_slopes_and_y_intercepts(radon_replay_lines)
+    plt.figure()
+    plt.scatter(slopes_y_intercepts[0, :], slopes_y_intercepts[1, :])
+    plt.xlabel("slope")
+    plt.ylabel("y-intercept")
+    plt.show()
 
 
 def get_cache_path(

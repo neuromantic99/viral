@@ -282,8 +282,7 @@ class RadonLUT:
 
 @dataclass
 class RadonReplayResult:
-    pos_mean: float  # mean posterior probability of best line
-    # max_id: int  # linear index of best line
+    pos_mean: float
     path_length: float
     point1x: float
     point1y: float

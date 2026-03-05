@@ -263,42 +263,39 @@ def plot_pse_event(
     plt.colorbar()
 
     if do_radon_transform and mode == "circular":
+        # TODO: leave here or move elsewhere?
+        line = "multi"
+        n_lines = 100
+
         radon_replay = calculate_radon_replay(
             posterior_probability_matrix=posterior_probability_matrix,
             bayesian_config=bayesian_config,
+            line=line,
+            n_lines=n_lines,
         )
-        x = [radon_replay.point1x, radon_replay.point2x]
-        y = [radon_replay.point1y, radon_replay.point2y]
-        plt.plot(x, y, color="r", linestyle="--")
-        plt.plot(
-            x,
-            [
-                y
-                + (
-                    (bayesian_config.total_length * 100)
-                    / bayesian_config.bin_size_spatial
-                )
-                for y in y
-            ],
-            color="r",
-            linestyle="--",
-        )
-        plt.plot(
-            x,
-            [
-                y
-                - (
-                    (bayesian_config.total_length * 100)
-                    / bayesian_config.bin_size_spatial
-                )
-                for y in y
-            ],
-            color="r",
-            linestyle="--",
-        )
-        plt.title(
-            f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
-        )
+
+        offset = (bayesian_config.total_length * 100) / bayesian_config.bin_size_spatial
+
+        for line in radon_replay:
+            x = [line.point1x, line.point2x]
+            y = [line.point1y, line.point2y]
+
+            # if len(radon_replay) == 1:
+            if line == "single":
+                # TODO: is it correct to only plot that if it is a single line?
+                plt.plot(x, y, color="r", linestyle="--")
+
+            plt.plot(x, [y + offset for y in y], color="r", linestyle="--", linewidth=2)
+            plt.plot(x, [y - offset for y in y], color="r", linestyle="--", linewidth=2)
+
+        if line == "single":
+            plt.title(
+                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay[0].slope_metres_per_sec:.2f} m/s ({radon_replay[0].replay_type} replay)"
+            )
+        elif line == "multi":
+            plt.title(
+                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f})"
+            )
 
     n_time, n_pos = posterior_probability_matrix.shape
 
@@ -336,7 +333,8 @@ def plot_pse_event(
     plt.tight_layout()
     plt.savefig(
         PLOT_PATH
-        / "pse_events_radon"
+        # / "pse_events_radon"
+        / "pse_events_radon_multiline"
         / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_{'chunk' if (bayesian_config.epoch == 'online') else 'event'}_{idx}.png"
     )
     plt.close()
