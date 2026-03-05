@@ -343,7 +343,7 @@ def pol2cart(rho, phi):
 # TODO: how could we confirm this is correct??
 def compute_xp(image_shape: Tuple[int, int]):
     """
-    xp is radial coordinate in radon transformation but never explicitly defined.
+    xp is radial coordinate in radon transformation but never explicitly defined in the MATLAB code.
     This matches padding logic in skimage.transform.radon.
     """
     # xp = np.arange(padded_image.shape[0]) - center
@@ -354,7 +354,6 @@ def compute_xp(image_shape: Tuple[int, int]):
     return xp
 
 
-# TODO: TEST ALL THIS against MATLAB implementation!!!!!!
 def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
     """
     Essentially a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/makeRadonLookupTable.m.
@@ -448,24 +447,6 @@ def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
     temp_offset_round_perc = 100 * np.abs(np.floor(temp_offset)) / n_time_bins
     # temp_offset_round_perc = 100 * (abs(temp_offset) / n_time_bins)
 
-    # return RadonLUT(
-    #     path_length=radon_transform,
-    #     xp=xp,
-    #     theta=theta,
-    #     n_radon_points=n_radon_points,
-    #     point1x=point1x,
-    #     point1y=point1y,
-    #     point2x=point2x,
-    #     point2y=point2y,
-    #     slope=slope,
-    #     path_length_from_points=path_length_from_points,
-    #     space_offset=space_offset,
-    #     temp_offset=temp_offset,
-    #     space_offset_round=space_offset_round,
-    #     temp_offset_round=temp_offset_round,
-    #     temp_offset_round_perc=temp_offset_round_perc,
-    # )
-
     # repeat the slope vector for all possible intersections
     # out{nTemporalBins(S)}.slope = repmat(allSlopes(:)', [length(xp), 1]);
     slope = np.tile(all_slopes.reshape(1, -1), (len(xp), 1))
@@ -495,29 +476,28 @@ def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
 
     # 'pathLength', 'xp', 'theta', 'nRadonPoints', 'point1X', 'point1Y', 'point2X', 'point2Y',
     # 'size', 'slope', 'pathLengthFromPoints', 'spaceOffset', 'tempOffset', 'spaceOffsetRound',
-    # 'tempOffsetRound', 'tempOffsetRoundPerc
-    savemat("radon_lut_python.mat", {"radon_lut": radon_lut})
-    # savemat(
-    #     "radon_lut_python.mat",
-    #     {
-    #         "pathLength": radon_lut.path_length,
-    #         "xp": radon_lut.xp,
-    #         "theta": radon_lut.theta,
-    #         "nRadonPoints": radon_lut.n_radon_points,
-    #         "point1X": radon_lut.point1x,
-    #         "point1Y": radon_lut.point1y,
-    #         "point2X": radon_lut.point2x,
-    #         "point2Y": radon_lut.point2y,
-    #         "size": radon_lut.path_length.shape,
-    #         "slope": radon_lut.slope,
-    #         "pathLengthFromPoints": radon_lut.path_length_from_points,
-    #         "spaceOffset": radon_lut.space_offset,
-    #         "tempOffset": radon_lut.temp_offset,
-    #         "spaceOffsetRound": radon_lut.space_offset_round,
-    #         "tempOffsetRound": radon_lut.temp_offset_round,
-    #         "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
-    #     },
-    # )
+    # 'tempOffsetRound', 'tempOffsetRoundPerc'
+    savemat(
+        "radon_lut_python.mat",
+        {
+            "pathLength": radon_lut.path_length,
+            "xp": radon_lut.xp,
+            "theta": radon_lut.theta,
+            "nRadonPoints": radon_lut.n_radon_points,
+            "point1X": radon_lut.point1x,
+            "point1Y": radon_lut.point1y,
+            "point2X": radon_lut.point2x,
+            "point2Y": radon_lut.point2y,
+            "size": radon_lut.path_length.shape,
+            "slope": radon_lut.slope,
+            "pathLengthFromPoints": radon_lut.path_length_from_points,
+            "spaceOffset": radon_lut.space_offset,
+            "tempOffset": radon_lut.temp_offset,
+            "spaceOffsetRound": radon_lut.space_offset_round,
+            "tempOffsetRound": radon_lut.temp_offset_round,
+            "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
+        },
+    )
     return radon_lut
 
 
@@ -553,12 +533,15 @@ def calculate_radon_replay(
         100.0  # % minimum percentage of temporal bins that valid lines must cross
     )
 
-    # TODO: is that right?
+    # TODO: is that right? -> pretty sure this is correct, check
+    # https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/demo_CircularReplayAnalysis.m line 107
     radon_lut = create_radon_lut(n_spatial_bins=n_pos * 2, n_time_bins=n_time)
 
     # checked this against MATLAB, it works
+    # % minPLength = sqrt((floor(uNS(U).*(minNBinPerc/100)) + 1)^2 + minSpatialDisp^2);
+    # CAREFUL: it has to be n_pos multiplied by 2 as in MATLAB this is done on the tiled posterior probability matrix
     min_path_length = np.sqrt(
-        (np.floor(n_time * (min_n_bin_perc / 100.0)) + 1) ** 2 + min_spatial_disp**2
+        (np.floor(2 * n_pos * (min_n_bin_perc / 100.0)) + 1) ** 2 + min_spatial_disp**2
     )
 
     good_lines = (
@@ -575,8 +558,9 @@ def calculate_radon_replay(
     )
     assert radon_transform.shape[0] == n_radon_points
 
+    savemat("python_radon_transform.mat", {"radon_transform": radon_transform})
+
     radon_transform[~good_lines] = 0
-    # savemat("python_radon_transform.mat", {"radon_transform": radon_transform})
 
     # normalise by path length
     radon_transform_mean = radon_transform / radon_lut.path_length
@@ -600,6 +584,11 @@ def calculate_radon_replay(
     point1y = radon_lut.point1y[line_idx, theta_idx]
     point2x = radon_lut.point2x[line_idx, theta_idx]
     point2y = radon_lut.point2y[line_idx, theta_idx]
+
+    # ensure point1 comes before point2 along the x-axis
+    if point2x < point1x:
+        point1x, point2x = point2x, point1x
+        point1y, point2y = point2y, point1y
 
     # TODO: this seems off: check units
     bin_size_time_frames = (
@@ -688,14 +677,12 @@ def compare_radon_against_matlab() -> None:
         bin_size_spatial=5,
     )
     n_spatial_bins = 20
-    n_time_bins = 20
+    n_time_bins = 30
     ppm = create_dummy_ppm_perfect_diagonal(n_spatial_bins, n_time_bins)
-    radon_lut = create_radon_lut(
-        n_spatial_bins=n_spatial_bins * 2, n_time_bins=n_time_bins
-    )
+
+    ### compare makeRadonLookupTable
+    create_radon_lut(n_spatial_bins=n_spatial_bins * 2, n_time_bins=n_time_bins)
     savemat("ppm_python.mat", {"ppm": ppm})
-    radon_replay = calculate_radon_replay(ppm, bayesian_config)
-    savemat("radon_python.mat", {"radon": radon_replay})
 
     ### OUTDATED
     ## TESTING RADON TRANSFORM AGAINST MATLAB
@@ -715,10 +702,7 @@ def compare_radon_against_matlab() -> None:
     # WARNING: As inputs were equal but outputs differed, probably inconsistency between MATLAB's internal C compiled radon transformation and Skimage's implementation
     # Hence using the Python result downstream in the test
 
-    python_lut = loadmat("radon_lut_python.mat")["radon_lut"]
-    # python_radon_lookup_table = {
-    #     name: np.squeeze(python_lut[name][0, 0]) for name in python_lut.dtype.names
-    # }
+    python_lut = loadmat("radon_lut_python.mat")
     matlab_lut = loadmat("matlabLUT.mat")["saveRadonLUT"]
     matlab_radonLookupTable = {
         name: np.squeeze(matlab_lut[name][0, 0]) for name in matlab_lut.dtype.names
@@ -730,107 +714,121 @@ def compare_radon_against_matlab() -> None:
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["path_length"][0, 0], matlab_radonLookupTable["pathLength"]
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["pathLength"],
+            matlab_radonLookupTable["pathLength"],
+            # rtol=rtol,
+            # atol=atol,
+        )
+    )  # pass
 
     # MATLAB's radon transform will use the some number of radon points as Python (when given as an argument) but will choose
     # different positions on the detector function, i.e., the xp arrays will never be close.
-    assert python_lut["xp"][0, 0].shape[1] == matlab_radonLookupTable["xp"].shape[0]
-    # assert np.all(
-    #     np.isclose(python_lut["xp"][0, 0], matlab_radonLookupTable["xp"])
-    # )  # pass
+    # assert python_lut["xp"][0, 0].shape[1] == matlab_radonLookupTable["xp"].shape[0]
+    assert python_lut["xp"].shape[1] == matlab_radonLookupTable["xp"].shape[0]
+    assert np.all(
+        np.isclose(
+            python_lut["xp"],
+            matlab_radonLookupTable["xp"],
+        )
+    )  # pass
 
     assert np.all(
-        np.isclose(python_lut["theta"][0, 0], matlab_radonLookupTable["theta"])  # pass
+        np.isclose(
+            python_lut["theta"],
+            matlab_radonLookupTable["theta"],
+        )  # pass
     )
 
     # This will always work as it is given by the Python radon transform.
     assert (
-        python_lut["n_radon_points"][0, 0] == matlab_radonLookupTable["nRadonPoints"]
+        python_lut["nRadonPoints"][0, 0] == matlab_radonLookupTable["nRadonPoints"]
     )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["slope"][0, 0],
-    #         matlab_radonLookupTable["slope"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["slope"],
+            matlab_radonLookupTable["slope"],
+            equal_nan=True,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["point1x"][0, 0],
-    #         (matlab_radonLookupTable["point1X"]),
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["point1X"],
+            matlab_radonLookupTable["point1X"],
+            equal_nan=True,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["point1y"][0, 0],
-    #         matlab_radonLookupTable["point1Y"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["point1Y"],
+            matlab_radonLookupTable["point1Y"],
+            equal_nan=True,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["point2x"][0, 0],
-    #         matlab_radonLookupTable["point2X"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["point2X"],
+            matlab_radonLookupTable["point2X"],
+            equal_nan=True,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["point2y"][0, 0],
-    #         matlab_radonLookupTable["point2Y"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["point2Y"],
+            matlab_radonLookupTable["point2Y"],
+            equal_nan=True,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["path_length_from_points"][0, 0],
-    #         matlab_radonLookupTable["pathLengthFromPoints"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["pathLengthFromPoints"],
+            matlab_radonLookupTable["pathLengthFromPoints"],
+            equal_nan=True,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["space_offset"][0, 0],
-    #         matlab_radonLookupTable["spaceOffset"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["spaceOffset"],
+            matlab_radonLookupTable["spaceOffset"],
+            equal_nan=True,
+            # rtol=rtol,
+            # atol=atol,
+        )
+    )  # pass
 
     # As the radon transform works differently in MATLAB, for some elements in this array it will never be close (see plot).
     # It does work fine if you use the Python radon transform for it instead.
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["temp_offset"][0, 0],
-    #         matlab_radonLookupTable["tempOffset"],
-    #         equal_nan=True,
-    #     )
-    # )  # pass
+    assert np.all(
+        np.isclose(
+            python_lut["tempOffset"],
+            matlab_radonLookupTable["tempOffset"],
+            equal_nan=True,
+            # rtol=rtol,
+            # atol=atol,
+        )
+    )  # pass
 
     # TODO: atol or rtol and which level?
     # TODO: as it is rounded, perhaps atol of 1 unit?
@@ -839,45 +837,50 @@ def compare_radon_against_matlab() -> None:
     # TODO: this looks ok:
     # np.max(np.abs(np.nan_to_num(python_lut["space_offset_round"][0, 0] - matlab_radonLookupTable["spaceOffsetRound"])))
     # np.float64(1.0)
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["space_offset_round"][0, 0],
-    #         matlab_radonLookupTable["spaceOffsetRound"],
-    #         equal_nan=True,
-    #         atol=1,
-    #     )
-    # )  #
+    assert np.all(
+        np.isclose(
+            python_lut["spaceOffsetRound"],
+            matlab_radonLookupTable["spaceOffsetRound"],
+            equal_nan=True,
+            atol=1,
+        )
+    )  # pass
 
     # TODO: atol or rtol and which level?
     # TODO: as it is rounded, perhaps atol of 1 unit?
-    # (e.g. np.round(20.5) will equal tp 20 whereas MATLAB round(20.5) will equal to 21)
+    # (e.g. np.round(20.5) will equal 20 whereas MATLAB round(20.5) will equal 21)
     # TODO: or, we could change our rounding logic if we want to match it exactly
     # TODO: this looks ok
     # np.max(np.abs(np.nan_to_num(python_lut["temp_offset_round"][0, 0] - matlab_radonLookupTable["tempOffsetRound"])))
     # np.float64(1.0)
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["temp_offset_round"][0, 0],
-    #         matlab_radonLookupTable["tempOffsetRound"],
-    #         equal_nan=True,
-    #         atol=1,
-    #     )
-    # )  #
+    assert np.all(
+        np.isclose(
+            python_lut["tempOffsetRound"],
+            matlab_radonLookupTable["tempOffsetRound"],
+            equal_nan=True,
+            atol=1,
+        )
+    )  # pass
 
     # TODO: atol or rtol and which level?
     # TODO: this looks ok:
     # np.max(np.abs(np.nan_to_num(python_lut["temp_offset_round_perc"][0, 0] - matlab_radonLookupTable["tempOffsetRoundPerc"])))
     # np.float64(0.0)
-    # assert np.all(
-    #     np.isclose(
-    #         python_lut["temp_offset_round_perc"][0, 0],
-    #         matlab_radonLookupTable["tempOffsetRoundPerc"],
-    #         equal_nan=True,
-    #         atol=1e-4,
-    #     )
-    # )  #
+    assert np.all(
+        np.isclose(
+            python_lut["tempOffsetRoundPerc"],
+            matlab_radonLookupTable["tempOffsetRoundPerc"],
+            equal_nan=True,
+            atol=1e-4,
+        )
+    )  # pass
 
-    ### TODO: the radon lut Python vs MATLAB looks ok for now, but definitely do a second and final check together with the actual radon replay check!!
+    ## TODO: the radon lut Python vs MATLAB looks ok for now, but definitely do a second and final check together with the actual radon replay check!!
+    # TODO: did another check using the prepared MATLAB scripts, looks ok too
+
+    ### compare calcRadonReplay
+    radon_replay = calculate_radon_replay(ppm, bayesian_config)
+    savemat("radon_python.mat", {"radon": radon_replay})
 
     # TODO: same radon transform issue as above, took the radon lut from Python and the second radon transform from Python as well
     matlab_radon = loadmat("matlabRadonReplay.mat")["saveRadonReplay"]
@@ -885,10 +888,17 @@ def compare_radon_against_matlab() -> None:
         name: np.squeeze(matlab_radon[name][0, 0]) for name in matlab_radon.dtype.names
     }
     # 'posMean', 'id', 'slope', 'pathLength', 'pointsXYXY'
-    assert np.isclose(matlab_radonReplay["posMean"], radon_replay.pos_mean)  # pass
-    assert np.isclose(matlab_radonReplay["slope"], radon_replay.slope)  # pass
     assert np.isclose(
-        matlab_radonReplay["pathLength"], radon_replay.path_length
+        matlab_radonReplay["posMean"],
+        radon_replay.pos_mean,
+    )  # pass
+    assert np.isclose(
+        matlab_radonReplay["slope"],
+        radon_replay.slope,
+    )  # pass
+    assert np.isclose(
+        matlab_radonReplay["pathLength"],
+        radon_replay.path_length,
     )  # pass
     assert np.all(
         np.isclose(
@@ -904,13 +914,17 @@ def compare_radon_against_matlab() -> None:
         )
     )  # pass
 
-    ### TODO:radon replay Python vs MATLAB looks ok for now, but clean up and test again before asking for PR review!!!
+    ## TODO:radon replay Python vs MATLAB looks ok for now, but clean up and test again before asking for PR review!!!
+    # TODO: did another check using the prepared MATLAB scripts, looks ok too
 
 
 def compare_radon_functions() -> None:
-    n_spatial_bins = 20
-    n_temporal_bins = 20
-    posteriors = create_dummy_ppm_perfect_diagonal(
+    n_spatial_bins = 10
+    n_temporal_bins = 30
+    # posteriors = create_dummy_ppm_perfect_diagonal(
+    #     n_spatial_bins=n_spatial_bins, n_time_bins=n_temporal_bins
+    # )
+    posteriors = create_dummy_ppm_more_complex(
         n_spatial_bins=n_spatial_bins, n_time_bins=n_temporal_bins
     )
     savemat("posteriors.mat", {"posteriors": posteriors})
