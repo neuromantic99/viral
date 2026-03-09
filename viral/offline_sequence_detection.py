@@ -265,7 +265,7 @@ def plot_pse_event(
     if do_radon_transform and mode == "circular":
         # TODO: leave here or move elsewhere?
         line = "multi"
-        n_lines = 100
+        n_lines = 50
 
         radon_replay = calculate_radon_replay(
             posterior_probability_matrix=posterior_probability_matrix,
@@ -331,10 +331,16 @@ def plot_pse_event(
     plt.xlim(0, n_time - 1)
 
     plt.tight_layout()
+
+    if not os.path.exists(
+        PLOT_PATH / "pse_events_radon_multiline" / session.mouse_name
+    ):
+        os.makedirs(PLOT_PATH / "pse_events_radon_multiline" / session.mouse_name)
     plt.savefig(
         PLOT_PATH
         # / "pse_events_radon"
         / "pse_events_radon_multiline"
+        / session.mouse_name
         / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_{'chunk' if (bayesian_config.epoch == 'online') else 'event'}_{idx}.png"
     )
     plt.close()
@@ -481,8 +487,11 @@ def main(
             # use the test trials for decoding
             # TODO: do we want to increase the speed threshold, and should it be below it for 3 consecutive seconds?
             # phases of immobility
+            # ssp_config_immobility = SSPConfig(
+            #     mode="below", speed_threshold=2, n_consecutive_samples=3 * 30
+            # )
             ssp_config_immobility = SSPConfig(
-                mode="below", speed_threshold=2, n_consecutive_samples=3 * 30
+                mode="below", speed_threshold=1, n_consecutive_samples=3 * 30
             )
 
             ssp_result = get_ssp_vectors(
@@ -879,8 +888,13 @@ def get_statistics_correlation(
             continue
         for stage in ["unsupervised", "learning", "learned"]:
             print(f"Doing {mouse_name} at {stage} stage")
-            date = SESSIONS_KEEP[mouse_name][stage]
+            try:
+                date = SESSIONS_KEEP[mouse_name][stage]
+            except KeyError:
+                print("No session found in SESSIONS_KEEP, skip")
+                continue
             if date is None:
+                print("No valid date, skip")
                 continue
             # use_cache = True
             use_cache = False
@@ -906,6 +920,8 @@ def get_statistics_correlation(
                         if "actual_positions" in npz.files
                         else None
                     ),
+                    linear_rZ_scores=npz["linear_rZ_scores"].tolist(),
+                    circular_rZ_scores=npz["circular_rZ_scores"].tolist(),
                 )
             else:
                 try:

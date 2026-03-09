@@ -550,11 +550,22 @@ def calculate_radon_replay(
         (np.floor(2 * n_pos * (min_n_bin_perc / 100.0)) + 1) ** 2 + min_spatial_disp**2
     )
 
-    good_lines = (
-        (np.abs(radon_lut.space_offset) >= min_spatial_disp)
-        & (np.abs(radon_lut.temp_offset_round_perc) >= min_n_bin_perc)
-        & (radon_lut.path_length_from_points >= min_path_length)
-    )
+    # TODO: whoaaa super controversial so think about this hard! (if having mostly flat lines as best fit might mean it's actually not replay)
+    min_absolute_slope = 0.01
+
+    if not min_absolute_slope:
+        good_lines = (
+            (np.abs(radon_lut.space_offset) >= min_spatial_disp)
+            & (np.abs(radon_lut.temp_offset_round_perc) >= min_n_bin_perc)
+            & (radon_lut.path_length_from_points >= min_path_length)
+        )
+    else:
+        good_lines = (
+            (np.abs(radon_lut.space_offset) >= min_spatial_disp)
+            & (np.abs(radon_lut.temp_offset_round_perc) >= min_n_bin_perc)
+            & (radon_lut.path_length_from_points >= min_path_length)
+            & (np.abs(radon_lut.slope) >= min_absolute_slope)
+        )
 
     theta = radon_lut.theta
     n_radon_points = radon_lut.n_radon_points
