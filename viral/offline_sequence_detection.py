@@ -1559,17 +1559,20 @@ if __name__ == "__main__":
         # TODO: or is the 125 ms sigma also just offline and 1 s for online????
         sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
         sigma_online=30,  # "1 s Gaussian kernel"
-        peak_threshold=3.5,
+        # peak_threshold=3.5,
+        peak_threshold=2,
         edge_threshold=1,
         # event_duration=(6, 30),
-        event_duration=(6, 120),
-        bin_size_time_offline=2,
+        # event_duration=(6, 120),
+        event_duration=(6, 90),
+        # bin_size_time_offline=2,
+        bin_size_time_offline=10,
         bin_size_time_online=10,
         start_spatial=0,
         end_spatial=180,
         # bin_size_spatial=5,
-        bin_size_spatial=10,
-        # bin_size_spatial=15,
+        # bin_size_spatial=10,
+        bin_size_spatial=15,
     )
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,

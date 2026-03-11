@@ -535,9 +535,13 @@ def calculate_radon_replay(
     # TODO: check if that works with our data
     min_spatial_disp = 0  # % minimum spatial displacement of valid lines (in bins)
     # TODO: this was set to 100 in MATLAB, but will that work?
+    # TODO: I will set this to 20% to allow it to find several sequences within a chunk!
     min_n_bin_perc = (
-        100.0  # % minimum percentage of temporal bins that valid lines must cross
+        20.0  # % minimum percentage of temporal bins that valid lines must cross
     )
+    # min_n_bin_perc = (
+    #     100.0  # % minimum percentage of temporal bins that valid lines must cross
+    # )
 
     # TODO: is that right? -> pretty sure this is correct, check
     # https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/demo_CircularReplayAnalysis.m line 107
