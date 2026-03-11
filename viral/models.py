@@ -255,13 +255,14 @@ class BayesianDecodingConfig:
 
 
 class BayesianDecodingResult(BaseModel):
+    epoch: Literal["pre", "online", "post"]
     posterior_probability_matrices: List[np.ndarray]
     pr_max_matrices: List[np.ndarray]
-    linear_weighted_r: Optional[List[float]]
-    circular_weighted_r: Optional[List[float]]
-    actual_positions: Optional[List[np.ndarray]]
-    linear_rZ_scores: Optional[List[float]]
-    circular_rZ_scores: Optional[List[float]]
+    linear_weighted_r: Optional[List[float]] = None
+    circular_weighted_r: Optional[List[float]] = None
+    actual_positions: Optional[List[np.ndarray]] = None
+    linear_rZ_scores: Optional[List[float]] = None
+    circular_rZ_scores: Optional[List[float]] = None
 
     class Config:
         arbitrary_types_allowed = True

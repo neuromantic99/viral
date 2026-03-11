@@ -288,6 +288,19 @@ def check_significance(
     "
 
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m
+    Computes an empirical p-value to check for significance.
+
+    Arguments:
+        posterior_probability_matrix (np.ndarray):  The posterior probability matrix of the decoded event/chunk.
+        correlation (float):                        The computed linear/circular correlation coefficient.
+        mode (Literal):                             Whether to use linear or circular correlation (use the same mode as the correlation coefficient above!). Defaults to "circular".
+        total_length (float):                       Total length of the corridor.
+        n_shuffles (int):                           Number of shuffles to perform. Defaults to 2,000 shuffles.
+        significance (float):                       Significance level. Defaults to p < 0.05.
+
+    Returns:
+        Tuple[float, bool, float]:                  Tuple of empirical p-value, significant (bool) and rZ score.
+
     """
     if mode == "linear":
         shuffled_weighted_rs = list()
@@ -599,7 +612,7 @@ def calculate_radon_replay(
         if bayesian_config.epoch == "online"
         else bayesian_config.bin_size_time_offline
     )
-    bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
+    # bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
     # CircReplayOutput.Radon.slope = CircReplayOutput.Radon.slope...
     # *(totalMazeLength/synthEvents.params.nSpatialBins)/synthEvents.params.eventBinDuration;
     # slope_metres_per_sec = (
@@ -614,11 +627,16 @@ def calculate_radon_replay(
     # angular slope to linear speed -> v = omega * r
     # omega = slope
     # r = maze radius
-    r = bayesian_config.total_length * 2  # we tiled the posterior_probability matrix
-    v = slope * r
-    v = v * bin_size_time_seconds
+    # r = bayesian_config.total_length * 2  # we tiled the posterior_probability matrix
+    # v = slope * r
+    # v = v * bin_size_time_seconds
 
-    slope_metres_per_sec = v  # I am extremely confused, this looks correct in the plot but is really not what Grosmark does
+    # slope_metres_per_sec = v  # I am extremely confused, this looks correct in the plot but is really not what Grosmark does
+
+    # convert slope in spatial bins/temporal bins to metres/seconds
+    metres_per_spatial_bin = bayesian_config.total_length / n_pos
+    seconds_per_temporal_bin = bin_size_time_frames / 30  # imaging @30 fps
+    slope_metres_per_sec = slope * metres_per_spatial_bin / seconds_per_temporal_bin
 
     replay_type = cast(
         Literal["forward", "reverse"], "forward" if slope >= 0 else "reverse"

@@ -1,9 +1,10 @@
 import os
-from typing import List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple, Dict
 from matplotlib.lines import Line2D
 import numpy as np
 import sys
 import time
+import copy
 import pandas as pd
 import seaborn as sns
 from pathlib import Path
@@ -88,10 +89,12 @@ def get_population_vector(
         label="Edge threshold",
     )
     plt.title("Population vector")
+    if not os.path.exists(PLOT_PATH / f"pse_events_{bayesian_config.epoch}"):
+        os.makedirs(PLOT_PATH / f"pse_events_{bayesian_config.epoch}")
     plt.savefig(
         PLOT_PATH
-        / f"{'pse_events_online' if bayesian_config.epoch == 'online' else 'pse_events_offline'}"
-        / f"{mouse_name}_{date}_{'online' if bayesian_config.epoch == 'online' else 'offline'}_population_vector.png",
+        / f"pse_events_{bayesian_config.epoch}"
+        / f"{mouse_name}_{date}_{bayesian_config.epoch}_population_vector.png",
         dpi=600,
     )
     plt.close()
@@ -332,9 +335,12 @@ def plot_pse_event(
     plt.xlim(0, n_time - 1)
 
     plt.tight_layout()
+    if not os.path.exists(PLOT_PATH / "pse_events_radon" / session.mouse_name):
+        os.makedirs(PLOT_PATH / "pse_events_radon" / session.mouse_name)
     plt.savefig(
         PLOT_PATH
         / "pse_events_radon"
+        / session.mouse_name
         / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_{'chunk' if (bayesian_config.epoch == 'online') else 'event'}_{idx}.png"
     )
     plt.close()
@@ -823,30 +829,39 @@ def get_statistics_correlation(
 ) -> pd.DataFrame:
     result = {
         "stage": [],
+        "epoch": [],
         # "circular_weighted_r": [],
         # "linear_weighted_r": [],
-        "f1": [],
-        "f1_score_by_position": [],
-        "r2": [],
+        "linear_rZ_scores": [],
+        "circular_rZ_scores": [],
         "mouse_id": [],
         "genotype": [],
     }
+    if bayesian_config.epoch == "online":
+        result["f1"] = []
+        result["f1_score_by_position"] = []
+        result["r2"] = []
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
         for stage in ["unsupervised", "learning", "learned"]:
             print(f"Doing {mouse_name} at {stage} stage")
-            date = SESSIONS_KEEP[mouse_name][stage]
+            try:
+                date = SESSIONS_KEEP[mouse_name][stage]
+            except KeyError:
+                print("No session found for this stage in SESSIONS_KEEP, skip")
+                continue
             if date is None:
                 continue
-            # use_cache = True
-            use_cache = False
+            use_cache = True
+            # use_cache = False
             cache_path = get_cache_path(
                 mouse_name=mouse_name,
                 date=date,
                 bayesian_config=bayesian_config,
             )
             if os.path.exists(cache_path) and use_cache:
+                print("Found cache, will load from cache")
                 npz = np.load(
                     cache_path,
                     allow_pickle=True,
@@ -855,6 +870,7 @@ def get_statistics_correlation(
                     posterior_probability_matrices=npz[
                         "posterior_probability_matrices"
                     ].tolist(),
+                    epoch=npz["epoch"].item(),
                     pr_max_matrices=npz["pr_max_matrices"].tolist(),
                     linear_weighted_r=npz["linear_weighted_r"].tolist(),
                     circular_weighted_r=npz["circular_weighted_r"].tolist(),
@@ -863,56 +879,74 @@ def get_statistics_correlation(
                         if "actual_positions" in npz.files
                         else None
                     ),
+                    linear_rZ_scores=npz["linear_rZ_scores"].tolist(),
+                    circular_rZ_scores=npz["circular_rZ_scores"].tolist(),
                 )
             else:
                 try:
-                    bayesian = main(mouse_name, date, bayesian_config, grosmark_config)
+                    bayesian = main(
+                        mouse_name=mouse_name,
+                        date=date,
+                        bayesian_config=bayesian_config,
+                        grosmark_config=grosmark_config,
+                    )
                 except (ValueError, FileNotFoundError, KeyError) as e:
                     print(f"Error processing {mouse_name} at {stage} stage: {e}")
                     continue
 
+                if not bayesian:
+                    print("Session not valid to analyse, skip")
+                    continue
+
             actual_positions_flattened = np.array([])
             pr_max_flattened = np.array([])
-            for trial_position in bayesian.actual_positions:
-                actual_positions_flattened = np.concatenate(
-                    (actual_positions_flattened, np.array(trial_position))
+            if bayesian_config.epoch == "online":
+                for trial_position in bayesian.actual_positions:
+                    actual_positions_flattened = np.concatenate(
+                        (actual_positions_flattened, np.array(trial_position))
+                    )
+                for trial_pr_max in bayesian.pr_max_matrices:
+                    pr_max_flattened = np.concatenate(
+                        (pr_max_flattened, np.array(trial_pr_max))
+                    )
+
+                assert actual_positions_flattened.shape == pr_max_flattened.shape
+
+                # TODO: are we ok with this binning here?
+                y_true_bins = bin_for_classification(
+                    actual_positions_flattened, bayesian_config=bayesian_config
                 )
-            for trial_pr_max in bayesian.pr_max_matrices:
-                pr_max_flattened = np.concatenate(
-                    (pr_max_flattened, np.array(trial_pr_max))
+                y_pred_bins = pr_max_flattened.astype(int)
+
+                n_bins = int(
+                    (bayesian_config.end_spatial - bayesian_config.start_spatial)
+                    / bayesian_config.bin_size_spatial
                 )
+                assert np.max(y_true_bins) < n_bins and np.max(y_pred_bins) < n_bins
 
-            assert actual_positions_flattened.shape == pr_max_flattened.shape
-
-            # TODO: are we ok with this binning here?
-            y_true_bins = bin_for_classification(
-                actual_positions_flattened, bayesian_config=bayesian_config
-            )
-            y_pred_bins = pr_max_flattened.astype(int)
-
-            n_bins = int(
-                (bayesian_config.end_spatial - bayesian_config.start_spatial)
-                / bayesian_config.bin_size_spatial
-            )
-            assert np.max(y_true_bins) < n_bins and np.max(y_pred_bins) < n_bins
-
-            # TODO: think about the averaging method
-            f1 = f1_score(y_true=y_true_bins, y_pred=y_pred_bins, average="weighted")
-            # "weighted average of the F1 scores of each class for the multiclass task"
-            # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.f1_score.html
-            f1_by_position = f1_score(
-                y_true=y_true_bins, y_pred=y_pred_bins, average=None
-            )
-            r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
+                # TODO: think about the averaging method
+                f1 = f1_score(
+                    y_true=y_true_bins, y_pred=y_pred_bins, average="weighted"
+                )
+                # "weighted average of the F1 scores of each class for the multiclass task"
+                # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.f1_score.html
+                f1_by_position = f1_score(
+                    y_true=y_true_bins, y_pred=y_pred_bins, average=None
+                )
+                r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
             # TODO: this function will unfortunately ave to be specific to en_bloc and per_event or entail both
             # result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
             # result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
-            result["f1"].append(f1)
-            result["f1_score_by_position"].append(f1_by_position)
-            result["r2"].append(r_square)
+            if bayesian_config.epoch == "online":
+                result["f1"].append(f1)
+                result["f1_score_by_position"].append(f1_by_position)
+                result["r2"].append(r_square)
+            result["linear_rZ_scores"].append(bayesian.linear_rZ_scores)
+            result["circular_rZ_scores"].append(bayesian.circular_rZ_scores)
             result["mouse_id"].append(mouse_name)
             result["genotype"].append(genotype)
             result["stage"].append(stage)
+            result["epoch"].append(bayesian.epoch)
     return pd.DataFrame(result)
 
 
@@ -1451,24 +1485,88 @@ def plot_f1_score_by_position(
     plt.savefig(SERVER_PATH / "viral_plots" / "f1_score" / "f1_score_by_position.png")
 
 
-def plot_rZ_score(
-    bayesian_config: BayesianDecodingConfig,
+def plot_rZ_scores(
+    bayesian_configs: Dict[str, BayesianDecodingConfig],
     grosmark_config: GrosmarkConfig,
+    mode: Literal["linear", "circular"] = "circular",
 ) -> None:
-    wt = get_statistics_correlation(
-        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    wt_pre = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_configs["pre"], grosmark_config=grosmark_config
     )
-    nlgf = get_statistics_correlation(
-        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    nlgf_pre = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_configs["pre"], grosmark_config=grosmark_config
     )
+
+    wt_online = get_statistics_correlation(
+        "WT",
+        bayesian_config=bayesian_configs["online"],
+        grosmark_config=grosmark_config,
+    )
+    nlgf_online = get_statistics_correlation(
+        "NLGF",
+        bayesian_config=bayesian_configs["online"],
+        grosmark_config=grosmark_config,
+    )
+
+    wt_post = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_configs["post"], grosmark_config=grosmark_config
+    )
+    nlgf_post = get_statistics_correlation(
+        "NLGF",
+        bayesian_config=bayesian_configs["post"],
+        grosmark_config=grosmark_config,
+    )
+
     all_data = pd.concat(
-        [wt, nlgf],
+        [wt_pre, nlgf_pre, wt_online, nlgf_online, wt_post, nlgf_post],
         ignore_index=True,
     )
+
+    variable = f"{mode}_rZ_scores"
+
+    all_data_exploded = all_data.explode(variable)
+    all_data_exploded = all_data.explode(variable).reset_index(drop=True)
 
     stages = ["unsupervised", "learning", "learned"]
     colors = sns.color_palette(n_colors=2)
     palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    pre_values = (
+        all_data_exploded[all_data_exploded["epoch"] == "pre"]
+        .groupby("mouse_id")[variable]
+        .mean()
+        # .to_dict()
+    )
+
+    all_data_exploded["rZ_norm"] = all_data_exploded[variable] / all_data_exploded[
+        "mouse_id"
+    ].map(pre_values)
+
+    fig, axes = plt.subplots(1, len(stages), figsize=(12, 4), sharey=True)
+
+    for ax, stage in zip(axes, stages):
+        stage_data = all_data_exploded[all_data_exploded["stage"] == stage]
+
+        sns.boxplot(
+            data=stage_data,
+            x="epoch",
+            y="rZ_norm",
+            hue="genotype",
+            palette=palette,
+            ax=ax,
+        )
+
+        ax.set_title(stage)
+        ax.set_ylabel("Normalised rZ score (vs pre)")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    for ax in axes:
+        ax.legend_.remove()
+
+    fig.legend(handles[:2], labels[:2], loc="upper right")
+
+    plt.tight_layout()
+    plt.savefig(SERVER_PATH / "viral_plots" / f"{variable}.png")
 
 
 if __name__ == "__main__":
@@ -1500,27 +1598,47 @@ if __name__ == "__main__":
         # TODO: or is the 125 ms sigma also just offline and 1 s for online????
         sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
         sigma_online=30,  # "1 s Gaussian kernel"
-        peak_threshold=3.5,
+        # peak_threshold=3.5,
+        peak_threshold=2,
         edge_threshold=1,
         # event_duration=(6, 30),
-        event_duration=(6, 120),
-        bin_size_time_offline=2,
+        # event_duration=(6, 120),
+        event_duration=(6, 90),
+        # bin_size_time_offline=2,
+        bin_size_time_offline=10,
         bin_size_time_online=10,
         start_spatial=0,
         end_spatial=180,
         # bin_size_spatial=5,
-        bin_size_spatial=10,
-        # bin_size_spatial=15,
+        # bin_size_spatial=10,
+        bin_size_spatial=15,
     )
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
         start=bayesian_config.start_spatial,
         end=bayesian_config.end_spatial,
     )
-    plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
-    plot_f1_score_by_position(bayesian_config, grosmark_config)
-    plot_correlation_across_stages(mode="linear")
-    plot_correlation_across_stages(mode="circular")
+
+    bayesian_config_pre = copy.deepcopy(bayesian_config)
+    bayesian_config_pre.epoch = "pre"
+
+    bayesian_config_post = copy.deepcopy(bayesian_config)
+    bayesian_config_post.epoch = "post"
+
+    # plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
+    # plot_f1_score_by_position(bayesian_config, grosmark_config)
+    # plot_correlation_across_stages(mode="linear")
+    # plot_correlation_across_stages(mode="circular")
+
+    plot_rZ_scores(
+        bayesian_configs={
+            "pre": bayesian_config_pre,
+            "online": bayesian_config,
+            "post": bayesian_config_post,
+        },
+        grosmark_config=grosmark_config,
+        mode="circular",
+    )
 
     # plot_correlation_across_stages(mode="linear")
     # plot_correlation_across_stages(mode="circular")
