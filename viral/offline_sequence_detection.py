@@ -53,7 +53,10 @@ from viral.sessions_keep import SESSIONS_KEEP
 
 
 def get_population_vector(
-    ssp_smoothed: np.ndarray, mouse_name: str, date: str
+    ssp_smoothed: np.ndarray,
+    mouse_name: str,
+    date: str,
+    bayesian_config: BayesianDecodingConfig,
 ) -> np.ndarray:
     """
     Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
@@ -540,7 +543,10 @@ def main(
             if not bayesian_config.epoch == "online":
                 # pre- or post-training wheel freeze
                 population_vector = get_population_vector(
-                    ssp_smoothed=ssp_test, mouse_name=mouse_name, date=date
+                    ssp_smoothed=ssp_test,
+                    mouse_name=mouse_name,
+                    date=date,
+                    bayesian_config=bayesian_config,
                 )
                 pse_events = find_pse_events(
                     population_vector=population_vector,
@@ -1603,14 +1609,18 @@ def plot_rZ_scores(
 
     pre_values = (
         all_data_exploded[all_data_exploded["epoch"] == "pre"]
-        .groupby("mouse_id")[variable]
+        .groupby(["mouse_id", "stage"], as_index=False)[variable]
         .mean()
-        # .to_dict()
+        .rename(columns={variable: "pre_rZ"})
     )
-
-    all_data_exploded["rZ_norm"] = all_data_exploded[variable] / all_data_exploded[
-        "mouse_id"
-    ].map(pre_values)
+    all_data_exploded = all_data_exploded.merge(
+        pre_values,
+        on=["mouse_id", "stage"],
+        how="left",
+    )
+    all_data_exploded["rZ_norm"] = (
+        all_data_exploded[variable] / all_data_exploded["pre_rZ"]
+    )
 
     fig, axes = plt.subplots(1, len(stages), figsize=(12, 4), sharey=True)
 
