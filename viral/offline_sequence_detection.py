@@ -906,8 +906,8 @@ def get_statistics_correlation(
     result = {
         "stage": [],
         "epoch": [],
-        # "circular_weighted_r": [],
-        # "linear_weighted_r": [],
+        "circular_weighted_r": [],
+        "linear_weighted_r": [],
         "linear_rZ_scores": [],
         "circular_rZ_scores": [],
         "mouse_id": [],
@@ -1010,9 +1010,11 @@ def get_statistics_correlation(
                     y_true=y_true_bins, y_pred=y_pred_bins, average=None
                 )
                 r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
-            # TODO: this function will unfortunately ave to be specific to en_bloc and per_event or entail both
-            # result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
-            # result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
+
+            # TODO: this function will unfortunately have to be specific to en_bloc and per_event or entail both
+            # TODO: keep an eye on it, but as of now we're not doing anything en bloc
+            result["circular_weighted_r"].append(np.mean(bayesian.circular_weighted_r))
+            result["linear_weighted_r"].append(np.mean(bayesian.linear_weighted_r))
             if bayesian_config.epoch == "online":
                 result["f1"].append(f1)
                 result["f1_score_by_position"].append(f1_by_position)
@@ -1085,9 +1087,15 @@ def plot_decoded_vs_actual_position_rsquare(
     )
 
 
-def plot_decoded_vs_actual_position_f1(bayesian_config: BayesianDecodingConfig) -> None:
-    wt = get_statistics_correlation("WT", bayesian_config)
-    nlgf = get_statistics_correlation("NLGF", bayesian_config)
+def plot_decoded_vs_actual_position_f1(
+    bayesian_config: BayesianDecodingConfig, grosmark_config: GrosmarkConfig
+) -> None:
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
     fig = plt.figure()
@@ -1180,9 +1188,17 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     )
 
 
-def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
-    wt = get_statistics_correlation("WT")
-    nlgf = get_statistics_correlation("NLGF")
+def plot_correlation_across_stages(
+    mode: Literal["linear", "circular"],
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
+) -> None:
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
     fig, ax = plt.subplots()
@@ -1261,9 +1277,15 @@ def plot_correlation_across_stages(mode: Literal["linear", "circular"]) -> None:
 
 def plot_correlation_across_stages_trajectories(
     mode: Literal["linear", "circular"],
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
 ) -> None:
-    wt = get_statistics_correlation("WT")
-    nlgf = get_statistics_correlation("NLGF")
+    wt = get_statistics_correlation(
+        "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    nlgf = get_statistics_correlation(
+        "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
     stages = ["unsupervised", "learning", "learned"]
@@ -1434,6 +1456,9 @@ def plot_f1_score_by_position_per_session(
                 subset = mouse_data[mouse_data["stage"] == stage][
                     "f1_score_by_position"
                 ]
+                if len(subset) == 0:
+                    print(f"No data for {mouse} - {stage} stage")
+                    continue
                 values = subset.iloc[0]
                 plot_df = pd.DataFrame(
                     {
@@ -1705,11 +1730,6 @@ if __name__ == "__main__":
     bayesian_config_post = copy.deepcopy(bayesian_config)
     bayesian_config_post.epoch = "post"
 
-    # plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
-    # plot_f1_score_by_position(bayesian_config, grosmark_config)
-    # plot_correlation_across_stages(mode="linear")
-    # plot_correlation_across_stages(mode="circular")
-
     plot_rZ_scores(
         bayesian_configs={
             "pre": bayesian_config_pre,
@@ -1720,13 +1740,30 @@ if __name__ == "__main__":
         mode="circular",
     )
 
-    # plot_correlation_across_stages(mode="linear")
-    # plot_correlation_across_stages(mode="circular")
-    # plot_correlation_across_stages_trajectories(mode="linear")
-    # plot_correlation_across_stages_trajectories(mode="circular")
-    # plot_decoded_vs_actual_position_f1(bayesian_config)
-    # plot_correlation_against_f1_score_across_stages(
-    #     "circular", bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    # )
-    # plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
-    # plot_decoded_vs_actual_position_f1(bayesian_config)
+    # TODO: whoops, at the moment, this is only done in the online
+    plot_correlation_across_stages(
+        mode="linear", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    plot_correlation_across_stages(
+        mode="circular",
+        bayesian_config=bayesian_config,
+        grosmark_config=grosmark_config,
+    )
+    plot_correlation_across_stages_trajectories(
+        mode="linear", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    plot_correlation_across_stages_trajectories(
+        mode="circular",
+        bayesian_config=bayesian_config,
+        grosmark_config=grosmark_config,
+    )
+    plot_decoded_vs_actual_position_f1(
+        bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    plot_correlation_against_f1_score_across_stages(
+        "circular", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    )
+    plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
+    plot_decoded_vs_actual_position_f1(bayesian_config, grosmark_config)
+    plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
+    plot_f1_score_by_position(bayesian_config, grosmark_config)
