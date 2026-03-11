@@ -263,42 +263,39 @@ def plot_pse_event(
     plt.colorbar()
 
     if do_radon_transform and mode == "circular":
+        # TODO: leave here or move elsewhere?
+        line = "multi"
+        n_lines = 50
+
         radon_replay = calculate_radon_replay(
             posterior_probability_matrix=posterior_probability_matrix,
             bayesian_config=bayesian_config,
+            line=line,
+            n_lines=n_lines,
         )
-        x = [radon_replay.point1x, radon_replay.point2x]
-        y = [radon_replay.point1y, radon_replay.point2y]
-        plt.plot(x, y, color="r", linestyle="--")
-        plt.plot(
-            x,
-            [
-                y
-                + (
-                    (bayesian_config.total_length * 100)
-                    / bayesian_config.bin_size_spatial
-                )
-                for y in y
-            ],
-            color="r",
-            linestyle="--",
-        )
-        plt.plot(
-            x,
-            [
-                y
-                - (
-                    (bayesian_config.total_length * 100)
-                    / bayesian_config.bin_size_spatial
-                )
-                for y in y
-            ],
-            color="r",
-            linestyle="--",
-        )
-        plt.title(
-            f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
-        )
+
+        offset = (bayesian_config.total_length * 100) / bayesian_config.bin_size_spatial
+
+        for line in radon_replay:
+            x = [line.point1x, line.point2x]
+            y = [line.point1y, line.point2y]
+
+            # if len(radon_replay) == 1:
+            if line == "single":
+                # TODO: is it correct to only plot that if it is a single line?
+                plt.plot(x, y, color="r", linestyle="--")
+
+            plt.plot(x, [y + offset for y in y], color="r", linestyle="--", linewidth=2)
+            plt.plot(x, [y - offset for y in y], color="r", linestyle="--", linewidth=2)
+
+        if line == "single":
+            plt.title(
+                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay[0].slope_metres_per_sec:.2f} m/s ({radon_replay[0].replay_type} replay)"
+            )
+        elif line == "multi":
+            plt.title(
+                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f})"
+            )
 
     n_time, n_pos = posterior_probability_matrix.shape
 
@@ -334,9 +331,16 @@ def plot_pse_event(
     plt.xlim(0, n_time - 1)
 
     plt.tight_layout()
+
+    if not os.path.exists(
+        PLOT_PATH / "pse_events_radon_multiline" / session.mouse_name
+    ):
+        os.makedirs(PLOT_PATH / "pse_events_radon_multiline" / session.mouse_name)
     plt.savefig(
         PLOT_PATH
-        / "pse_events_radon"
+        # / "pse_events_radon"
+        / "pse_events_radon_multiline"
+        / session.mouse_name
         / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_{'chunk' if (bayesian_config.epoch == 'online') else 'event'}_{idx}.png"
     )
     plt.close()
@@ -483,8 +487,11 @@ def main(
             # use the test trials for decoding
             # TODO: do we want to increase the speed threshold, and should it be below it for 3 consecutive seconds?
             # phases of immobility
+            # ssp_config_immobility = SSPConfig(
+            #     mode="below", speed_threshold=2, n_consecutive_samples=3 * 30
+            # )
             ssp_config_immobility = SSPConfig(
-                mode="below", speed_threshold=2, n_consecutive_samples=3 * 30
+                mode="below", speed_threshold=1, n_consecutive_samples=3 * 30
             )
 
             ssp_result = get_ssp_vectors(
@@ -881,8 +888,13 @@ def get_statistics_correlation(
             continue
         for stage in ["unsupervised", "learning", "learned"]:
             print(f"Doing {mouse_name} at {stage} stage")
-            date = SESSIONS_KEEP[mouse_name][stage]
+            try:
+                date = SESSIONS_KEEP[mouse_name][stage]
+            except KeyError:
+                print("No session found in SESSIONS_KEEP, skip")
+                continue
             if date is None:
+                print("No valid date, skip")
                 continue
             # use_cache = True
             use_cache = False
@@ -908,6 +920,8 @@ def get_statistics_correlation(
                         if "actual_positions" in npz.files
                         else None
                     ),
+                    linear_rZ_scores=npz["linear_rZ_scores"].tolist(),
+                    circular_rZ_scores=npz["circular_rZ_scores"].tolist(),
                 )
             else:
                 try:
@@ -1545,17 +1559,20 @@ if __name__ == "__main__":
         # TODO: or is the 125 ms sigma also just offline and 1 s for online????
         sigma_offline=(125 / 1000) * 30,  # "125 ms Gaussian kernel"
         sigma_online=30,  # "1 s Gaussian kernel"
-        peak_threshold=3.5,
+        # peak_threshold=3.5,
+        peak_threshold=2,
         edge_threshold=1,
         # event_duration=(6, 30),
-        event_duration=(6, 120),
-        bin_size_time_offline=2,
+        # event_duration=(6, 120),
+        event_duration=(6, 90),
+        # bin_size_time_offline=2,
+        bin_size_time_offline=10,
         bin_size_time_online=10,
         start_spatial=0,
         end_spatial=180,
         # bin_size_spatial=5,
-        bin_size_spatial=10,
-        # bin_size_spatial=15,
+        # bin_size_spatial=10,
+        bin_size_spatial=15,
     )
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config.bin_size_spatial,
