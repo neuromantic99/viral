@@ -4,11 +4,11 @@ from typing import Dict
 # TODO: Deal with the None case
 SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
     # The unsupervised is bad but the rest is probably fine!!!
-    # "JB011": {
-    #     "unsupervised": "2024-10-22",
-    #     "learning": "2024-10-25",
-    #     "learned": "2024-10-30",
-    # },
+    "JB011": {
+        "unsupervised": None,
+        "learning": "2024-10-25",
+        "learned": "2024-10-30",
+    },
     "JB014": {  # LOOKS GOOD
         "unsupervised": "2024-10-24",
         "learning": "2024-10-31",
@@ -52,6 +52,11 @@ SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
     "JB026": {
         "unsupervised": "2024-12-10",
         "learning": "2024-12-13",
+        "learned": "2024-12-15",
+    },
+    "JB027": {
+        "unsupervised": "2024-12-10",
+        "learning": "2024-12-14",
         "learned": "2024-12-15",
     },
     "JB030": {
