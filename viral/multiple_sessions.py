@@ -6,7 +6,9 @@ import pandas as pd
 import re
 import sys
 from scipy import stats
+from natsort import natsorted
 
+from statsmodels.formula.api import mixedlm
 
 import inspect
 from pydantic import ValidationError
@@ -126,6 +128,10 @@ def cache_mouse(mouse_name: str) -> None:
             )
             trials.extend(load_data(session_path))
 
+        if len(session_numbers) == 1:
+            assert sorted([trial.trial_start_time for trial in trials]) == [
+                trial.trial_start_time for trial in trials
+            ]
         assert trials[0].texture, "You're accidently processing a habituation"
         wheel_circumference = get_wheel_circumference_from_rig(row["Rig"])
 
@@ -755,11 +761,101 @@ def plot_mouse_performance(mouse: MouseSummary, config: MultipleSessionsConfig) 
     plt.show()
 
 
+def learning_metric_first_x_trials(
+    trials: List[TrialSummary], config: MultipleSessionsConfig, x: int
+) -> float:
+    return learning_metric(trials[:x], config)
+
+
+def plot_learning_metric_first_x_trials(
+    mice: List[MouseSummary],
+    session_type: Literal["learning", "reversal", "recall", "recall_reversal"],
+    group_by: list[str],
+    config: MultipleSessionsConfig,
+    x: int,
+) -> None:
+
+    to_plot: Dict = {"genotype": [], "performance": [], "mouse": []}
+
+    for mouse in mice:
+        session = natsorted(
+            filter_sessions_by_session_type(mouse, "learning"),
+            key=lambda session: session.name,
+        )[-1]
+        # if session.name.lower() in ["learning day 1", "learning day 2"]:
+        #     print(
+        #         f"Mouse {mouse.name} has a session with name {session.name} which is likely a learning session but does not match the expected format. Please check the session naming for this mouse."
+        #     )
+        #     continue
+        if get_session_type(session.name) == session_type:
+            to_plot["genotype"].append(get_genotype(mouse.name))
+            to_plot["performance"].append(
+                learning_metric_first_x_trials(session.trials, config, x)
+            )
+            to_plot["mouse"].append(mouse.name)
+
+    to_plot = pd.DataFrame(to_plot)
+    # fit linear mixed effects for WT vs NLGF, controlling for mouse as a random effect
+
+    to_mixed_effect = to_plot[to_plot["genotype"].isin(["WT", "NLGF"])]
+    model = mixedlm(
+        "performance ~ genotype",
+        to_mixed_effect,
+        groups="mouse",
+    )
+    result = model.fit()
+    print(result.summary())
+    # now do ttest
+    wt = to_plot[to_plot["genotype"] == "WT"]["performance"]
+    nlgf = to_plot[to_plot["genotype"] == "NLGF"]["performance"]
+    ttest = stats.ttest_ind(wt, nlgf)
+    print(
+        f"T-test WT vs NLGF: p-value = {ttest.pvalue:.3f}, t-statistic = {ttest.statistic:.3f}"
+    )
+
+    plt.figure()
+    plt.ylabel(f"Learning metric (first {x} trials)")
+    plt.title(session_type.replace("_", " ").capitalize())
+    sns.boxplot(to_plot, hue="genotype", y="performance", showfliers=False)
+    ax = plt.gca()
+    new_labels = [
+        label.get_text()
+        .replace("Oligo-BACE1-KO", "Oligo-\nBACE1-KO")
+        .replace("_", "\n")
+        for label in ax.get_xticklabels()
+    ]
+    ax.set_xticklabels(new_labels, fontsize=12)
+    sns.stripplot(
+        to_plot,
+        hue="genotype",
+        y="performance",
+        edgecolor="black",
+        linewidth=1,
+        dodge=True,
+    )
+
+    sns.despine()
+    plt.tight_layout()
+    # remove stripplot legend
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(), title="Genotype")
+
+    # group_suffix = "-".join(group_by)
+    # plt.savefig(
+    #     HERE.parent
+    #     / "plots"
+    #     / f"behaviour-summaries-first-{x}-trials-{group_suffix}-{session_type}.pdf",
+    #     dpi=300,
+    # )
+    plt.show()
+
+
 if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
-    redo = False
+    redo = True
 
     config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
@@ -805,8 +901,10 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    plot_mouse_performance(mice[0], config=config)
+    # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
+    plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
+
+    # plot_mouse_performance(mice[0], config=config)
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # ## Probably not interesting as related to speed
     # plot_trial_time_summaries(mice, "learning")
