@@ -88,6 +88,12 @@
       "justMyCode": true
     },
     {
+      "name": "fix tiff",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fix_tiff.py"
+    },
+    {
       "name": "run oasis",
       "type": "debugpy",
       "request": "launch",

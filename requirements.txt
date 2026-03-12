@@ -29,8 +29,9 @@ lazy_loader==0.4
 MarkupSafe==3.0.2
 matplotlib==3.10.0
 natsort==8.4.0
-networkx==3.6.1
 nose2==0.15.1
+matplotlib-inline==0.1.7
+networkx==3.6.1
 npTDMS==1.10.0
 numpy==2.2.3
 oauthlib==3.2.2
