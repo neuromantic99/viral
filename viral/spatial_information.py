@@ -17,6 +17,8 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
+sns.set_context("paper", font_scale=1.5)
+
 
 from viral.constants import SPREADSHEET_ID
 from viral.utils import get_genotype
@@ -124,11 +126,14 @@ def main() -> None:
                 for session in sessions
                 if session.date == date and session.rewarded
             )
-            unrewarded_session = next(
-                session
-                for session in sessions
-                if session.date == date and not session.rewarded
-            )
+            try:
+                unrewarded_session = next(
+                    session
+                    for session in sessions
+                    if session.date == date and not session.rewarded
+                )
+            except StopIteration:
+                continue
 
             assert (
                 rewarded_session.date == unrewarded_session.date
@@ -138,9 +143,9 @@ def main() -> None:
             stage = rewarded_session.session_type.lower().split(" ")[0]
             genotype = get_genotype(mouse)
 
+            # if genotype == "Oligo-BACE1-KO":
+            #     continue
             if stage != "learning":
-                continue
-            if genotype == "Oligo-BACE1-KO":
                 continue
 
             # sig = np.logical_and(
@@ -167,9 +172,9 @@ def main() -> None:
     data = pd.DataFrame(data)
 
     for dependent in ["si", "ratio"]:
-        # model = smf.mixedlm(f"{dependent} ~ genotype", data, groups=data["mouse_id"])
-        # result = model.fit()
-        # p_value = result.pvalues["genotype[T.WT]"]
+        model = smf.mixedlm(f"{dependent} ~ genotype", data, groups=data["mouse_id"])
+        result = model.fit()
+        p_value_llm = result.pvalues["genotype[T.WT]"]
         ks_stat, p_value = stats.ks_2samp(
             data[data["genotype"] == "WT"][dependent],
             data[data["genotype"] == "NLGF"][dependent],
@@ -178,27 +183,29 @@ def main() -> None:
         plt.figure()
 
         # sns.histplot(data=data, x="stage", y=dependent, hue="genotype")
+        genotype_order = ["WT", "NLGF", "Oligo-BACE1-KO"]
         sns.histplot(
             data=data,
             x=dependent,
             hue="genotype",
             kde=True,
             stat="density",
-            # log_scale=,
+            # log_scale=True,
         )
-        plt.title(f"{dependent} p-value (KS-test): {p_value:.3f}")
+        plt.title(
+            f"p-value (KS-test): {p_value:.3f} \n p-value (mixed effects): {p_value_llm:.3f}"
+        )
 
-        plt.ylabel(
+        plt.xlabel(
             "Total spatial information (bits)"
             if dependent == "si"
             else "Rewarded/Unrewarded SI Ratio"
         )
+        plt.ylabel("Density")
         if dependent == "ratio":
-            plt.xlim(0, 5)
+            plt.xlim(0, 10)
 
-        plt.xlabel("Stage")
-
-    1 / 0
+        plt.tight_layout()
 
 
 if __name__ == "__main__":
