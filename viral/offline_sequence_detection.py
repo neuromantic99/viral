@@ -48,6 +48,7 @@ from viral.sequence_utils import (
     check_significance,
     bin_for_classification,
     calculate_radon_replay,
+    calculate_olafsdottir_replay,
     get_cache_path,
     load_bayesian_cache,
     save_bayesian_cache,
@@ -242,7 +243,10 @@ def plot_pse_event(
     corr_coeff: float,
     significance: Tuple[float, bool],
     do_radon_transform: Optional[bool] = True,
+    do_olafsdottir_replay: Optional[bool] = False,
 ) -> None:
+    n_time, n_pos = posterior_probability_matrix.shape
+
     plt.figure(figsize=(10, 8))
     if mode == "linear":
         plt.imshow(
@@ -271,40 +275,63 @@ def plot_pse_event(
             posterior_probability_matrix=posterior_probability_matrix,
             bayesian_config=bayesian_config,
         )
-        x = [radon_replay.point1x, radon_replay.point2x]
-        y = [radon_replay.point1y, radon_replay.point2y]
-        plt.plot(x, y, color="r", linestyle="--")
-        plt.plot(
-            x,
-            [
-                y
-                + (
-                    (bayesian_config.total_length * 100)
-                    / bayesian_config.bin_size_spatial
-                )
-                for y in y
-            ],
-            color="r",
-            linestyle="--",
-        )
-        plt.plot(
-            x,
-            [
-                y
-                - (
-                    (bayesian_config.total_length * 100)
-                    / bayesian_config.bin_size_spatial
-                )
-                for y in y
-            ],
-            color="r",
-            linestyle="--",
-        )
+
+        y_range = int(30 / bayesian_config.bin_size_spatial)  # e.g. 30 cm band
+
+        x = np.array([radon_replay.point1x, radon_replay.point2x])
+        y = np.array([radon_replay.point1y, radon_replay.point2y])
+
+        plt.plot(x, y, "r--")
+        plt.plot(x, y + y_range, "w")
+        plt.plot(x, y - y_range, "w")
+
+        offset = (bayesian_config.total_length * 100) / bayesian_config.bin_size_spatial
+        plt.plot(x, y + offset, "r--")
+        plt.plot(x, y + y_range + offset, "w")
+        plt.plot(x, y - y_range + offset, "w")
+        plt.plot(x, y - offset, "r--")
+        plt.plot(x, y + y_range - offset, "w")
+        plt.plot(x, y - y_range - offset, "w")
+
         plt.title(
             f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
         )
 
-    n_time, n_pos = posterior_probability_matrix.shape
+    if do_olafsdottir_replay and mode == "circular":
+        y_range = 30
+        olafsdottir_replay = calculate_olafsdottir_replay(
+            posterior_probability_matrix=posterior_probability_matrix,
+            bayesian_config=bayesian_config,
+            y_range=y_range,
+        )
+
+        if olafsdottir_replay:
+            t = np.arange(n_time)
+            y = olafsdottir_replay.slope_bins * t + olafsdottir_replay.intercept_bins
+
+            y_range_bins = y_range / bayesian_config.bin_size_spatial
+
+            plt.plot(t, y, "r--")
+            plt.plot(t, y + y_range_bins, "w")
+            plt.plot(t, y - y_range_bins, "w")
+
+            offset = (
+                bayesian_config.total_length * 100
+            ) / bayesian_config.bin_size_spatial
+            plt.plot(t, y + offset, "r--")
+            plt.plot(t, y + y_range_bins + offset, "w")
+            plt.plot(t, y - y_range_bins + offset, "w")
+            plt.plot(t, y - offset, "r--")
+            plt.plot(t, y + y_range_bins - offset, "w")
+            plt.plot(t, y - y_range_bins - offset, "w")
+
+            plt.title(
+                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nOlafsdottir Slope: {olafsdottir_replay.slope_metres_per_sec:.2f} m/s ({olafsdottir_replay.replay_type} replay)"
+            )
+        else:
+            plt.title(
+                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nNo valid line fit"
+            )
 
     plt.xlabel("Time (seconds)")
     xtick_bins = np.arange(0, n_time + 1, 15)
@@ -338,11 +365,12 @@ def plot_pse_event(
     plt.xlim(0, n_time - 1)
 
     plt.tight_layout()
-    if not os.path.exists(PLOT_PATH / "pse_events_radon" / session.mouse_name):
-        os.makedirs(PLOT_PATH / "pse_events_radon" / session.mouse_name)
+    # radon_plot_root = PLOT_PATH / "pse_events_radon"
+    radon_plot_root = PLOT_PATH / "pse_events_band_olafsdottir"
+    if not os.path.exists(radon_plot_root / session.mouse_name):
+        os.makedirs(radon_plot_root / session.mouse_name)
     plt.savefig(
-        PLOT_PATH
-        / "pse_events_radon"
+        radon_plot_root
         / session.mouse_name
         / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_{'chunk' if (bayesian_config.epoch == 'online') else 'event'}_{idx}.png"
     )
@@ -856,8 +884,8 @@ def get_statistics_correlation(
                 continue
             if date is None:
                 continue
-            use_cache = True
-            # use_cache = False
+            # use_cache = True
+            use_cache = False
             cache_path = get_cache_path(
                 mouse_name=mouse_name,
                 date=date,
@@ -1668,29 +1696,29 @@ if __name__ == "__main__":
     )
 
     # TODO: whoops, at the moment, this is only done in the online
-    plot_correlation_across_stages(
-        mode="linear", bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    )
-    plot_correlation_across_stages(
-        mode="circular",
-        bayesian_config=bayesian_config,
-        grosmark_config=grosmark_config,
-    )
-    plot_correlation_across_stages_trajectories(
-        mode="linear", bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    )
-    plot_correlation_across_stages_trajectories(
-        mode="circular",
-        bayesian_config=bayesian_config,
-        grosmark_config=grosmark_config,
-    )
-    plot_decoded_vs_actual_position_f1(
-        bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    )
-    plot_correlation_against_f1_score_across_stages(
-        "circular", bayesian_config=bayesian_config, grosmark_config=grosmark_config
-    )
-    plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
-    plot_decoded_vs_actual_position_f1(bayesian_config, grosmark_config)
-    plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
-    plot_f1_score_by_position(bayesian_config, grosmark_config)
+    # plot_correlation_across_stages(
+    #     mode="linear", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    # )
+    # plot_correlation_across_stages(
+    #     mode="circular",
+    #     bayesian_config=bayesian_config,
+    #     grosmark_config=grosmark_config,
+    # )
+    # plot_correlation_across_stages_trajectories(
+    #     mode="linear", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    # )
+    # plot_correlation_across_stages_trajectories(
+    #     mode="circular",
+    #     bayesian_config=bayesian_config,
+    #     grosmark_config=grosmark_config,
+    # )
+    # plot_decoded_vs_actual_position_f1(
+    #     bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    # )
+    # plot_correlation_against_f1_score_across_stages(
+    #     "circular", bayesian_config=bayesian_config, grosmark_config=grosmark_config
+    # )
+    # plot_decoded_vs_actual_position_rsquare(bayesian_config, grosmark_config)
+    # plot_decoded_vs_actual_position_f1(bayesian_config, grosmark_config)
+    # plot_f1_score_by_position_per_session(bayesian_config, grosmark_config)
+    # plot_f1_score_by_position(bayesian_config, grosmark_config)

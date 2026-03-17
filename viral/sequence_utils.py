@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Literal, cast
 from scipy.ndimage import gaussian_filter1d
 from scipy.io import savemat, loadmat
+from scipy.signal import correlate2d
 from skimage.transform import radon
 
 HERE = Path(__file__).parent
@@ -16,6 +17,7 @@ from viral.models import (
     BayesianDecodingResult,
     RadonLUT,
     RadonReplayResult,
+    OlafsdottirReplayResult,
 )
 from viral.utils import shuffle_rows
 
@@ -545,8 +547,11 @@ def calculate_radon_replay(
     # TODO: check if that works with our data
     min_spatial_disp = 0  # % minimum spatial displacement of valid lines (in bins)
     # TODO: this was set to 100 in MATLAB, but will that work?
+    # min_n_bin_perc = (
+    #     100.0  # % minimum percentage of temporal bins that valid lines must cross
+    # )
     min_n_bin_perc = (
-        100.0  # % minimum percentage of temporal bins that valid lines must cross
+        15.0  # % minimum percentage of temporal bins that valid lines must cross
     )
 
     # TODO: is that right? -> pretty sure this is correct, check
@@ -569,6 +574,24 @@ def calculate_radon_replay(
     theta = radon_lut.theta
     n_radon_points = radon_lut.n_radon_points
 
+    # # for the "banded" approach
+    # # TODO: is this really the same as what the Olafsdottir paper is suggesting?
+    # TODO: probably it is close, but better don't take anu chances here
+    # from scipy.ndimage import uniform_filter1d
+
+    # y_range = int(30 / bayesian_config.bin_size_spatial)  # e.g. 30 cm band
+    # band_size = 2 * y_range + 1
+
+    # banded_matrix = uniform_filter1d(
+    #     smoothed_tiled_posterior_probability_matrix,
+    #     size=band_size,
+    #     axis=0,
+    #     mode="nearest",
+    # )
+
+    # banded_matrix *= band_size
+
+    # radon_transform = radon(banded_matrix, theta=theta, circle=False)
     radon_transform = radon(
         smoothed_tiled_posterior_probability_matrix, theta=theta, circle=False
     )
@@ -651,6 +674,187 @@ def calculate_radon_replay(
         point2y=point2y,
         slope=slope,
         slope_metres_per_sec=slope_metres_per_sec,
+        replay_type=replay_type,
+    )
+
+
+def define_line_band(
+    matrix_shape: Tuple[int, int],
+    gradient: float,
+    # intercept: float,
+    band_width_bins: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Return test line and test line plus band.
+    Like in MATLAB code found in Olafsdottir et al. 2016, https://www.nature.com/articles/nn.4291#Sec2.
+    """
+    n_pos, n_time = matrix_shape
+
+    test_line = np.zeros((n_pos, n_time))
+    test_line_band = np.zeros((n_pos, n_time))
+
+    t = np.arange(n_time)
+
+    center_pos = n_pos // 2
+    line = center_pos + gradient * t
+
+    # line = intercept + gradient * t
+
+    for i, y in enumerate(line.astype(int)):
+
+        if 0 <= y < n_pos:
+            test_line[y, i] = 1
+
+        # lower and upper boundary of the band
+        low = int(y - band_width_bins)
+        high = int(y + band_width_bins)
+
+        # clamp to matrix edges
+        low = max(0, low)
+        high = min(n_pos - 1, high)
+
+        test_line_band[low : high + 1, i] = 1
+
+    return test_line, test_line_band
+
+
+def calculate_olafsdottir_replay(
+    posterior_probability_matrix: np.ndarray,
+    bayesian_config: BayesianDecodingConfig,
+    y_range: int = 30,
+) -> OlafsdottirReplayResult | None:
+    """
+    A method to test a line plus band for best fit as in Olafsdottir et al. 2016,
+    https://www.nature.com/articles/nn.4291#Sec2. (Close to the MATLAB code to download.)
+    "To score the extent to which putative replay events represented a constant speed trajectory along the Z-track we applied a
+    line-fitting algorithm.
+    Lines were defined with a gradient (V) and intercept (c),
+    equivalent to the velocity and starting location of the trajectory.
+    We defined the goodness of fit of a given line (R(V,c)) as the proportion of the probability distribution that lay within 30 cm of it.
+    [...]
+    We maximized (R(V,c) using an exhaustive search to test all combinations of V between -50 ms-1 and 50 ms-1 in 0.5 ms-1 increments
+    (excluding slow trajectories with speeds >-2 ms-1 and <2 ms-1) and c between -15 m and 21 m in 0.01 m increments."
+
+    Conceptually, this code does
+    (1) pre-define gradients and intercepts to test
+    (2) for each gradient, define a mask for the line and the line plus band
+    (3) get the sum (?) of the posterior probability for each gradient
+    (4) retrieve the intercepts (?)
+    (5) find the best line fit
+    """
+    tiled_posterior_probability_matrix = np.tile(posterior_probability_matrix.T, (2, 1))
+
+    n_spatial_bins, n_temporal_bins = tiled_posterior_probability_matrix.shape
+
+    # frames per bin / frames per second = seconds per bin
+    seconds_per_temporal_bin = (
+        bayesian_config.bin_size_time_online
+        if bayesian_config.epoch == "online"
+        else bayesian_config.bin_size_time_offline
+    ) / 30
+    milliseconds_per_temporal_bin = seconds_per_temporal_bin * 1000
+
+    centimetres_per_spatial_bin = bayesian_config.bin_size_spatial
+
+    band_width_centimetres = y_range
+    band_width_bins = int(band_width_centimetres / centimetres_per_spatial_bin)
+
+    # gradient V
+    # is in cm * ms-1
+    # "[...] where x indexes the 1 cm spatial bins defined on the arms of the apparatus [...]"
+    # same method, different paper: Olafsdottir et al. 2015, https://elifesciences.org/articles/06063#s4
+    # -> test for gradients between -50 cm/ms and +50 cm/s in 0.5 cm/s increments
+    candidate_Vs = np.arange(-50, 50.5, 0.5)
+    # exclude slow trajectories >-2 ms-1 and <2 ms-1
+    candidate_Vs = candidate_Vs[(candidate_Vs <= -2) | (candidate_Vs >= 2)]
+
+    # intercept c
+    # is in centimetres (originally in metres)
+    # TODO: will this have to be changed for our different experimental setup?
+    # -> test for intercepts betweeen -1500 cm and 2100 cm in 1 cm increments
+    # TODO: even in their MATLAB code I can't see them use this -> weird??
+    candidate_cs = np.arange(-1500, 2101, 1)
+
+    # % minLgth         =size(pMat,2)/3;
+    # TODO: think about this, could be an absolute value or a percentage, is 1/3 of the entire temporal bins at the moment
+    min_path_length = n_temporal_bins / 3
+
+    results = list()
+    for i, V in enumerate(candidate_Vs):
+        test_line, test_line_band = define_line_band(
+            (n_spatial_bins, n_temporal_bins), V, band_width_bins
+        )
+
+        padded = np.pad(
+            tiled_posterior_probability_matrix,
+            ((test_line.shape[0], 0), (0, 0)),
+            mode="constant",
+        )
+        padded_ones = np.pad(
+            np.ones_like(tiled_posterior_probability_matrix),
+            ((test_line.shape[0], 0), (0, 0)),
+        )
+
+        tmp_mean_p = correlate2d(padded, test_line_band, mode="valid")
+
+        tmp_line_length = correlate2d(padded_ones, test_line, mode="valid")
+        # reject lines that are too short and set them to NaN
+        # tmp_mean_p[tmp_line_length < min_path_length] = np.nan
+
+        if np.all(np.isnan(tmp_mean_p)):
+            # skip if there is no line overlapping and/or it being too short
+            continue
+
+        best_offset = np.nanargmax(tmp_mean_p)
+        offset_row, offset_col = np.unravel_index(best_offset, tmp_mean_p.shape)
+        best_offset = offset_row
+        score = float(np.nanmax(tmp_mean_p))
+
+        padding = test_line.shape[0]
+        center_pos = n_spatial_bins // 2
+        intercept = center_pos + best_offset - padding
+
+        # line_length = tmp_line_length.flat[best_offset]
+        line_length = tmp_line_length[offset_row, offset_col]
+        tmp_line_length[offset_row, offset_col]
+
+        results.append((score, V, intercept, line_length))
+
+    if len(results) == 0:
+        print("Unable to fit a valid line through this posterior_probability_matrix")
+        return None
+
+    results_array = np.array(results)
+    best_fit_line = np.argmax(results_array[:, 0])
+
+    best_score = results_array[best_fit_line, 0]
+    best_gradient = results_array[best_fit_line, 1]
+    # TODO: keep a close eye on this!
+    # convert from cm/ms to spatial_bins/temporal_bins
+    best_gradient_bins = (
+        best_gradient * seconds_per_temporal_bin / centimetres_per_spatial_bin
+    )
+    # convert from cm/ms to m/s
+    best_gradient_metres_per_second = best_gradient * 10
+    best_intercept_spatial_bins = results_array[best_fit_line, 2]
+    best_line_length = results_array[best_fit_line, 3]
+
+    # TODO: did they do this as well?
+    replay_type = cast(
+        Literal["forward", "reverse"], "forward" if best_gradient >= 0 else "reverse"
+    )
+
+    # TODO: just for debugging, remove later
+    print("V (cm/ms):", best_gradient)
+    print("ms per bin:", milliseconds_per_temporal_bin)
+    print("cm per bin:", centimetres_per_spatial_bin)
+    print("slope_bins:", best_gradient_bins)
+
+    return OlafsdottirReplayResult(
+        pos_mean=best_score,
+        path_length=best_line_length,
+        slope_bins=best_gradient_bins,
+        intercept_bins=best_intercept_spatial_bins,
+        slope_metres_per_sec=best_gradient_metres_per_second,
         replay_type=replay_type,
     )
 
