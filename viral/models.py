@@ -221,12 +221,16 @@ class SSPConfig:
 
 @dataclass
 class SSPVectorData:
-    ssp_vectors: np.ndarray
-    position_vectors: np.ndarray
-    trial_start_indices: np.ndarray
-    chunk_start_indices: List[
-        List[int]
-    ]  # list of chunk start indices with each trial being an element in the outer list
+    ssp_vectors: np.ndarray  # neural activity data, filtered by speed
+    position_vectors: (
+        np.ndarray
+    )  # actual position of the mouse at the corresponding imaging frame
+    trial_start_indices: (
+        np.ndarray
+    )  # frame indices indicating the start of each trial within the ssp_vectors array
+    chunk_start_indices: List[List[int]]  # nested list of chunk boundaries per trial:
+    # outer list is trials;
+    # inner lists are trials with the integers indicating the start of each chunk in correspondence to the ssp_vectors array
 
 
 @dataclass
@@ -239,7 +243,6 @@ class BayesianDecodingConfig:
     start_spatial: int  # cms
     end_spatial: int  # cms
     bin_size_spatial: int  # cms
-    en_bloc: bool  # whether to decode en bloc or pse-event-by-pse-event/trial-chunk-by-trial-chunk
     epoch: Literal["pre", "online", "post"]
     sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
     sigma_online: int  # frames (for the convolving with Gaussian kernel bit)

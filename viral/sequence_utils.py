@@ -282,7 +282,9 @@ def check_significance(
     While several shuffle approaches were used (Extended Data Fig. 6),
     the principal shuffle used in the main figures involved the random re-ordering (resampling without replacement)
     of the bins observed within a given event."
-    "'timeBinPermutation': permutes (resamples without replacement)"
+    "'timeBinPermutation': permutes (resamples without replacement)
+    % randomly permute bins within each event
+    "
 
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/shufflePopulationEvents.m
     """
@@ -938,6 +940,30 @@ def compare_radon_functions() -> None:
     )
 
 
+def compare_pol2cart_against_matlab() -> None:
+    """
+    Checked our Python implementation of MATLAB's pol2cart:
+    https://github.com/josefbitzenhofer/Grosmark_match_MATLAB/blob/main/pythonPol2Cart.m.
+    Used example from Mathwork: https://uk.mathworks.com/help/releases/R2025b/matlab/ref/pol2cart.html.
+    """
+    theta = [0, np.pi / 4, np.pi / 2, np.pi]
+    rho = [
+        5,
+        5,
+        10,
+        10,
+    ]
+    x, y = pol2cart(rho=rho, phi=theta)
+
+    matlab_pol2cart = loadmat("pol2cart.mat")
+    matlab_x = matlab_pol2cart["x"].squeeze()
+    matlab_y = matlab_pol2cart["y"].squeeze()
+
+    assert np.array_equal(x, matlab_x)
+    assert np.array_equal(y, matlab_y)
+    print("Checked")
+
+
 def get_cache_path(
     mouse_name: str, date: str, bayesian_config: BayesianDecodingConfig
 ) -> Path:
@@ -951,4 +977,5 @@ def get_cache_path(
 
 
 if __name__ == "__main__":
-    compare_radon_against_matlab()
+    # compare_radon_against_matlab()
+    compare_pol2cart_against_matlab()

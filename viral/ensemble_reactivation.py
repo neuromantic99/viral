@@ -689,6 +689,7 @@ def get_ssp_vectors(
             get_wheel_circumference_from_rig("2P"),
         )
 
+        # actual position of the mouse at each imaging frame
         frame_position = np.array(
             [
                 state.closest_frame_start
@@ -746,12 +747,14 @@ def get_ssp_vectors(
                 axis=1,
             )
 
+            # add the smoothed segment of neural activity to the ssp_vectors
             ssp_vectors.append(segment)
 
             pos_idx = [frame_to_pos_index.get(int(f), None) for f in chunk]
             if any(x is None for x in pos_idx):
                 raise IndexError("Missing frames")
 
+            # search for the positions of the mouse at each frame of the chunk
             chunk_positions = position[np.searchsorted(frame_position, chunk)]
             position_vectors.append(chunk_positions)
 
@@ -766,6 +769,7 @@ def get_ssp_vectors(
         # only append the trial start idx if there are valid chunks within the trial
         if trial_has_chunks:
             trial_start_indices.append(trial_start_idx)
+            # append the list of start indices of the chunks within the trial to the nested list
             chunk_start_indices.append((trial_chunk_start_indices))
 
     if len(ssp_vectors) == 0:

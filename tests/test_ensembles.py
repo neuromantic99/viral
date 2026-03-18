@@ -347,6 +347,7 @@ def mock_trials_all_chunks_filtered_out() -> list[Mock]:
 def test_get_ssp_vectors_all_chunks_filtered_out(
     mock_trials_all_chunks_filtered_out,
 ) -> None:
+    # should filter out all chunks in the first trial as they are of length 3, i.e. below the min_chunk_len
     trials, place_cells = mock_trials_all_chunks_filtered_out
     sigma = 30
     mode = "above"

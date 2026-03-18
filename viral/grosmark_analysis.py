@@ -104,7 +104,7 @@ def get_place_cells(
     use_cache: bool = True,
     bin_occupancy_divide: bool = False,
     plot: bool = True,
-    use_train_test_split: bool = False,
+    cache_file_additional_info: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     From Grosmark et al.:
@@ -161,7 +161,7 @@ def get_place_cells(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
 
-    if not use_train_test_split:
+    if not cache_file_additional_info:
         get_cache_path = lambda variable_name: (
             SERVER_PATH
             / "viral_caches"
@@ -170,13 +170,13 @@ def get_place_cells(
             / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
         )
     else:
-        # train-test split
+        # e.g. train-test split
         get_cache_path = lambda variable_name: (
             SERVER_PATH
             / "viral_caches"
             / "place_cells"
             / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_train-test-split_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
         )
 
     if use_cache and get_cache_path("place_threshold").exists():
