@@ -520,7 +520,11 @@ def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
 
 
 def calculate_radon_replay(
-    posterior_probability_matrix: np.ndarray, bayesian_config: BayesianDecodingConfig
+    posterior_probability_matrix: np.ndarray,
+    bayesian_config: BayesianDecodingConfig,
+    incorporate_nearby_positions: bool = True,
+    nearby_positions: float = 30,
+    min_n_bin_perc: float = 100,
 ) -> RadonReplayResult:
     """
     "To determine the precise trajectory content of each sequence, a modified 'line casting' or Radon transformation approach was employed.
@@ -528,9 +532,22 @@ def calculate_radon_replay(
     with a 5-cm Gaussian kernel across positions within each time bin. Subsequently, lines, restricted to those crossing all bins,
     were densely cast along this matrix and the mean of the posterior probability for each of these lines was calculated.
     The trajectory was defined as the casted line with the highest mean posterior probability value, and the sign of the slope
-    of the trajectory line defined whether it was a forward or reverse sequence."
+    of the trajectory line defined whether it was a forward or reverse sequence." (Grosmark)
 
-    Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcRadonReplay.m.
+    Essentially, this is mostly a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/calcRadonReplay.m.
+    Saw a method to pick the best line depending on the max posterior probability of the line and a nearby band in Olafsdottir et al. 2016, https://www.nature.com/articles/nn.4291#Sec2.
+    Unfortunately, the MATLAB code was only partly available and the approach is using an algorithm close to the Radon transform, but differing from Grosmark's approach.
+    Denovellis et al. 2021, https://doi.org/10.7554/eLife.64505, used a Radon line-fitting algorithm close to Grosmark.
+    In https://github.com/Eden-Kramer-Lab/replay_trajectory_paper/blob/master/src/standard_decoder.py they share code to max the posterior probability matrix
+    along a line plus a band of nearby positions.
+    Hence, I used their 'nearby positions' approach as an example to modify my Python implementation of Grosmark's MATLAB code where indicated.
+
+    Arguments:
+        posterior_probability_matrix (np.ndarray):      The Posterior probability matrix of the event.
+        bayesian_config (BayesianDecodingConfig):       The BayesianDecodingConfig to use.
+        incorporate_nearby_positions (bool):            Whether to use the "nearby positions"/"band" approach (Olafsdottir, Denovellis). Defaults to True.
+        nearby_positions (float):                       If using the aforementioned "nearby positions"/"band" approach, give the y_range in cms. Defaults to 30 cm.
+        min_n_bin_perc (float):                         Percentage of time bins that the best fit line has to cross. Defaults to 100 percent.
     """
     # TODO: careful: axes??!
     n_time, n_pos = posterior_probability_matrix.shape
@@ -538,21 +555,20 @@ def calculate_radon_replay(
     # TODO: check: is it really like matlab?
     tiled_posterior_probability_matrix = np.tile(posterior_probability_matrix.T, (2, 1))
 
-    # TODO: careful axes?!
     sigma = 5 / bayesian_config.bin_size_spatial  # 5 cm
     smoothed_tiled_posterior_probability_matrix = gaussian_filter1d(
         input=tiled_posterior_probability_matrix, sigma=sigma, axis=0
     )
 
-    # TODO: check if that works with our data
+    # TODO: check if that works with our data, and/or change the docstring of this function
     min_spatial_disp = 0  # % minimum spatial displacement of valid lines (in bins)
     # TODO: this was set to 100 in MATLAB, but will that work?
     # min_n_bin_perc = (
     #     100.0  # % minimum percentage of temporal bins that valid lines must cross
     # )
-    min_n_bin_perc = (
-        15.0  # % minimum percentage of temporal bins that valid lines must cross
-    )
+    # min_n_bin_perc = (
+    #     15.0  # % minimum percentage of temporal bins that valid lines must cross
+    # )
 
     # TODO: is that right? -> pretty sure this is correct, check
     # https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/demo_CircularReplayAnalysis.m line 107
@@ -574,35 +590,44 @@ def calculate_radon_replay(
     theta = radon_lut.theta
     n_radon_points = radon_lut.n_radon_points
 
-    # # for the "banded" approach
-    # # TODO: is this really the same as what the Olafsdottir paper is suggesting?
-    # TODO: probably it is close, but better don't take anu chances here
-    # from scipy.ndimage import uniform_filter1d
+    # using Denovellis code
+    if incorporate_nearby_positions:
+        n_nearby_bins = int(nearby_positions / 2 // bayesian_config.bin_size_spatial)
+        kernel = np.ones(2 * n_nearby_bins + 1)
+        # convolve along the spatial axis
+        # TODO: Denovellis is convolving the untiled ppm, is that goign to make a difference if the axis is adjusted in our code?
+        tiled_convolved_posterior_probability_matrix = np.apply_along_axis(
+            lambda time_bin: np.convolve(time_bin, kernel, mode="same"),
+            axis=0,
+            arr=tiled_posterior_probability_matrix,
+        )
+        # end of Denovellis
 
-    # y_range = int(30 / bayesian_config.bin_size_spatial)  # e.g. 30 cm band
-    # band_size = 2 * y_range + 1
+        # TODO: is there something we are not thinking about that would make the Denovellis approach inviable somewhere downstream?
+        radon_transform = radon(
+            tiled_convolved_posterior_probability_matrix, theta=theta, circle=False
+        )
+        assert radon_transform.shape[0] == n_radon_points
+        # normalise by path length like Grosmark but trying to account for the "band"
+        # 'score = np.max(sinogram) / (n_time * n_nearby_bins)' from Denovellis
+        # TODO: hence, I think Grosmark is picking the best line based on normalised Radon score along the path
+        # TODO: whilst Denovellis is scoring them by the sum/max
+        # TODO: what approach do we want to stay faithful to?
+        radon_transform_mean = radon_transform / (
+            radon_lut.path_length * (2 * n_nearby_bins + 1)
+        )
 
-    # banded_matrix = uniform_filter1d(
-    #     smoothed_tiled_posterior_probability_matrix,
-    #     size=band_size,
-    #     axis=0,
-    #     mode="nearest",
-    # )
-
-    # banded_matrix *= band_size
-
-    # radon_transform = radon(banded_matrix, theta=theta, circle=False)
-    radon_transform = radon(
-        smoothed_tiled_posterior_probability_matrix, theta=theta, circle=False
-    )
-    assert radon_transform.shape[0] == n_radon_points
+    else:
+        radon_transform = radon(
+            smoothed_tiled_posterior_probability_matrix, theta=theta, circle=False
+        )
+        assert radon_transform.shape[0] == n_radon_points
+        # normalise by path length
+        radon_transform_mean = radon_transform / radon_lut.path_length
 
     savemat("python_radon_transform.mat", {"radon_transform": radon_transform})
 
     radon_transform[~good_lines] = 0
-
-    # normalise by path length
-    radon_transform_mean = radon_transform / radon_lut.path_length
 
     # TODO: wait, how is the MATLAB implementation dealing with this? not changing it!
     # No this won't work with np.max because it will take NaN as max
@@ -685,7 +710,7 @@ def define_line_band(
     band_width_bins: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Return test line and test line plus band.
-    Like in MATLAB code found in Olafsdottir et al. 2016, https://www.nature.com/articles/nn.4291#Sec2.
+    Like in Olafsdottir et al. 2016, https://www.nature.com/articles/nn.4291#Sec2, unfortunately without corresponding MATLAB code.
     """
     n_pos, n_time = matrix_shape
 
@@ -699,20 +724,19 @@ def define_line_band(
 
     # line = intercept + gradient * t
 
-    for i, y in enumerate(line.astype(int)):
-
+    for i, y in enumerate(np.round(line).astype(int)):
         if 0 <= y < n_pos:
             test_line[y, i] = 1
 
-        # lower and upper boundary of the band
-        low = int(y - band_width_bins)
-        high = int(y + band_width_bins)
+            # lower and upper boundary of the band
+            low = int(y - band_width_bins)
+            high = int(y + band_width_bins)
 
-        # clamp to matrix edges
-        low = max(0, low)
-        high = min(n_pos - 1, high)
+            # clamp to matrix edges
+            low = max(0, low)
+            high = min(n_pos - 1, high)
 
-        test_line_band[low : high + 1, i] = 1
+            test_line_band[low : high + 1, i] = 1
 
     return test_line, test_line_band
 
@@ -752,13 +776,17 @@ def calculate_olafsdottir_replay(
         else bayesian_config.bin_size_time_offline
     ) / 30
     milliseconds_per_temporal_bin = seconds_per_temporal_bin * 1000
-
     centimetres_per_spatial_bin = bayesian_config.bin_size_spatial
 
     band_width_centimetres = y_range
     band_width_bins = int(band_width_centimetres / centimetres_per_spatial_bin)
 
     # gradient V
+    # conversion factors:
+    # - cm/ms -> cm/s (*1000)
+    # - cm/s -> m/s (/100)
+    # - cm/ms -> m/s (*10)
+
     # is in cm * ms-1
     # "[...] where x indexes the 1 cm spatial bins defined on the arms of the apparatus [...]"
     # same method, different paper: Olafsdottir et al. 2015, https://elifesciences.org/articles/06063#s4
@@ -766,6 +794,13 @@ def calculate_olafsdottir_replay(
     candidate_Vs = np.arange(-50, 50.5, 0.5)
     # exclude slow trajectories >-2 ms-1 and <2 ms-1
     candidate_Vs = candidate_Vs[(candidate_Vs <= -2) | (candidate_Vs >= 2)]
+
+    # trying geometrically valid radon lut slopes
+    radon_lut = create_radon_lut(
+        n_spatial_bins=n_spatial_bins, n_time_bins=n_temporal_bins
+    )
+    valid_slopes = radon_lut.slope[~np.isnan(radon_lut.slope)]
+    candidate_gradient_bins = np.unique(valid_slopes)
 
     # intercept c
     # is in centimetres (originally in metres)
@@ -776,12 +811,18 @@ def calculate_olafsdottir_replay(
 
     # % minLgth         =size(pMat,2)/3;
     # TODO: think about this, could be an absolute value or a percentage, is 1/3 of the entire temporal bins at the moment
-    min_path_length = n_temporal_bins / 3
+    # min_path_length = n_temporal_bins / 3
+    min_path_length = 0.15 * n_temporal_bins
 
     results = list()
-    for i, V in enumerate(candidate_Vs):
+    # for i, V in enumerate(candidate_Vs):
+    #     # convert from cm/ms to spatial_bins/temporal_bins
+    #     gradient_bins = V * milliseconds_per_temporal_bin / centimetres_per_spatial_bin
+
+    for i, V in enumerate(candidate_gradient_bins):
+        gradient_bins = V
         test_line, test_line_band = define_line_band(
-            (n_spatial_bins, n_temporal_bins), V, band_width_bins
+            (n_spatial_bins, n_temporal_bins), gradient_bins, band_width_bins
         )
 
         padded = np.pad(
@@ -798,9 +839,11 @@ def calculate_olafsdottir_replay(
 
         tmp_line_length = correlate2d(padded_ones, test_line, mode="valid")
         # reject lines that are too short and set them to NaN
-        # tmp_mean_p[tmp_line_length < min_path_length] = np.nan
+        tmp_mean_p[tmp_line_length < min_path_length] = np.nan
 
         if np.all(np.isnan(tmp_mean_p)):
+            print(f"min_path_length: {min_path_length}")
+            print(f"path_length: {tmp_line_length}")
             # skip if there is no line overlapping and/or it being too short
             continue
 
@@ -817,7 +860,7 @@ def calculate_olafsdottir_replay(
         line_length = tmp_line_length[offset_row, offset_col]
         tmp_line_length[offset_row, offset_col]
 
-        results.append((score, V, intercept, line_length))
+        results.append((score, V, gradient_bins, intercept, line_length))
 
     if len(results) == 0:
         print("Unable to fit a valid line through this posterior_probability_matrix")
@@ -828,15 +871,11 @@ def calculate_olafsdottir_replay(
 
     best_score = results_array[best_fit_line, 0]
     best_gradient = results_array[best_fit_line, 1]
-    # TODO: keep a close eye on this!
-    # convert from cm/ms to spatial_bins/temporal_bins
-    best_gradient_bins = (
-        best_gradient * seconds_per_temporal_bin / centimetres_per_spatial_bin
-    )
-    # convert from cm/ms to m/s
+    best_gradient_bins = results_array[best_fit_line, 2]
+    # convert from cm/ms to m/s (*10)
     best_gradient_metres_per_second = best_gradient * 10
-    best_intercept_spatial_bins = results_array[best_fit_line, 2]
-    best_line_length = results_array[best_fit_line, 3]
+    best_intercept_spatial_bins = results_array[best_fit_line, 3]
+    best_line_length = results_array[best_fit_line, 4]
 
     # TODO: did they do this as well?
     replay_type = cast(

@@ -271,12 +271,29 @@ def plot_pse_event(
     plt.colorbar()
 
     if do_radon_transform and mode == "circular":
+        # trying the new Olafsdottir/Denovellis approach
+        incorporate_nearby_positions = True
+        if incorporate_nearby_positions:
+            print("Using the 'nearby positions' approach by Denovellis")
+        # nearby_positions:
+        # - 30 cm (Olafsdottir et al. 2016, https://doi.org/10.1038/nn.4291)
+        # - 20 cm (Olafsdottir et al. 2015, https://doi.org/10.7554/eLife.06063)
+        # - 15 cm (Denovellis et al. 2021, https://doi.org/10.7554/eLife.64505)
+        nearby_positions = 30  # cm
+        # min_n_bin_perc:
+        # - 100.0 percent (Grosmark et al. 2021, https://doi.org/10.1038/s41593-021-00920-7)
+        # - 1/3 = 33.33 percent (Olafsdottir et al. 2016 downloadable MATLAB code, https://doi.org/10.1038/nn.4291)
         radon_replay = calculate_radon_replay(
             posterior_probability_matrix=posterior_probability_matrix,
             bayesian_config=bayesian_config,
+            incorporate_nearby_positions=incorporate_nearby_positions,
+            nearby_positions=30,
+            min_n_bin_perc=33.33,
         )
 
-        y_range = int(30 / bayesian_config.bin_size_spatial)  # e.g. 30 cm band
+        y_range = int(
+            nearby_positions / bayesian_config.bin_size_spatial
+        )  # e.g. 30 cm band
 
         x = np.array([radon_replay.point1x, radon_replay.point2x])
         y = np.array([radon_replay.point1y, radon_replay.point2y])
@@ -365,8 +382,8 @@ def plot_pse_event(
     plt.xlim(0, n_time - 1)
 
     plt.tight_layout()
-    # radon_plot_root = PLOT_PATH / "pse_events_radon"
-    radon_plot_root = PLOT_PATH / "pse_events_band_olafsdottir"
+    radon_plot_root = PLOT_PATH / "pse_events_radon"
+    # radon_plot_root = PLOT_PATH / "pse_events_band_olafsdottir"
     if not os.path.exists(radon_plot_root / session.mouse_name):
         os.makedirs(radon_plot_root / session.mouse_name)
     plt.savefig(
