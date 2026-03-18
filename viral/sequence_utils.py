@@ -13,6 +13,7 @@ sys.path.append(str(HERE.parent.parent))
 from viral.constants import SERVER_PATH
 from viral.models import (
     BayesianDecodingConfig,
+    BayesianDecodingResult,
     RadonLUT,
     RadonReplayResult,
 )
@@ -974,6 +975,77 @@ def get_cache_path(
         / "bayesian"
         / f"{mouse_name}_{date}_{bayesian_config.epoch}_{'en_bloc' if bayesian_config.en_bloc else 'events'}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
     )
+
+
+def load_bayesian_cache(cache_path: Path) -> BayesianDecodingResult:
+    """Load Bayesian decoding result from cached file."""
+    loaded_cache = np.load(cache_path, allow_pickle=True)
+    posterior_probability_matrices = loaded_cache["posterior_probability_matrices"]
+    pr_max_matrices = loaded_cache["pr_max_matrices"]
+    linear_weighted_r = (
+        loaded_cache["linear_weighted_r"].astype(float)
+        if loaded_cache["linear_weighted_r"] is not None
+        else None
+    )
+    circular_weighted_r = (
+        loaded_cache["circular_weighted_r"].astype(float)
+        if loaded_cache["circular_weighted_r"] is not None
+        else None
+    )
+    actual_positions = (
+        loaded_cache["actual_positions"]
+        if loaded_cache["actual_positions"] is not None
+        else None
+    )
+    linear_rZ_scores = (
+        loaded_cache["linear_rZ_scores"]
+        if loaded_cache["linear_rZ_scores"] is not None
+        else None
+    )
+    circular_rZ_scores = (
+        loaded_cache["circular_rZ_scores"]
+        if loaded_cache["circular_rZ_scores"] is not None
+        else None
+    )
+
+    return BayesianDecodingResult(
+        posterior_probability_matrices=posterior_probability_matrices,
+        pr_max_matrices=pr_max_matrices,
+        linear_weighted_r=linear_weighted_r,
+        circular_weighted_r=circular_weighted_r,
+        actual_positions=actual_positions,
+        linear_rZ_scores=linear_rZ_scores,
+        circular_rZ_scores=circular_rZ_scores,
+    )
+
+
+def save_bayesian_cache(cache_path: Path, result: BayesianDecodingResult) -> None:
+    """Save Bayesian decoding result to cache."""
+    np.savez(
+        cache_path,
+        posterior_probability_matrices=np.array(
+            result.posterior_probability_matrices, dtype=object
+        ),
+        pr_max_matrices=np.array(result.pr_max_matrices, dtype=object),
+        linear_weighted_r=np.array(result.linear_weighted_r, dtype=float),
+        circular_weighted_r=np.array(result.circular_weighted_r, dtype=float),
+        actual_positions=(
+            np.array(result.actual_positions, dtype=object)
+            if result.actual_positions is not None
+            else None
+        ),
+        linear_rZ_scores=(
+            np.array(result.linear_rZ_scores, dtype=float)
+            if result.linear_rZ_scores is not None
+            else None
+        ),
+        circular_rZ_scores=(
+            np.array(result.circular_rZ_scores, dtype=float)
+            if result.circular_rZ_scores is not None
+            else None
+        ),
+    )
+    print("Saved Bayesian decoding result to cache")
 
 
 if __name__ == "__main__":
