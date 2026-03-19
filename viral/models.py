@@ -299,13 +299,3 @@ class RadonReplayResult:
     slope: float
     slope_metres_per_sec: float
     replay_type: Literal["forward", "reverse"]
-
-
-@dataclass
-class OlafsdottirReplayResult:
-    pos_mean: float
-    path_length: float
-    slope_bins: float
-    intercept_bins: float
-    slope_metres_per_sec: float
-    replay_type: Literal["forward", "reverse"]

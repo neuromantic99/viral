@@ -48,7 +48,6 @@ from viral.sequence_utils import (
     check_significance,
     bin_for_classification,
     calculate_radon_replay,
-    calculate_olafsdottir_replay,
     get_cache_path,
     load_bayesian_cache,
     save_bayesian_cache,
@@ -243,7 +242,6 @@ def plot_pse_event(
     corr_coeff: float,
     significance: Tuple[float, bool],
     do_radon_transform: Optional[bool] = True,
-    do_olafsdottir_replay: Optional[bool] = False,
 ) -> None:
     n_time, n_pos = posterior_probability_matrix.shape
 
@@ -314,42 +312,6 @@ def plot_pse_event(
             f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
         )
 
-    if do_olafsdottir_replay and mode == "circular":
-        y_range = 30
-        olafsdottir_replay = calculate_olafsdottir_replay(
-            posterior_probability_matrix=posterior_probability_matrix,
-            bayesian_config=bayesian_config,
-            y_range=y_range,
-        )
-
-        if olafsdottir_replay:
-            t = np.arange(n_time)
-            y = olafsdottir_replay.slope_bins * t + olafsdottir_replay.intercept_bins
-
-            y_range_bins = y_range / bayesian_config.bin_size_spatial
-
-            plt.plot(t, y, "r--")
-            plt.plot(t, y + y_range_bins, "w")
-            plt.plot(t, y - y_range_bins, "w")
-
-            offset = (
-                bayesian_config.total_length * 100
-            ) / bayesian_config.bin_size_spatial
-            plt.plot(t, y + offset, "r--")
-            plt.plot(t, y + y_range_bins + offset, "w")
-            plt.plot(t, y - y_range_bins + offset, "w")
-            plt.plot(t, y - offset, "r--")
-            plt.plot(t, y + y_range_bins - offset, "w")
-            plt.plot(t, y - y_range_bins - offset, "w")
-
-            plt.title(
-                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nOlafsdottir Slope: {olafsdottir_replay.slope_metres_per_sec:.2f} m/s ({olafsdottir_replay.replay_type} replay)"
-            )
-        else:
-            plt.title(
-                f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nNo valid line fit"
-            )
-
     plt.xlabel("Time (seconds)")
     xtick_bins = np.arange(0, n_time + 1, 15)
     xtick_labels = np.round(xtick_bins / 30, 2)
@@ -383,7 +345,6 @@ def plot_pse_event(
 
     plt.tight_layout()
     radon_plot_root = PLOT_PATH / "pse_events_radon"
-    # radon_plot_root = PLOT_PATH / "pse_events_band_olafsdottir"
     if not os.path.exists(radon_plot_root / session.mouse_name):
         os.makedirs(radon_plot_root / session.mouse_name)
     plt.savefig(
