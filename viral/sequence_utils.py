@@ -37,11 +37,11 @@ def detect_candidate_events(
     in_event = False
     peak_exceeded = False
     peak_value = -np.inf
-
+    prev_value = population_vector[0]
     for idx, value in enumerate(population_vector):
 
-        # look for candidate event start
-        if value > edge_threshold and not in_event:
+        # look for candidate event start (i.e. crossed the edge threshold between the previous and current value)
+        if (prev_value <= edge_threshold) and (value > edge_threshold) and not in_event:
             start_event = idx
             in_event = True
 
@@ -53,8 +53,13 @@ def detect_candidate_events(
         if in_event and peak_value >= peak_threshold:
             peak_exceeded = True
 
-        # check for candidate event end
-        if in_event and peak_exceeded and (value < edge_threshold):
+        # check for candidate event end (i.e. crossed the edge threshold between the previous and current value)
+        if (
+            in_event
+            and peak_exceeded
+            and (prev_value >= edge_threshold)
+            and (value < edge_threshold)
+        ):
             in_event = False
             peak_exceeded = False
             candidate_events.append((start_event, idx))
@@ -67,8 +72,7 @@ def detect_candidate_events(
             peak_exceeded = False
             peak_value = -np.inf
 
-        # TODO: in an older commit, there was broken code that wanted to check whether both edges were crossed, do we want that now?
-
+        prev_value = value
     return candidate_events
 
 
@@ -89,6 +93,36 @@ def merge_close_events(
             # not too close, keep the event
             merged_events.append((current_start, current_end))
     return merged_events
+
+
+def filter_candidate_events_by_inter_event_time(
+    candidate_events: List[Tuple[int, int]], min_inter_event_time_frames: int
+) -> List[Tuple[int, int]]:
+    """
+    "Putative PSEs were defined as epochs during which the z-scored population activity vector reached a peak of at least 3.5 s.d.
+    above the mean with event-edges at 1 s.d. above the mean, with a minimum inter-event time of 0.2 s."
+
+    This function returns all events which have a minimum inter-event time of no less than the given variable in frames.
+    Short inter-event times will result in the following event being rejected.
+    """
+    events = sorted(candidate_events, key=lambda x: x[0])  # events sorted by start time
+    filtered_events = [
+        events[0]
+    ]  # the first event cannot be invalid and is needed as a reference point
+    # start to compare the second event onwards
+    for idx, (current_start, current_end) in enumerate(events[1:]):
+        # TODO: which event should be rejected then? Just the following, or both?
+        # TODO: also, should we compare to the last filtered one, or the last one before filtering?
+        # _, last_end = events[idx]
+        _, last_end = filtered_events[-1]
+        if (
+            current_start - last_end < min_inter_event_time_frames
+        ):  # events are too close together, skip
+            continue
+        else:
+            # not too close, keep the event
+            filtered_events.append((current_start, current_end))
+    return filtered_events
 
 
 def filter_candidate_events_by_duration(
@@ -327,6 +361,7 @@ def check_significance(
     assert empirical_p >= 0
     rz_score = (r_real - np.mean(r_shuffled)) / np.std(r_shuffled)
     print(f"empirical p-value: {empirical_p:.2f}, rZ score: {rz_score:.2f}")
+    # TODO: can probably think about not returning significance bool
     return empirical_p, empirical_p < significance, rz_score
 
 
@@ -612,9 +647,11 @@ def calculate_radon_replay(
         # TODO: hence, I think Grosmark is picking the best line based on normalised Radon score along the path
         # TODO: whilst Denovellis is scoring them by the sum/max
         # TODO: what approach do we want to stay faithful to?
-        radon_transform_mean = radon_transform / (
-            radon_lut.path_length * (2 * n_nearby_bins + 1)
-        )
+        # radon_transform_mean = radon_transform / (
+        #     radon_lut.path_length * (2 * n_nearby_bins + 1)
+        # )
+        # TODO: stay faithful to Grosmark for now?
+        radon_transform_mean = radon_transform / radon_lut.path_length
 
     else:
         radon_transform = radon(
@@ -1038,79 +1075,24 @@ def get_cache_path(
         / "viral_caches"
         / "sequence_detection"
         / "bayesian"
-        / f"{mouse_name}_{date}_{bayesian_config.epoch}_{'en_bloc' if bayesian_config.en_bloc else 'events'}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
-    )
-
-
-def load_bayesian_cache(cache_path: Path) -> BayesianDecodingResult:
-    """Load Bayesian decoding result from cached file."""
-    loaded_cache = np.load(cache_path, allow_pickle=True)
-    posterior_probability_matrices = loaded_cache["posterior_probability_matrices"]
-    pr_max_matrices = loaded_cache["pr_max_matrices"]
-    linear_weighted_r = (
-        loaded_cache["linear_weighted_r"].astype(float)
-        if loaded_cache["linear_weighted_r"] is not None
-        else None
-    )
-    circular_weighted_r = (
-        loaded_cache["circular_weighted_r"].astype(float)
-        if loaded_cache["circular_weighted_r"] is not None
-        else None
-    )
-    actual_positions = (
-        loaded_cache["actual_positions"]
-        if loaded_cache["actual_positions"] is not None
-        else None
-    )
-    linear_rZ_scores = (
-        loaded_cache["linear_rZ_scores"]
-        if loaded_cache["linear_rZ_scores"] is not None
-        else None
-    )
-    circular_rZ_scores = (
-        loaded_cache["circular_rZ_scores"]
-        if loaded_cache["circular_rZ_scores"] is not None
-        else None
-    )
-
-    return BayesianDecodingResult(
-        posterior_probability_matrices=posterior_probability_matrices,
-        pr_max_matrices=pr_max_matrices,
-        linear_weighted_r=linear_weighted_r,
-        circular_weighted_r=circular_weighted_r,
-        actual_positions=actual_positions,
-        linear_rZ_scores=linear_rZ_scores,
-        circular_rZ_scores=circular_rZ_scores,
+        / f"{mouse_name}_{date}_{bayesian_config.epoch}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
     )
 
 
 def save_bayesian_cache(cache_path: Path, result: BayesianDecodingResult) -> None:
     """Save Bayesian decoding result to cache."""
+    data = result.model_dump()
     np.savez(
         cache_path,
-        posterior_probability_matrices=np.array(
-            result.posterior_probability_matrices, dtype=object
-        ),
-        pr_max_matrices=np.array(result.pr_max_matrices, dtype=object),
-        linear_weighted_r=np.array(result.linear_weighted_r, dtype=float),
-        circular_weighted_r=np.array(result.circular_weighted_r, dtype=float),
-        actual_positions=(
-            np.array(result.actual_positions, dtype=object)
-            if result.actual_positions is not None
-            else None
-        ),
-        linear_rZ_scores=(
-            np.array(result.linear_rZ_scores, dtype=float)
-            if result.linear_rZ_scores is not None
-            else None
-        ),
-        circular_rZ_scores=(
-            np.array(result.circular_rZ_scores, dtype=float)
-            if result.circular_rZ_scores is not None
-            else None
-        ),
+        data=np.array(data, dtype=object),
     )
-    print("Saved Bayesian decoding result to cache")
+
+
+def load_bayesian_cache(cache_path: Path) -> BayesianDecodingResult:
+    """Load Bayesian decoding result from cached file."""
+    loaded = np.load(cache_path, allow_pickle=True)
+    data = loaded["data"].item()
+    return BayesianDecodingResult(**data)
 
 
 if __name__ == "__main__":

@@ -254,15 +254,24 @@ class BayesianDecodingConfig:
         return (self.end_spatial - self.start_spatial) / 100
 
 
+class DecodedEvent(BaseModel):
+    posterior_probability_matrix: np.ndarray
+    pr_max: np.ndarray
+    actual_positions: Optional[np.ndarray] = None
+    linear_weighted_r: float
+    linear_p_value: float
+    circular_weighted_r: float
+    circular_p_value: float
+    linear_rZ_score: float
+    circular_rZ_score: float = None
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class BayesianDecodingResult(BaseModel):
     epoch: Literal["pre", "online", "post"]
-    posterior_probability_matrices: List[np.ndarray]
-    pr_max_matrices: List[np.ndarray]
-    linear_weighted_r: Optional[List[float]] = None
-    circular_weighted_r: Optional[List[float]] = None
-    actual_positions: Optional[List[np.ndarray]] = None
-    linear_rZ_scores: Optional[List[float]] = None
-    circular_rZ_scores: Optional[List[float]] = None
+    decoded_events: List[DecodedEvent]
 
     class Config:
         arbitrary_types_allowed = True

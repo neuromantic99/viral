@@ -6,6 +6,7 @@ from viral.sequence_utils import (
     detect_candidate_events,
     merge_close_events,
     filter_candidate_events_by_duration,
+    filter_candidate_events_by_inter_event_time,
     additional_pc_check,
     bin_for_classification,
 )
@@ -70,10 +71,6 @@ def test_detect_candidate_events() -> None:
 def test_detect_candidate_events_no_edge_before_peak() -> None:
     population_vector = np.array(
         [
-            0,
-            0,
-            0,
-            0,
             2,
             0.5,
             0,
@@ -100,6 +97,22 @@ def test_detect_candidate_events_no_edge_before_peak() -> None:
     assert candidate_events == expected_events
 
 
+# TODO: what about something like this?
+# should there be a rule that it can't jump over the edge threshold and peak threshold with the same frame value?
+# population_vector = np.array(
+#     [
+#         0,
+#         0,
+#         0,
+#         0,
+#         2,
+#         0.5,
+#         0,
+#         0,
+#     ]
+# )
+
+
 def test_merge_close_events() -> None:
     candidate_events = [
         (0, 3),
@@ -118,6 +131,31 @@ def test_merge_close_events() -> None:
 
     merged_events = merge_close_events(candidate_events)
     assert merged_events == expected_merged_events
+
+
+def test_filter_candidate_events_by_inter_event_time() -> None:
+    candidate_events = [
+        (0, 3),
+        (5, 8),
+        (13, 17),
+        (18, 22),
+        (30, 35),
+        (50, 55),
+        (57, 60),
+        (65, 70),
+        (80, 85),
+        (91, 95),
+    ]
+    # reject the following event if it is more than 6 frames apart
+    min_inter_event_time_frames = 6
+    # expected = [(0, 3), (30, 35), (50, 55), (80, 85), (91, 95)]
+    # see TODO comment in the actual function
+    expected = [(0, 3), (13, 17), (30, 35), (50, 55), (65, 70), (80, 85), (91, 95)]
+
+    result = filter_candidate_events_by_inter_event_time(
+        candidate_events, min_inter_event_time_frames
+    )
+    assert result == expected
 
 
 def test_filter_candidate_events_by_duration() -> None:

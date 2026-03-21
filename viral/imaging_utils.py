@@ -165,10 +165,19 @@ def compute_windowed_speed_1d(
 
 
 def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
+    """
+    "Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3 cm s-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5 cm s-1 for at least 3 consecutive seconds."
+    (Grosmark et al., 2021)
+
+    Compute speed and smooth it like Grosmark et al., 2021.
+    """
     speed = np.diff(position)
     # Keep the lengths the same
     speed = np.append(speed, (speed[-1]))
     speed = speed * 30
+    # imaging at 30 fps, after sync, position and speed are effectively 30 Hz -> 0.5 s * 30 -s
     speed = gaussian_filter1d(speed, sigma=0.5 * 30)
     assert speed.shape == position.shape
     return speed
