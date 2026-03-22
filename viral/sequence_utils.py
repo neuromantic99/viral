@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Literal, cast
 from scipy.ndimage import gaussian_filter1d
 from scipy.io import savemat, loadmat
-from scipy.signal import correlate2d
 from skimage.transform import radon
 
 HERE = Path(__file__).parent
@@ -693,7 +692,7 @@ def calculate_radon_replay(
     # TODO: this seems off: check units
     bin_size_time_frames = (
         bayesian_config.bin_size_time_online
-        if bayesian_config.epoch == "online"
+        if "online" in bayesian_config.epoch
         else bayesian_config.bin_size_time_offline
     )
     # bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
@@ -1068,7 +1067,9 @@ def compare_pol2cart_against_matlab() -> None:
 
 
 def get_cache_path(
-    mouse_name: str, date: str, bayesian_config: BayesianDecodingConfig
+    mouse_name: str,
+    date: str,
+    bayesian_config: BayesianDecodingConfig,
 ) -> Path:
     return (
         SERVER_PATH
@@ -1079,6 +1080,7 @@ def get_cache_path(
     )
 
 
+# TODO: make this more general?
 def save_bayesian_cache(cache_path: Path, result: BayesianDecodingResult) -> None:
     """Save Bayesian decoding result to cache."""
     data = result.model_dump()
@@ -1088,6 +1090,7 @@ def save_bayesian_cache(cache_path: Path, result: BayesianDecodingResult) -> Non
     )
 
 
+# TODO: make this more general?
 def load_bayesian_cache(cache_path: Path) -> BayesianDecodingResult:
     """Load Bayesian decoding result from cached file."""
     loaded = np.load(cache_path, allow_pickle=True)

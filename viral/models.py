@@ -270,8 +270,17 @@ class DecodedEvent(BaseModel):
 
 
 class BayesianDecodingResult(BaseModel):
-    epoch: Literal["pre", "online", "post"]
+    epoch: Literal["pre", "online", "online_ITI", "post"]
     decoded_events: List[DecodedEvent]
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class BayesianDecoderPerformance(BaseModel):
+    f1_score: float
+    f1_score_by_position: np.ndarray
+    r2: float
 
     class Config:
         arbitrary_types_allowed = True
