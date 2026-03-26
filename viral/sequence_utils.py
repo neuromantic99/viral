@@ -21,17 +21,14 @@ from viral.utils import shuffle_rows
 
 
 def detect_candidate_events(
-    population_vector: np.ndarray, config: BayesianDecodingConfig
+    population_vector: np.ndarray, peak_threshold: float, edge_threshold: float
 ) -> List[Tuple[int, int]]:
-    """based on detect_candidate_spindles from James & Jana"""
+    """
+    Detect candidate events based on peaks in the population activity vector.
 
+    based on detect_candidate_spindles from James & Jana
+    """
     candidate_events: List[Tuple[int, int]] = list()
-    peak_threshold = np.mean(population_vector) + config.peak_threshold * np.std(
-        population_vector
-    )
-    edge_threshold = np.mean(population_vector) + config.edge_threshold * np.std(
-        population_vector
-    )
 
     in_event = False
     peak_exceeded = False

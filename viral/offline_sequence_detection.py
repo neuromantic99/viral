@@ -60,60 +60,107 @@ from viral.sessions_keep import SESSIONS_KEEP
 
 def get_population_vector(
     ssp_smoothed: np.ndarray,
-    mouse_name: str,
-    date: str,
-    bayesian_config: BayesianDecodingConfig,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
+    "Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
     Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
-    mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored.
+    mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored." (Grosmark et al., 2021)
+
+    Get the z-scored population activity vector, its mean and standard deviation.
     """
     z_scored = zscore(ssp_smoothed, axis=1)
     # Remove nans from silent neurons
     z_scored = np.nan_to_num(z_scored)
 
     population_vector = zscore(np.mean(z_scored, axis=0))
+    population_vector_mean = np.mean(population_vector)
     population_vector_sd = np.std(population_vector)
-    # TODO: remove after debugging
-    plt.figure(figsize=(30, 20))
-    plt.plot(population_vector)
-    plt.hlines(
-        population_vector_sd * bayesian_config.peak_threshold,
-        xmin=0,
-        xmax=len(population_vector),
-        colors="r",
-        linestyles="dashed",
-        label="Peak threshold",
+    return population_vector, population_vector_mean, population_vector_sd
+
+
+def compute_pse_thresholds_session(
+    trials: List[TrialInfo],
+    place_cells: np.ndarray,
+    ssp_config_immobility: SSPConfig,
+    bayesian_config: BayesianDecodingConfig,
+    threshold_path: Path,
+) -> Tuple[float, float]:
+    """
+    "Offline PSEs were detected by convolving each PC's (as assessed during that day's run) offline immobility firing rate vector
+    Ssp with a 125-ms Gaussian kernel and z-scoring the smoothed firing rate vector. Subsequently, for each frame i, the population
+    mean of the smoothed and z-scored vector was taken across PCs and subsequently z-scored.
+    [...]
+    Putative PSEs were defined as epochs during which the z-scored population activity vector reached a peak of at least 3.5 s.d.
+    above the mean with event-edges at 1 s.d. above the mean, with a minimum inter-event time of 0.2 s." (Grosmark et al., 2021)
+
+    The peak and edge thresholds have to be computed on the running/online epoch immobility ssp and kept for all the epochs within the same session.
+    This function has to be run before decoding any epoch and should be called with the BayesianDecodingConfig's epoch set to "online"
+
+    Arguments:
+        trials (List[TrialInfo]):                   A list of the trials to test the decoder (online only).
+        place_cells (np.ndarray):                   An array of place cell spiking activity (shape=(n_place_cells, n_frames)).
+        mouse_name (str):                           The mouse's ID.
+        date (str):                                 The session date.
+        ssp_config_immobility (SSPConfig):          A SSPConfig object, with the settings for getting the immobility ssp vector.
+        bayesian_config (BayesianDecodingConfig):   A BayesianDecodingConfig, with settings for the thresholds.
+        threshold_path (Path):                      The path to which the result should be cached to.
+
+    Returns:
+        Tuple[float, float]:                        A tuple of peak threshold and edge threshold for the entire session.
+
+    Raises:
+        AssertionError:                             When trying to compute the peak and edge threshold on the wrong epoch!
+    """
+    # TODO: perhaps on the ITI as well?
+    assert (
+        bayesian_config.epoch == "online"
+    ), "The thresholds for PSEs in the session should be computed on the online/run epoch!"
+    print("Computing PSE thresholds for this session")
+
+    # TODO: you need to make sure this is the same as in the online decoding!!!
+    ssp = get_ssp_vectors(
+        trials=trials,
+        place_cells=place_cells,
+        sigma=bayesian_config.sigma_online,
+        mode=ssp_config_immobility.mode,
+        speed_threshold=ssp_config_immobility.speed_threshold,
+        n_consecutive_samples=ssp_config_immobility.n_consecutive_samples,
+        take_iti_out=False if bayesian_config.epoch == "online_ITI" else True,
+    ).ssp_vectors
+
+    _, population_vector_mean, population_vector_sd = get_population_vector(
+        ssp_smoothed=ssp,
     )
-    plt.hlines(
-        population_vector_sd * bayesian_config.edge_threshold,
-        xmin=0,
-        xmax=len(population_vector),
-        colors="g",
-        linestyles="dashed",
-        label="Edge threshold",
+
+    peak_threshold = (
+        population_vector_mean + population_vector_sd * bayesian_config.peak_threshold
     )
-    plt.title("Population vector")
-    if not os.path.exists(
-        PLOT_PATH / "bayesian" / f"pse_events_{bayesian_config.epoch}"
-    ):
-        os.makedirs(PLOT_PATH / "bayesian" / f"pse_events_{bayesian_config.epoch}")
-    plt.savefig(
-        PLOT_PATH
-        / "bayesian"
-        / f"pse_events_{bayesian_config.epoch}"
-        / f"{mouse_name}_{date}_{bayesian_config.epoch}_population_vector.png",
-        dpi=600,
+    edge_threshold = (
+        population_vector_mean + population_vector_sd * bayesian_config.edge_threshold
     )
-    plt.close()
-    return population_vector
+
+    np.savez(
+        threshold_path,
+        peak_threshold=peak_threshold,
+        edge_threshold=edge_threshold,
+    )
+    return peak_threshold, edge_threshold
+
+
+def load_pse_thresholds_session(threshold_path: Path) -> Tuple[float, float]:
+    print("Loading PSE thresholds from cache")
+    data = np.load(threshold_path)
+    return data["peak_threshold"], data["edge_threshold"]
 
 
 def find_pse_events(
     population_vector: np.ndarray,
+    peak_threshold: float,
+    edge_threshold: float,
     ssp: np.ndarray,
-    config: BayesianDecodingConfig,
+    bayesian_config: BayesianDecodingConfig,
+    mouse_name: str,
+    date: str,
     duration_filter: bool = True,
 ) -> List[Tuple[int, int]]:
     """
@@ -122,7 +169,45 @@ def find_pse_events(
     Only PSE events lasting between 0.2 s (12 frames) and 1 s (60 frames), and during which at least 5 distinct PCs each fired at
     least one estimated spike, were kept for further analysis.
     """
-    candidate_events = detect_candidate_events(population_vector, config)
+    plot_population_vectors = True
+    if plot_population_vectors:
+        plt.figure(figsize=(30, 20))
+        plt.plot(population_vector)
+        plt.hlines(
+            peak_threshold,
+            xmin=0,
+            xmax=len(population_vector),
+            colors="r",
+            linestyles="dashed",
+            label="Peak threshold",
+        )
+        plt.hlines(
+            edge_threshold,
+            xmin=0,
+            xmax=len(population_vector),
+            colors="g",
+            linestyles="dashed",
+            label="Edge threshold",
+        )
+        plt.title("Population vector")
+        if not os.path.exists(
+            PLOT_PATH / "bayesian" / f"pse_events_{bayesian_config.epoch}"
+        ):
+            os.makedirs(PLOT_PATH / "bayesian" / f"pse_events_{bayesian_config.epoch}")
+        plt.savefig(
+            PLOT_PATH
+            / "bayesian"
+            / f"pse_events_{bayesian_config.epoch}"
+            / f"{mouse_name}_{date}_{bayesian_config.epoch}_population_vector.png",
+            dpi=600,
+        )
+        plt.close()
+
+    candidate_events = detect_candidate_events(
+        population_vector=population_vector,
+        peak_threshold=peak_threshold,
+        edge_threshold=edge_threshold,
+    )
     print(
         f"Found {len(candidate_events)} candidate events (before filtering for duration and additional PC check)"
     )
@@ -148,11 +233,14 @@ def find_pse_events(
         f"Filtered to {len(merged_events)} events by inter-event time ({min_inter_event_time_frames/30} seconds)"
     )
 
+    # TODO: temporary for debugging
+    duration_filter = False
+
     if duration_filter:
         # filter events by duration e.g. (0.2s - 1s) -> (6 - 30 frames)
         filtered_events = filter_candidate_events_by_duration(
             candidate_events=merged_events,
-            event_duration_thresholds=config.event_duration,
+            event_duration_thresholds=bayesian_config.event_duration,
         )
         print(f"Filtered to {len(filtered_events)} events by duration")
         if len(filtered_events) == 0:
@@ -385,7 +473,7 @@ def load_and_prepare_session_for_bayesian_decoding(
     grosmark_config: GrosmarkConfig,
     use_train_test_split: bool = False,
     train_size: Optional[float] = 0.5,
-) -> Tuple[Cached2pSession, np.ndarray, np.ndarray, List[TrialInfo] | None] | None:
+) -> Tuple[Cached2pSession, np.ndarray, np.ndarray, List[TrialInfo]] | None:
     """
     Load and prepare session for Bayesian decoding (getting the cached session object and getting the place cells).
     A train-test split for the trials can be performed. (Makes sense if your checking the decoder's performance).
@@ -396,9 +484,10 @@ def load_and_prepare_session_for_bayesian_decoding(
         Cached2pSession:            The session object with the trials allotted according to the train-test split (online only).
         np.ndarray:                 The session's OASIS deconvoluted place cell activity.
         np.ndarray:                 Place fields of the place cells in the array above.
-        list[TrialInfo] | None:     A list of the trials to test the decoder (online only).
+        list[TrialInfo] | None:     A list of the trials to test the decoder (returned for all epochs, but used in online only).
         None:                       None if the session cannot be analysed (epoch is set to either of the offline but a wheel freeze does not exist)
     """
+    print("Loading and preparing session")
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 
@@ -451,10 +540,7 @@ def load_and_prepare_session_for_bayesian_decoding(
     place_cells = spks[pcs_mask, :]
     pcs_place_fields = place_fields[pcs_mask, :]
 
-    if "online" in bayesian_config.epoch:
-        return session, place_cells, pcs_place_fields, trials_test
-    else:
-        return session, place_cells, pcs_place_fields
+    return session, place_cells, pcs_place_fields, trials_test
 
 
 def decode_events(
@@ -576,6 +662,7 @@ def decode_online_epoch(
     trials_test: List[TrialInfo],
     place_cells: np.ndarray,
     place_fields: np.ndarray,
+    pse_thresholds: Tuple[float, float],
     bayesian_config: BayesianDecodingConfig,
 ) -> BayesianDecodingResult | None:
     """Perform the Bayesian decoding on phases of immobility within the online epoch of the session, i.e. using the test trials, and plot the events."""
@@ -618,16 +705,18 @@ def decode_online_epoch(
         return None
     assert ssp_test.shape[0] == place_cells.shape[0]
 
-    population_vector = get_population_vector(
+    population_vector, _, _ = get_population_vector(
         ssp_smoothed=ssp_test,
-        mouse_name=session.mouse_name,
-        date=session.date,
-        bayesian_config=bayesian_config,
     )
+    peak_threshold, edge_threshold = pse_thresholds
     pse_events = find_pse_events(
         population_vector=population_vector,
+        peak_threshold=peak_threshold,
+        edge_threshold=edge_threshold,
         ssp=ssp_test,
-        config=bayesian_config,
+        bayesian_config=bayesian_config,
+        mouse_name=session.mouse_name,
+        date=session.date,
     )
     if len(pse_events) > 0:
         decoded_events = decode_events(
@@ -654,6 +743,7 @@ def decode_offline_epoch(
     session: Cached2pSession,
     place_cells: np.ndarray,
     place_fields: np.ndarray,
+    pse_thresholds: Tuple[float, float],
     bayesian_config: BayesianDecodingConfig,
 ) -> BayesianDecodingResult:
     """Perform the Bayesian decoding on either of the offline epochs of the session and plot the events."""
@@ -676,16 +766,16 @@ def decode_offline_epoch(
     )
 
     # pre- or post-training wheel freeze
-    population_vector = get_population_vector(
-        ssp_smoothed=ssp_test,
-        mouse_name=session.mouse_name,
-        date=session.date,
-        bayesian_config=bayesian_config,
-    )
+    population_vector, _, _ = get_population_vector(ssp_smoothed=ssp_test)
+    peak_threshold, edge_threshold = pse_thresholds
     pse_events = find_pse_events(
         population_vector=population_vector,
+        peak_threshold=peak_threshold,
+        edge_threshold=edge_threshold,
         ssp=ssp_test,
-        config=bayesian_config,
+        bayesian_config=bayesian_config,
+        mouse_name=session.mouse_name,
+        date=session.date,
     )
 
     if len(pse_events) > 0:
@@ -722,13 +812,13 @@ def decode_for_performance_check(
     Here, a train-test split of the trials has to be done to prevent data leakage!
     Here, the decoding is done on MOBILITY ssp vectors!!! Also, is not trying to detect PSE events!
     """
-    train_size = 0.5  # fraction of trials used to get place cells
+    train_size = 0.7  # fraction of trials used to get place cells
 
     cache_path = (
         SERVER_PATH
         / "viral_caches"
         / "bayesian"
-        / f"{mouse_name}_{date}_decoder_performance_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
+        / f"{mouse_name}_{date}_decoder_performance_bin_size_spatial-{bayesian_config.bin_size_spatial}_train_size-{train_size}.npz"
     )
 
     if os.path.exists(cache_path) and use_cache:
@@ -738,6 +828,7 @@ def decode_for_performance_check(
         result = BayesianDecoderPerformance(**data)
         print("Done checking Bayesian decoder performance")
     else:
+        print("Checking Bayesian decoder performance")
         session, place_cells, place_fields, trials_test = (
             load_and_prepare_session_for_bayesian_decoding(
                 mouse_name=mouse_name,
@@ -751,7 +842,6 @@ def decode_for_performance_check(
         print(
             f"Working on {session.mouse_name}: {session.date} - {session.session_type}"
         )
-        print("Checking Bayesian decoder performance")
 
         # get the ssp vector
         # TODO: is ssp test the correct one? (in terms of convolution)
@@ -864,18 +954,17 @@ def main(
     were kept for further analysis.'
     """
     use_cache = False
-    train_size = 0.5  # fraction of trials used to get place cells (online only)
 
     print(f"Doing {mouse_name} on {date} - analysing {bayesian_config.epoch}")
     prepared_session = load_and_prepare_session_for_bayesian_decoding(
         mouse_name=mouse_name,
         date=date,
-        train_size=train_size,
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
     )
     if not prepared_session:
         return None
+    session, place_cells, place_fields, trials_test = prepared_session
 
     cache_path = get_cache_path(
         mouse_name=mouse_name,
@@ -889,8 +978,38 @@ def main(
     else:
         # if cache doesn't exist, create it
         os.makedirs(cache_path.parent, exist_ok=True)
+
+        # thresholds for peak and edges of candidate PSE events
+        # TODO: perhaps on the ITI as well?
+        threshold_path = (
+            SERVER_PATH
+            / "viral_caches"
+            / "bayesian"
+            / f"{mouse_name}_{date}_online_pse_thresholds.npz"
+        )
+        # TODO: do we want to increase the speed threshold, and should it be below it for 3 consecutive seconds?
+        # phases of immobility
+        """Offline immobility epochs were defined as those in which the animal's velocity,
+        smoothed with a half-second Gaussian kernel, was below 3 cm s-1 for at least 3 consecutive seconds.
+        Online running epochs were defined as those in which the animal's smoothed velocity was above 5 cm s-1 for at least 3 consecutive seconds."""
+        # smoothing is done in compute_grosmark_speed within get_ssp_vectors
+        ssp_config_immobility = SSPConfig(
+            mode="below",
+            speed_threshold=3,
+            n_consecutive_samples=3 * 30,
+        )
+        if os.path.exists(threshold_path):
+            pse_thresholds = load_pse_thresholds_session(threshold_path=threshold_path)
+        else:
+            pse_thresholds = compute_pse_thresholds_session(
+                trials=trials_test,
+                place_cells=place_cells,
+                ssp_config_immobility=ssp_config_immobility,
+                bayesian_config=bayesian_config,
+                threshold_path=threshold_path,
+            )
+
         if "online" in bayesian_config.epoch:
-            session, place_cells, place_fields, trials_test = prepared_session
             print(
                 f"Working on {session.mouse_name}: {session.date} - {session.session_type}"
             )
@@ -900,10 +1019,10 @@ def main(
                 trials_test=trials_test,
                 place_cells=place_cells,
                 place_fields=place_fields,
+                pse_thresholds=pse_thresholds,
                 bayesian_config=bayesian_config,
             )
         else:
-            session, place_cells, place_fields = prepared_session
             print(
                 f"Working on {session.mouse_name}: {session.date} - {session.session_type}"
             )
@@ -911,10 +1030,12 @@ def main(
             if not session.wheel_freeze:
                 print("No wheel freeze for this session, cannot decode any offline")
                 return None
+            pse_thresholds = load_pse_thresholds_session(threshold_path=threshold_path)
             result = decode_offline_epoch(
                 session=session,
                 place_cells=place_cells,
                 place_fields=place_fields,
+                pse_thresholds=pse_thresholds,
                 bayesian_config=bayesian_config,
             )
         if result:
@@ -2200,6 +2321,7 @@ if __name__ == "__main__":
         end=bayesian_config_online.end_spatial,
     )
 
+    # TODO: well, this isn't amazing engineering but are we ok with this?
     bayesian_config_online_ITI = copy.deepcopy(bayesian_config_online)
     bayesian_config_online_ITI.epoch = "online_ITI"
     # TODO: is this ok? place fields on 0-180 cm, decoding for 0-180 cm, but using testing data from 0-inf cms?
@@ -2210,21 +2332,28 @@ if __name__ == "__main__":
     bayesian_config_post = copy.deepcopy(bayesian_config_online)
     bayesian_config_post.epoch = "post"
 
-    plot_mean_decoding_error(
-        bayesian_config=bayesian_config_online, grosmark_config=grosmark_config
-    )
+    # plot_mean_decoding_error(
+    #     bayesian_config=bayesian_config_online, grosmark_config=grosmark_config
+    # )
 
     # plot_f1_score_by_position_per_session(bayesian_config_online, grosmark_config)
     # plot_f1_score_by_position(bayesian_config_online, grosmark_config)
     # plot_decoded_vs_actual_position_rsquare(bayesian_config_online, grosmark_config)
     # plot_decoded_vs_actual_position_f1(bayesian_config_online, grosmark_config)
 
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_pre,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_online,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
+
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_pre,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
     # plot_rZ_scores(
     #     bayesian_config=bayesian_config_online_ITI,
@@ -2233,19 +2362,12 @@ if __name__ == "__main__":
     #     significance=0.05,
     # )
 
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_online,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
-
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_post,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_post,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
     # plot_normalised_rZ_scores(
     #     bayesian_configs={
