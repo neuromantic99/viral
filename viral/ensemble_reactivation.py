@@ -664,7 +664,7 @@ def get_ssp_vectors(
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
     min_chunk_length: int | None = 2 * 30,
-    take_iti_out: bool = False,
+    take_iti_out: bool = True,
 ) -> SSPVectorData:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
@@ -790,13 +790,15 @@ def get_ssp_vectors(
         assert len(trial_start_indices) <= len(trials), "Too many trial start indices"
 
         assert len(ssp_vectors) == len(position_vectors)
-
+        ssp_vectors_stacked = np.hstack(ssp_vectors)
+        position_vectors_stacked = np.hstack(position_vectors)
+        assert ssp_vectors_stacked.shape[1] == position_vectors_stacked.shape[0]
         assert len(chunk_start_indices) == len(
             trial_start_indices
         ), "For each valid trial, there must be an array of chunk start indices"
         return SSPVectorData(
-            ssp_vectors=np.hstack(ssp_vectors),
-            position_vectors=np.hstack(position_vectors),
+            ssp_vectors=ssp_vectors_stacked,
+            position_vectors=position_vectors_stacked,
             trial_start_indices=np.array(trial_start_indices),
             chunk_start_indices=chunk_start_indices,
         )
