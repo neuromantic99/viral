@@ -281,6 +281,7 @@ class BayesianDecoderPerformance(BaseModel):
     f1_score: float
     f1_score_by_position: np.ndarray
     r2: float
+    mean_absolute_error: float
 
     class Config:
         arbitrary_types_allowed = True

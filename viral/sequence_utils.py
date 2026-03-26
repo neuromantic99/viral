@@ -558,6 +558,7 @@ def calculate_radon_replay(
     incorporate_nearby_positions: bool = True,
     nearby_positions: float = 30,
     min_n_bin_perc: float = 100,
+    scoring: Literal["Grosmark", "Denovellis"] = "Grosmark",
 ) -> RadonReplayResult:
     """
     "To determine the precise trajectory content of each sequence, a modified 'line casting' or Radon transformation approach was employed.
@@ -640,7 +641,9 @@ def calculate_radon_replay(
         radon_transform = radon(
             tiled_convolved_posterior_probability_matrix, theta=theta, circle=False
         )
+        radon_transform[~good_lines] = 0
         assert radon_transform.shape[0] == n_radon_points
+
         # normalise by path length like Grosmark but trying to account for the "band"
         # 'score = np.max(sinogram) / (n_time * n_nearby_bins)' from Denovellis
         # TODO: hence, I think Grosmark is picking the best line based on normalised Radon score along the path
@@ -650,19 +653,20 @@ def calculate_radon_replay(
         #     radon_lut.path_length * (2 * n_nearby_bins + 1)
         # )
         # TODO: stay faithful to Grosmark for now?
-        radon_transform_mean = radon_transform / radon_lut.path_length
+        # TODO: probably change the "scoring" flag later
+        if scoring == "Grosmark":
+            radon_transform_mean = radon_transform / radon_lut.path_length
+        elif scoring == "Denovellis":
+            radon_transform_mean = radon_transform / n_time * n_nearby_bins
 
     else:
         radon_transform = radon(
             smoothed_tiled_posterior_probability_matrix, theta=theta, circle=False
         )
+        radon_transform[~good_lines] = 0
         assert radon_transform.shape[0] == n_radon_points
         # normalise by path length
         radon_transform_mean = radon_transform / radon_lut.path_length
-
-    savemat("python_radon_transform.mat", {"radon_transform": radon_transform})
-
-    radon_transform[~good_lines] = 0
 
     # TODO: wait, how is the MATLAB implementation dealing with this? not changing it!
     # No this won't work with np.max because it will take NaN as max
@@ -696,14 +700,14 @@ def calculate_radon_replay(
         else bayesian_config.bin_size_time_offline
     )
     # bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
-    # CircReplayOutput.Radon.slope = CircReplayOutput.Radon.slope...
-    # *(totalMazeLength/synthEvents.params.nSpatialBins)/synthEvents.params.eventBinDuration;
-    # slope_metres_per_sec = (
-    #     slope * (bayesian_config.total_length / n_pos) / (bin_size_time_seconds)
-    # )
-    # n_spatial_bins, n_time_bins = smoothed_tiled_posterior_probability_matrix.shape
+    # # CircReplayOutput.Radon.slope = CircReplayOutput.Radon.slope...
+    # # *(totalMazeLength/synthEvents.params.nSpatialBins)/synthEvents.params.eventBinDuration;
+    # # slope_metres_per_sec = (
+    # #     slope * (bayesian_config.total_length / n_pos) / (bin_size_time_seconds)
+    # # )
+    # # n_spatial_bins, n_time_bins = smoothed_tiled_posterior_probability_matrix.shape
     # slope_metres_per_sec = slope * (
-    #     (bayesian_config.total_length * 2 / n_spatial_bins) / (bin_size_time_seconds)
+    #     (bayesian_config.total_length * 2 / n_pos) / (bin_size_time_seconds)
     # )  # might be correct as I tile the ppm to span two lengths of the track, right?
 
     # slope is done using radian -> i.e., slope is in radian/time bin
@@ -713,8 +717,7 @@ def calculate_radon_replay(
     # r = bayesian_config.total_length * 2  # we tiled the posterior_probability matrix
     # v = slope * r
     # v = v * bin_size_time_seconds
-
-    # slope_metres_per_sec = v  # I am extremely confused, this looks correct in the plot but is really not what Grosmark does
+    # slope_metres_per_sec = v  # I am extremely confused, this looks correct in the plot but is really not what Grosmark does # doesnt look good anymore dont know why
 
     # convert slope in spatial bins/temporal bins to metres/seconds
     metres_per_spatial_bin = bayesian_config.total_length / n_pos
@@ -1074,7 +1077,6 @@ def get_cache_path(
     return (
         SERVER_PATH
         / "viral_caches"
-        / "sequence_detection"
         / "bayesian"
         / f"{mouse_name}_{date}_{bayesian_config.epoch}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
     )

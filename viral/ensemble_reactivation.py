@@ -664,6 +664,7 @@ def get_ssp_vectors(
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
     min_chunk_length: int | None = 2 * 30,
+    take_iti_out: bool = False,
 ) -> SSPVectorData:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
@@ -719,8 +720,9 @@ def get_ssp_vectors(
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-        # Take the ITI out
-        idx_keep = idx_keep & (position < 180)
+        if take_iti_out:
+            # take the ITI out
+            idx_keep = idx_keep & (position < 180)
         frames_keep = np.unique(frame_position[idx_keep])
 
         if frames_keep.size == 0:
