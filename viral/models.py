@@ -222,15 +222,20 @@ class SSPConfig:
 @dataclass
 class SSPVectorData:
     ssp_vectors: np.ndarray  # neural activity data, filtered by speed
-    position_vectors: (
-        np.ndarray
-    )  # actual position of the mouse at the corresponding imaging frame
-    trial_start_indices: (
-        np.ndarray
-    )  # frame indices indicating the start of each trial within the ssp_vectors array
-    chunk_start_indices: List[List[int]]  # nested list of chunk boundaries per trial:
+    position_vectors: Optional[np.ndarray] = (
+        None  # actual position of the mouse at the corresponding imaging frame
+    )
+    trial_start_indices: Optional[np.ndarray] = (
+        None  # frame indices indicating the start of each trial within the ssp_vectors array
+    )
+    chunk_start_indices: Optional[List[List[int]]] = (
+        None  # nested list of chunk boundaries per trial:
+    )
     # outer list is trials;
     # inner lists are trials with the integers indicating the start of each chunk in correspondence to the ssp_vectors array
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 @dataclass
@@ -246,6 +251,8 @@ class BayesianDecodingConfig:
     epoch: Literal["pre", "online", "post"]
     sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
     sigma_online: int  # frames (for the convolving with Gaussian kernel bit)
+    n_samples: int  # number of samples for subsampling during decoding
+    n_neurons: int  # number of neurons to randomly pick per subsample
 
     @computed_field
     @property
@@ -287,8 +294,7 @@ class BayesianDecoderPerformance(BaseModel):
         arbitrary_types_allowed = True
 
 
-@dataclass
-class RadonLUT:
+class RadonLUT(BaseModel):
     path_length: np.ndarray
     xp: np.ndarray
     theta: np.ndarray
@@ -304,6 +310,9 @@ class RadonLUT:
     space_offset_round: np.ndarray
     temp_offset_round: np.ndarray
     temp_offset_round_perc: np.ndarray
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 @dataclass

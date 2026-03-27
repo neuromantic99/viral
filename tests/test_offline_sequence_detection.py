@@ -62,7 +62,11 @@ def test_detect_candidate_events() -> None:
 
     with patch("numpy.std", return_value=std):
         with patch("numpy.mean", return_value=mean):
-            candidate_events = detect_candidate_events(population_vector, config)
+            candidate_events = detect_candidate_events(
+                population_vector,
+                peak_threshold=peak_threshold,
+                edge_threshold=edge_threshold,
+            )
 
     assert candidate_events == expected_events
 
@@ -92,7 +96,11 @@ def test_detect_candidate_events_no_edge_before_peak() -> None:
 
     with patch("numpy.std", return_value=std):
         with patch("numpy.mean", return_value=mean):
-            candidate_events = detect_candidate_events(population_vector, config)
+            candidate_events = detect_candidate_events(
+                population_vector,
+                peak_threshold=peak_threshold,
+                edge_threshold=edge_threshold,
+            )
 
     assert candidate_events == expected_events
 

@@ -30,6 +30,7 @@ from viral.models import (
     BayesianDecodingResult,
     BayesianDecoderPerformance,
     SSPConfig,
+    SSPVectorData,
 )
 
 from viral.utils import get_session_type, get_genotype, mixed_effects, shaded_line_plot
@@ -42,15 +43,17 @@ from viral.ensemble_reactivation import get_ssp_vectors
 from viral.sequence_utils import (
     detect_candidate_events,
     merge_close_events,
+    make_position_bins,
     filter_candidate_events_by_duration,
     filter_candidate_events_by_inter_event_time,
     additional_pc_check,
     construct_xy_by_bin,
     calculate_linear_weighted_correlation,
     calculate_circular_weighted_correlation,
-    check_significance,
+    check_significance_of_correlation,
     bin_for_classification,
     calculate_radon_replay,
+    check_significance_radon_fit,
     get_cache_path,
     load_bayesian_cache,
     save_bayesian_cache,
@@ -224,7 +227,6 @@ def find_pse_events(
     # TODO: if keeping this, then think about the threshold AND rename 'merged_events'
     # reject events that are too close together
     # in Grosmark, events closer than 0.2 seconds together were rejected (30 fps -> 0.2 * 30 = 6)
-    # TODO: maybe -> I will try 0.1 seconds (i.e. 3 frames) to begin with, based on what I have seen in our data
     min_inter_event_time_frames = 6
     merged_events = filter_candidate_events_by_inter_event_time(
         candidate_events, min_inter_event_time_frames
@@ -258,10 +260,12 @@ def find_pse_events(
 
 
 def grosmark_bayesian_decoder(
-    offline_activity_binned: np.ndarray,
+    activity: np.ndarray,
+    positions_test: Optional[np.ndarray],
     place_fields: np.ndarray,
-    config: BayesianDecodingConfig,
-) -> Tuple[np.ndarray, np.ndarray]:
+    bayesian_config: BayesianDecodingConfig,
+    bin_size_time: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     "To perform offline sequence analysis, within-PSE PC activity was binned into non-overlapping two-frame time bins,
     and Bayesian decoding was performed on these two frame bins as described above."
@@ -283,32 +287,54 @@ def grosmark_bayesian_decoder(
     Essentially, this is a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/placeBayesLogBuffered.m
 
     Args:
-        offline_activity_binned: (np.ndarray)   Offline activity binned by time (shape: (n_cells, n_time_bins)).
-        place_field: (np.ndarray)               Place field array for place cells, template for Bayesian decoding (shape: (n_cells, n_spatial_bins)).
-        config: (BayesianDecodingConfig)        A config class containing parameters like bin sizes etc.
+        offline_activity_binned: (np.ndarray)       Offline activity (shape: (n_cells, n_frames)).
+        place_fields: (np.ndarray)                  Place field array for place cells, template for Bayesian decoding (shape: (n_cells, n_spatial_bins)).
+        bayesianconfig: (BayesianDecodingConfig)    A config class containing parameters like bin sizes etc.
     Returns:
-        np.ndarray:                             posterior_probability_matrix (shape: (n_time_bins, n_spatial_bins)).
-        np.ndarray:                             pr_max (spatial bin with the highest posterior probability for that frame; shape: (n_time_bins)).
+        np.ndarray:                                 posterior_probability_matrix (shape: (n_time_bins, n_spatial_bins)).
+        np.ndarray:                                 pr_max (spatial bin with the highest posterior probability for that frame; shape: (n_time_bins)).
 
     Raises:
         AssertionError
     """
+    # TODO: amend docstring
+    T = activity.shape[1]
     assert (
-        offline_activity_binned.shape[0] == place_fields.shape[0]
+        activity.shape[0] == place_fields.shape[0]
     ), "Numbers of place cells in offline activity and place field template do not match!"
 
     buffer = 12
-    # TODO: or copy the frames bin_size rather than the time bin_size from Grosmark?
-    # bin_length_time_online = config.bin_size_time_online / 30  # seconds
-    bin_length_time = (
-        config.bin_size_time_online / 30
-        if "online" in config.epoch
-        else config.bin_size_time_offline / 30
-    )  # seconds
-    n_time_bins = offline_activity_binned.shape[1]
+    bin_length_time = bin_size_time / 30  # seconds
+
+    frames_per_bin = bin_size_time
+    # Build time bins of size frames_per_bin
+    n_time_bins = T // frames_per_bin
+    # TODO: this is a bit redundant and doesnt apply for the performance check, but if bin_size_time is 2 frames,
+    # then a minimum of 10 bins would mean an event length of at least 20 frames, i.e. 0.67 seconds
+    # and as per Grosmark, we want e.g. 0.2 seconds
+    if (
+        # n_time_bins < 10
+        n_time_bins
+        < (bayesian_config.event_duration[0]) / bin_size_time
+    ):  # had to change this as the temporal bin size and settings for event size should allow events with less than 3 temporal bins
+        raise RuntimeError("Too few decoding time bins. Check fps/dt or data length.")
+
+    # reshape into (M, n_timebins, frames_per_bin) and sum -> n_j per timebin
+    activity = activity[:, : n_time_bins * frames_per_bin]
+    # n_counts = E_trim.reshape(M, n_timebins, frames_per_bin).sum(
+    #     axis=2
+    # )  # (M, n_timebins)
+
+    # "true position" for each timebin: mean position across frames
+    if positions_test is not None:
+        pos_trim = positions_test[: n_time_bins * frames_per_bin]
+        true_pos = pos_trim.reshape(n_time_bins, frames_per_bin).mean(axis=1)
+    else:
+        true_pos = None
+
     n_spatial_bins = place_fields.shape[1]
 
-    Cr = offline_activity_binned.T  # shape: (n_time_bins, n_cells)
+    Cr = activity.T  # shape: (n_time_bins, n_cells)
     rate_map = place_fields  # shape: (n_cells, n_spatial_bins)
 
     Cr = Cr * bin_length_time
@@ -336,19 +362,19 @@ def grosmark_bayesian_decoder(
         raise ValueError("NaN values in Pr")
 
     # and only bins with non-zero firing rates were used for offline Bayesian decoding. Posterior probabilities were subsequently normalized to one:
+    # TODO: where did this part go???
 
-    return Pr, pr_max
+    _, centres = make_position_bins(
+        bayesian_config.start_spatial,
+        bayesian_config.end_spatial,
+        bayesian_config.bin_size_spatial,
+    )
+    decoded_pos = centres[pr_max]
+
+    return Pr, pr_max, decoded_pos, true_pos
     # TODO: check the matlab implementation for same result
     # TODO: it is the same!!!
-
-
-def make_position_bins(track_min, track_max, bin_cm):
-    """Courtesy of Daniel Goodwin."""
-    edges = np.arange(track_min, track_max + bin_cm, bin_cm)
-    if edges[-1] < track_max:
-        edges = np.append(edges, track_max)
-    centers = (edges[:-1] + edges[1:]) / 2
-    return edges, centers
+    # TODO: but function was amended 27/03/2026
 
 
 def compute_g_rates(
@@ -426,6 +452,7 @@ def goodwin_bayesian_decoder(
       true_pos_bin:    (n_timebins,) true position (mean pos within timebin)
       t_sec:           (n_timebins,) time in seconds for each timebin (starts at 0)
     """
+    # TODO: if returning the posterior probability matrix, amend docstring
     rng_seed = 123
     rng = np.random.default_rng(rng_seed)
 
@@ -437,7 +464,10 @@ def goodwin_bayesian_decoder(
 
     # Build time bins of size frames_per_bin
     n_timebins = T // frames_per_bin
-    if n_timebins < 10:
+    # if n_timebins < 10:
+    if (
+        n_timebins < 3
+    ):  # had to change this as the temporal bin size and settings for event size should allow events with less than 3 temporal bins
         raise RuntimeError("Too few decoding time bins. Check fps/dt or data length.")
 
     # reshape into (M, n_timebins, frames_per_bin) and sum -> n_j per timebin
@@ -454,7 +484,12 @@ def goodwin_bayesian_decoder(
     t_sec = np.arange(n_timebins) * dt
 
     # mask out timebins whose true pos is out of range (optional)
-    in_rng = np.isfinite(true_pos) & (true_pos >= edges[0]) & (true_pos <= edges[-1])
+    if true_pos:
+        in_rng = (
+            np.isfinite(true_pos) & (true_pos >= edges[0]) & (true_pos <= edges[-1])
+        )
+    else:
+        in_rng = None
 
     # Precompute log(pX)
     log_pX = np.log(np.maximum(pX, 1e-12))
@@ -462,6 +497,7 @@ def goodwin_bayesian_decoder(
     # For each subsample, decode argmax_i log p(x_i|n)
     decoded_pos_samples = np.full((n_samples, n_timebins), np.nan, float)
 
+    post_accumulated = np.zeros((n_pos_bins, n_timebins))
     for s in range(n_samples):
         idx = rng.choice(M, size=n_neurons, replace=False)
 
@@ -485,13 +521,26 @@ def goodwin_bayesian_decoder(
         decoded_bins = np.argmax(log_post, axis=0)  # (n_timebins,)
         decoded_pos_samples[s, :] = centers[decoded_bins]
 
+        # normalise
+        log_post -= np.max(log_post, axis=0, keepdims=True)
+        post = np.exp(log_post)
+        post /= np.sum(post, axis=0, keepdims=True)
+
+        post_accumulated += post
+
+    post_mean = post_accumulated / n_samples
+
     decoded_pos_avg = np.nanmean(decoded_pos_samples, axis=0)
 
     # apply in-range mask as NaN for clean error calc
-    decoded_pos_avg[~in_rng] = np.nan
-    true_pos[~in_rng] = np.nan
+    if in_rng:
+        decoded_pos_avg[~in_rng] = np.nan
+    # true_pos[~in_rng] = np.nan
 
-    return decoded_pos_avg, true_pos, t_sec
+    # TODO: whoops we'll need true pos again I think
+    assert post_mean.T.shape[0] == n_timebins
+    # return decoded_pos_avg, true_pos, t_sec, post_mean.T
+    return decoded_pos_avg, t_sec, post_mean.T
 
 
 def plot_pse_event(
@@ -544,13 +593,26 @@ def plot_pse_event(
         # - 100.0 percent (Grosmark et al. 2021, https://doi.org/10.1038/s41593-021-00920-7)
         # - 1/3 = 33.33 percent (Olafsdottir et al. 2016 downloadable MATLAB code, https://doi.org/10.1038/nn.4291)
         min_n_bin_perc = 100
+        scoring = "Denovellis"
         radon_replay = calculate_radon_replay(
             posterior_probability_matrix=posterior_probability_matrix,
             bayesian_config=bayesian_config,
             incorporate_nearby_positions=incorporate_nearby_positions,
-            nearby_positions=30,
+            nearby_positions=nearby_positions,
             min_n_bin_perc=min_n_bin_perc,
+            scoring=scoring,
         )
+        # radon_replay_significance = check_significance_radon_fit(
+        #     real_radon=radon_replay,
+        #     posterior_probability_matrix=posterior_probability_matrix,
+        #     bayesian_config=bayesian_config,
+        #     incorporate_nearby_positions=incorporate_nearby_positions,
+        #     nearby_positions=nearby_positions,
+        #     min_n_bin_perc=min_n_bin_perc,
+        #     scoring=scoring,
+        #     n_shuffles=2000,
+        #     significance=0.05,
+        # )
 
         y_range = int(
             nearby_positions / bayesian_config.bin_size_spatial
@@ -574,6 +636,9 @@ def plot_pse_event(
         plt.title(
             f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay)"
         )
+        # plt.title(
+        #     f"Circular Weighted Correlation: {corr_coeff:.2f} (p={significance[0]:.4f}) \nRadon Slope: {radon_replay.slope_metres_per_sec:.2f} m/s ({radon_replay.replay_type} replay, p={radon_replay_significance[0]:.4f})"
+        # )
 
     plt.xlabel("Time (seconds)")
     xtick_bins = np.arange(0, n_time + 1, 15)
@@ -613,7 +678,7 @@ def plot_pse_event(
     plt.savefig(
         radon_plot_root
         / session.mouse_name
-        / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_{'chunk' if (bayesian_config.epoch == 'online') else 'event'}_{idx}.png"
+        / f"{session.mouse_name}_{session.date}_{bayesian_config.epoch}_{mode}_event_{idx}.png"
     )
     plt.close()
 
@@ -702,26 +767,59 @@ def load_and_prepare_session_for_bayesian_decoding(
 def decode_events(
     session: Cached2pSession,
     place_fields: np.ndarray,
-    ssp_test: np.ndarray,
+    ssp_test: SSPVectorData,
+    ssp_train: SSPVectorData,
     pse_events: List[Tuple[int, int]],
     bayesian_config: BayesianDecodingConfig,
-    positions_test=Optional[np.ndarray],
+    # positions_test=Optional[np.ndarray],
     significance: float = 0.05,
-    only_plot_significant_events: bool = True,
+    only_plot_significant_events: bool = False,
 ) -> List[DecodedEvent]:
     """Decode and plot events."""
     decoded_events: List[DecodedEvent] = list()
-    pse_activity = [ssp_test[:, start:end] for start, end in pse_events]
+    pse_activity = [ssp_test.ssp_vectors[:, start:end] for start, end in pse_events]
     if "online" in bayesian_config.epoch:
+        positions_test = ssp_test.position_vectors
         actual_positions = [positions_test[start:end] for start, end in pse_events]
     else:
         # in the offline wheel freezes, there is no real position as the mouse is forced to sit, hence return None
         actual_positions = None
     for idx, event in enumerate(pse_activity):
-        posterior_probability_matrix, pr_max = grosmark_bayesian_decoder(
+        # dt = (
+        #     bayesian_config.bin_size_time_online / 30
+        # )  # e.g. 10 frames/bin / 30 frames/sec = 1/3 sec/bin
+
+        # edges, centers = make_position_bins(
+        #     bayesian_config.start_spatial,
+        #     bayesian_config.end_spatial,
+        #     bayesian_config.bin_size_spatial,
+        # )
+        # # Train: compute g_{i,j} and prior pX
+        # g, pX = compute_g_rates(
+        #     E_train=ssp_train.ssp_vectors,
+        #     pos_train=ssp_train.position_vectors,
+        #     edges=edges,
+        # )  # g: (n_pos_bins, M)
+
+        # pr_max, _, posterior_probability_matrix = goodwin_bayesian_decoder(
+        #     E_test=event,
+        #     pos_test=actual_positions[idx] if actual_positions else None,
+        #     g=g,
+        #     pX=pX,
+        #     edges=edges,
+        #     centers=centers,
+        #     frames_per_bin=bayesian_config.bin_size_time_online,
+        #     n_samples=bayesian_config.n_samples,
+        #     n_neurons=bayesian_config.n_neurons,
+        #     dt=dt,
+        # )
+
+        posterior_probability_matrix, pr_max, _, _ = grosmark_bayesian_decoder(
             event,
+            positions_test=None,
             place_fields=place_fields,
-            config=bayesian_config,
+            bin_size_time=bayesian_config.bin_size_time_offline,
+            bayesian_config=bayesian_config,
         )
         linear_corr_coeff = calculate_linear_weighted_correlation(
             posterior_probability_matrix=posterior_probability_matrix,
@@ -731,7 +829,7 @@ def decode_events(
                 total_length=bayesian_config.total_length,
             ),
         )
-        linear_sign = check_significance(
+        linear_sign = check_significance_of_correlation(
             posterior_probability_matrix=posterior_probability_matrix,
             correlation=linear_corr_coeff,
             mode="linear",
@@ -742,7 +840,7 @@ def decode_events(
         circular_corr_coeff = calculate_circular_weighted_correlation(
             posterior_probability_matrix=posterior_probability_matrix,
         )
-        circular_sign = check_significance(
+        circular_sign = check_significance_of_correlation(
             posterior_probability_matrix=posterior_probability_matrix,
             correlation=circular_corr_coeff,
             mode="circular",
@@ -815,7 +913,7 @@ def decode_events(
 
 def decode_online_epoch(
     session: Cached2pSession,
-    trials_test: List[TrialInfo],
+    trials: List[TrialInfo],
     place_cells: np.ndarray,
     place_fields: np.ndarray,
     pse_thresholds: Tuple[float, float],
@@ -828,7 +926,20 @@ def decode_online_epoch(
     # TODO: is ssp test the correct one? (in terms of convolution)
     # phases of mobility
     # ssp_config_mobility = SSPConfig(mode="above", speed_threshold=5, n_consecutive_samples=3*30)
-
+    ssp_config_mobility = SSPConfig(
+        mode="above",
+        speed_threshold=5,
+        n_consecutive_samples=3 * 30,
+    )
+    ssp_train = get_ssp_vectors(
+        trials=trials,
+        place_cells=place_cells,
+        sigma=bayesian_config.sigma_online,
+        mode=ssp_config_mobility.mode,
+        speed_threshold=ssp_config_mobility.speed_threshold,
+        n_consecutive_samples=ssp_config_mobility.n_consecutive_samples,
+        take_iti_out=False if bayesian_config.epoch == "online_ITI" else True,
+    )
     # TODO: do we want to increase the speed threshold, and should it be below it for 3 consecutive seconds?
     # phases of immobility
     """Offline immobility epochs were defined as those in which the animal's velocity,
@@ -840,8 +951,8 @@ def decode_online_epoch(
         speed_threshold=3,
         n_consecutive_samples=3 * 30,
     )
-    ssp_result = get_ssp_vectors(
-        trials=trials_test,
+    ssp_test = get_ssp_vectors(
+        trials=trials,
         place_cells=place_cells,
         sigma=bayesian_config.sigma_online,
         mode=ssp_config_immobility.mode,
@@ -849,27 +960,29 @@ def decode_online_epoch(
         n_consecutive_samples=ssp_config_immobility.n_consecutive_samples,
         take_iti_out=False if bayesian_config.epoch == "online_ITI" else True,
     )
-    ssp_test, positions_test, _, _ = (
-        ssp_result.ssp_vectors,
-        ssp_result.position_vectors,
-        ssp_result.trial_start_indices,
-        ssp_result.chunk_start_indices,
-    )
+    # ssp_test, positions_test, _, _ = (
+    #     ssp_result.ssp_vectors,
+    #     ssp_result.position_vectors,
+    #     ssp_result.trial_start_indices,
+    #     ssp_result.chunk_start_indices,
+    # )
     # TODO: is the use of ssp correct?
-    if ssp_test.size == 0:
+    # if ssp_test.size == 0:
+    if ssp_test.ssp_vectors.size == 0:
         print("Empty ssp vector, returning None")
         return None
-    assert ssp_test.shape[0] == place_cells.shape[0]
+    # assert ssp_test.shape[0] == place_cells.shape[0]
+    assert ssp_test.ssp_vectors.shape[0] == place_cells.shape[0]
 
     population_vector, _, _ = get_population_vector(
-        ssp_smoothed=ssp_test,
+        ssp_smoothed=ssp_test.ssp_vectors,
     )
     peak_threshold, edge_threshold = pse_thresholds
     pse_events = find_pse_events(
         population_vector=population_vector,
         peak_threshold=peak_threshold,
         edge_threshold=edge_threshold,
-        ssp=ssp_test,
+        ssp=ssp_test.ssp_vectors,
         bayesian_config=bayesian_config,
         mouse_name=session.mouse_name,
         date=session.date,
@@ -879,9 +992,10 @@ def decode_online_epoch(
             session=session,
             place_fields=place_fields,
             ssp_test=ssp_test,
+            ssp_train=ssp_train,
             pse_events=pse_events,
             bayesian_config=bayesian_config,
-            positions_test=positions_test,
+            # positions_test=ssp_test.position_vectors,
             significance=0.05,
             only_plot_significant_events=True,
         )
@@ -903,6 +1017,20 @@ def decode_offline_epoch(
     bayesian_config: BayesianDecodingConfig,
 ) -> BayesianDecodingResult:
     """Perform the Bayesian decoding on either of the offline epochs of the session and plot the events."""
+    ssp_config_mobility = SSPConfig(
+        mode="above",
+        speed_threshold=5,
+        n_consecutive_samples=3 * 30,
+    )
+    ssp_train = get_ssp_vectors(
+        trials=session.trials,
+        place_cells=place_cells,
+        sigma=bayesian_config.sigma_online,
+        mode=ssp_config_mobility.mode,
+        speed_threshold=ssp_config_mobility.speed_threshold,
+        n_consecutive_samples=ssp_config_mobility.n_consecutive_samples,
+        take_iti_out=False if bayesian_config.epoch == "online_ITI" else True,
+    )
     # get just the wheel freeze (either pre-run or post-run)
     if bayesian_config.epoch == "pre":
         # pre-training wheel freeze
@@ -915,20 +1043,22 @@ def decode_offline_epoch(
             flu=place_cells, wheel_freeze=session.wheel_freeze
         )
     # TODO: is this sigma correct?
-    ssp_test = gaussian_filter1d(
-        input=offline,
-        sigma=bayesian_config.sigma_offline,
-        axis=1,
+    ssp_test = SSPVectorData(
+        ssp_vectors=gaussian_filter1d(
+            input=offline,
+            sigma=bayesian_config.sigma_offline,
+            axis=1,
+        )
     )
 
     # pre- or post-training wheel freeze
-    population_vector, _, _ = get_population_vector(ssp_smoothed=ssp_test)
+    population_vector, _, _ = get_population_vector(ssp_smoothed=ssp_test.ssp_vectors)
     peak_threshold, edge_threshold = pse_thresholds
     pse_events = find_pse_events(
         population_vector=population_vector,
         peak_threshold=peak_threshold,
         edge_threshold=edge_threshold,
-        ssp=ssp_test,
+        ssp=ssp_test.ssp_vectors,
         bayesian_config=bayesian_config,
         mouse_name=session.mouse_name,
         date=session.date,
@@ -939,8 +1069,10 @@ def decode_offline_epoch(
             session=session,
             place_fields=place_fields,
             ssp_test=ssp_test,
+            ssp_train=ssp_train,
             pse_events=pse_events,
             bayesian_config=bayesian_config,
+            # positions_test=ssp_test.position_vectors,
             significance=0.05,
             only_plot_significant_events=True,
         )
@@ -1037,63 +1169,68 @@ def decode_for_performance_check(
         # TODO: is the use of ssp correct?
         # TODO: would have to be amended for train ssp as well
         if ssp_test.size == 0:
+            # if ssp_test.ssp_vectors.size == 0:
             print("Empty ssp vector, returning None")
             return None
         assert ssp_test.shape[0] == place_cells.shape[0]
+        # assert ssp_test.ssp_vectors.shape[0] == place_cells.shape[0]
 
         # do the actual Bayesian decoding
-        # _, pr_max = grosmark_bayesian_decoder(
-        #     ssp_test,
-        #     place_fields=place_fields,
-        #     config=bayesian_config,
-        # )
+        _, pr_max, decoded_positions, true_positions = grosmark_bayesian_decoder(
+            ssp_test,
+            positions_test=positions_test,
+            place_fields=place_fields,
+            bin_size_time=bayesian_config.bin_size_time_online,
+            bayesian_config=bayesian_config,
+        )
         # TODO: add more comments / explanations
-        n_neurons = 50
-        n_samples = 100
-        dt = (
-            bayesian_config.bin_size_time_online / 30
-        )  # e.g. 10 frames/bin / 30 frames/sec = 1/3 sec/bin
+        # n_neurons = 50
+        # n_samples = 100
+        # dt = (
+        #     bayesian_config.bin_size_time_online / 30
+        # )  # e.g. 10 frames/bin / 30 frames/sec = 1/3 sec/bin
 
-        edges, centers = make_position_bins(
-            bayesian_config.start_spatial,
-            bayesian_config.end_spatial,
-            bayesian_config.bin_size_spatial,
-        )
-        # Train: compute g_{i,j} and prior pX
-        g, pX = compute_g_rates(
-            E_train=ssp_train, pos_train=positions_train, edges=edges
-        )  # g: (n_pos_bins, M)
+        # edges, centers = make_position_bins(
+        #     bayesian_config.start_spatial,
+        #     bayesian_config.end_spatial,
+        #     bayesian_config.bin_size_spatial,
+        # )
+        # # Train: compute g_{i,j} and prior pX
+        # g, pX = compute_g_rates(
+        #     E_train=ssp_train, pos_train=positions_train, edges=edges
+        # )  # g: (n_pos_bins, M)
 
-        decoded_positions, true_positions, _ = goodwin_bayesian_decoder(
-            E_test=ssp_test,
-            pos_test=positions_test,
-            g=g,
-            pX=pX,
-            edges=edges,
-            centers=centers,
-            frames_per_bin=bayesian_config.bin_size_time_online,
-            n_samples=n_samples,
-            n_neurons=n_neurons,
-            dt=dt,
-        )
+        # true_positions = positions_test
+        # decoded_positions, _, _ = goodwin_bayesian_decoder(
+        #     E_test=ssp_test,
+        #     pos_test=positions_test,
+        #     g=g,
+        #     pX=pX,
+        #     edges=edges,
+        #     centers=centers,
+        #     frames_per_bin=bayesian_config.bin_size_time_online,
+        #     n_samples=n_samples,
+        #     n_neurons=n_neurons,
+        #     dt=dt,
+        # )
 
         plot_decoded_vs_actual_position(
-            # positions=positions_test,
-            # pr_max=pr_max,
             positions=true_positions,
-            pr_max=decoded_positions,
+            decoded_positions=decoded_positions,
+            # positions=true_positions,
+            # pr_max=decoded_positions,
             session=session,
             bayesian_config=bayesian_config,
         )
 
         # assert positions_test.shape == pr_max.shape
-        # TODO: are we ok with this binning here?
-        # y_true_bins = bin_for_classification(
-        #     positions_test, bayesian_config=bayesian_config
-        # )
+        # TODO: are we ok with this binning here?? Like really?
+        y_true_bins = bin_for_classification(
+            true_positions, bayesian_config=bayesian_config
+        )
         # y_pred_bins = pr_max  # .astype(int)
-        assert true_positions.shape == decoded_positions.shape
-        y_true_bins = bin_for_classification(true_positions, bayesian_config)
+        # assert true_positions.shape == decoded_positions.shape
+        # y_true_bins = bin_for_classification(true_positions, bayesian_config)
         y_pred_bins = bin_for_classification(decoded_positions, bayesian_config)
         n_bins = int(
             (bayesian_config.end_spatial - bayesian_config.start_spatial)
@@ -1124,6 +1261,7 @@ def decode_for_performance_check(
         r_square = r2_score(y_true=y_true_bins, y_pred=y_pred_bins)
 
         # mae = mean_absolute_error(y_true=y_true_bins, y_pred=y_pred_bins)
+        decoded_positions = pr_max * bayesian_config.bin_size_spatial
         abs_err = np.abs(decoded_positions - true_positions)
         mae = np.nanmean(abs_err)
 
@@ -1220,7 +1358,7 @@ def main(
             print("Analysing online activity")
             result = decode_online_epoch(
                 session=session,
-                trials_test=trials_test,
+                trials=trials_test,
                 place_cells=place_cells,
                 place_fields=place_fields,
                 pse_thresholds=pse_thresholds,
@@ -1274,14 +1412,14 @@ def plot_decoded_and_actual_position(positions: np.ndarray, pr_max: np.ndarray) 
 
 def plot_decoded_vs_actual_position(
     positions: np.ndarray,
-    pr_max: np.ndarray,
+    decoded_positions: np.ndarray,
     session: Cached2pSession,
     bayesian_config: BayesianDecodingConfig,
 ) -> None:
     """Plot the actual position on the x-axis and the decoded position on the y-axis for tested decoder."""
-    assert positions.shape == pr_max.shape
+    assert positions.shape == decoded_positions.shape
     plt.figure(figsize=(5, 5))
-    plt.scatter(positions, pr_max * bayesian_config.bin_size_spatial, s=5, alpha=0.5)
+    plt.scatter(positions, decoded_positions, s=5, alpha=0.5)
     plt.xlabel("Actual Position")
     plt.ylabel("Decoded Position")
     plt.title(
@@ -1341,11 +1479,6 @@ def get_statistics_correlation(
         "mouse_id": [],
         "genotype": [],
     }
-    if "online" in bayesian_config.epoch:
-        result["f1"] = []
-        result["f1_score_by_position"] = []
-        result["r2"] = []
-        result["mean_absolute_error"] = []
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
@@ -1359,8 +1492,8 @@ def get_statistics_correlation(
             if date is None:
                 print("No session found for this stage in SESSIONS_KEEP, skip")
                 continue
-            # use_cache = False
-            use_cache = True
+            use_cache = False
+            # use_cache = True
             cache_path = get_cache_path(
                 mouse_name=mouse_name,
                 date=date,
@@ -1408,22 +1541,6 @@ def get_statistics_correlation(
                     for decoded_event in bayesian.decoded_events
                 ]
             )
-            if "online" in bayesian_config.epoch:
-                decoder_performance = decode_for_performance_check(
-                    mouse_name=mouse_name,
-                    date=date,
-                    bayesian_config=bayesian_config,
-                    grosmark_config=grosmark_config,
-                    use_cache=True,
-                )
-                result["f1"].append(decoder_performance.f1_score)
-                result["f1_score_by_position"].append(
-                    decoder_performance.f1_score_by_position
-                )
-                result["r2"].append(decoder_performance.r2)
-                result["mean_absolute_error"].append(
-                    decoder_performance.mean_absolute_error
-                )
             result["linear_rZ_scores"].append(
                 [
                     decoded_event.linear_rZ_score
@@ -1443,12 +1560,66 @@ def get_statistics_correlation(
     return pd.DataFrame(result)
 
 
+def get_statistics_decoder_performance(
+    genotype: str,
+    bayesian_config: BayesianDecodingConfig,
+    grosmark_config: GrosmarkConfig,
+) -> pd.DataFrame:
+    result = {
+        "f1": [],
+        "f1_score_by_position": [],
+        "r2": [],
+        "mean_absolute_error": [],
+        "stage": [],
+        "epoch": [],
+        "mouse_id": [],
+        "genotype": [],
+    }
+    use_cache = False
+    # use_cache = True
+
+    for mouse_name in SESSIONS_KEEP.keys():
+        if get_genotype(mouse_name) != genotype:
+            continue
+        for stage in ["unsupervised", "learning", "learned"]:
+            print(f"Doing {mouse_name} at {stage} stage")
+            try:
+                date = SESSIONS_KEEP[mouse_name][stage]
+            except KeyError:
+                print("No session found for this stage in SESSIONS_KEEP, skip")
+                continue
+            if date is None:
+                print("No session found for this stage in SESSIONS_KEEP, skip")
+                continue
+
+            decoder_performance = decode_for_performance_check(
+                mouse_name=mouse_name,
+                date=date,
+                bayesian_config=bayesian_config,
+                grosmark_config=grosmark_config,
+                use_cache=use_cache,
+            )
+            result["f1"].append(decoder_performance.f1_score)
+            result["f1_score_by_position"].append(
+                decoder_performance.f1_score_by_position
+            )
+            result["r2"].append(decoder_performance.r2)
+            result["mean_absolute_error"].append(
+                decoder_performance.mean_absolute_error
+            )
+            result["mouse_id"].append(mouse_name)
+            result["genotype"].append(genotype)
+            result["stage"].append(stage)
+            result["epoch"].append(bayesian_config.epoch)
+    return pd.DataFrame(result)
+
+
 def plot_decoded_vs_actual_position_rsquare(
     bayesian_config: BayesianDecodingConfig, grosmark_config: GrosmarkConfig
 ) -> None:
     """Plot the decoder's r2."""
-    wt = get_statistics_correlation("WT", bayesian_config, grosmark_config)
-    nlgf = get_statistics_correlation("NLGF", bayesian_config, grosmark_config)
+    wt = get_statistics_decoder_performance("WT", bayesian_config, grosmark_config)
+    nlgf = get_statistics_decoder_performance("NLGF", bayesian_config, grosmark_config)
     all_data = pd.concat([wt, nlgf], ignore_index=True)
     fig = plt.figure()
     colors = sns.color_palette(n_colors=2)
@@ -1494,10 +1665,10 @@ def plot_decoded_vs_actual_position_rsquare(
 def plot_decoded_vs_actual_position_f1(
     bayesian_config: BayesianDecodingConfig, grosmark_config: GrosmarkConfig
 ) -> None:
-    wt = get_statistics_correlation(
+    wt = get_statistics_decoder_performance(
         "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
-    nlgf = get_statistics_correlation(
+    nlgf = get_statistics_decoder_performance(
         "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
@@ -1583,10 +1754,10 @@ def plot_confusion_matrix_actual_vs_decoded_position(
 def plot_mean_decoding_error(
     bayesian_config: BayesianDecodingConfig, grosmark_config: GrosmarkConfig
 ) -> None:
-    wt = get_statistics_correlation(
+    wt = get_statistics_decoder_performance(
         "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
-    nlgf = get_statistics_correlation(
+    nlgf = get_statistics_decoder_performance(
         "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
@@ -1811,6 +1982,7 @@ def plot_correlation_across_stages_trajectories(
     )
 
 
+# TODO: won't work anymore
 def plot_correlation_against_f1_score_across_stages(
     mode: Literal["linear", "circular"],
     bayesian_config: BayesianDecodingConfig,
@@ -1903,10 +2075,10 @@ def plot_f1_score_by_position_per_session(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
 ) -> None:
-    wt = get_statistics_correlation(
+    wt = get_statistics_decoder_performance(
         "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
-    nlgf = get_statistics_correlation(
+    nlgf = get_statistics_decoder_performance(
         "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
     all_data = pd.concat(
@@ -1969,10 +2141,10 @@ def plot_f1_score_by_position(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
 ) -> None:
-    wt = get_statistics_correlation(
+    wt = get_statistics_decoder_performance(
         "WT", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
-    nlgf = get_statistics_correlation(
+    nlgf = get_statistics_decoder_performance(
         "NLGF", bayesian_config=bayesian_config, grosmark_config=grosmark_config
     )
     all_data = pd.concat(
@@ -2511,13 +2683,15 @@ if __name__ == "__main__":
         event_duration=(6, 90),
         # event_duration=(6, 45),
         # bin_size_time_offline=2,
-        bin_size_time_offline=10,
-        bin_size_time_online=10,
+        bin_size_time_offline=2,  # originally, 2 frames @ 60 fps, now 2 frames @ 30 fps
+        bin_size_time_online=20,  # originally, 20 frames @ 60 fps, now 20 frames @ 30 fps
         start_spatial=0,
         end_spatial=180,
         # bin_size_spatial=5,
         # bin_size_spatial=10,
         bin_size_spatial=15,
+        n_samples=100,
+        n_neurons=50,
     )
     grosmark_config = GrosmarkConfig(
         bin_size=bayesian_config_online.bin_size_spatial,
@@ -2536,103 +2710,108 @@ if __name__ == "__main__":
     bayesian_config_post = copy.deepcopy(bayesian_config_online)
     bayesian_config_post.epoch = "post"
 
+    bayesian_config_decoder = copy.deepcopy(bayesian_config_online)
+    bayesian_config_decoder.epoch = "online"
+    bayesian_config_decoder.bin_size_time_offline = 10
+    bayesian_config_decoder.bin_size_time_online = 10
+
     plot_mean_decoding_error(
-        bayesian_config=bayesian_config_online, grosmark_config=grosmark_config
+        bayesian_config=bayesian_config_decoder, grosmark_config=grosmark_config
     )
 
-    plot_f1_score_by_position_per_session(bayesian_config_online, grosmark_config)
-    plot_f1_score_by_position(bayesian_config_online, grosmark_config)
-    plot_decoded_vs_actual_position_rsquare(bayesian_config_online, grosmark_config)
-    plot_decoded_vs_actual_position_f1(bayesian_config_online, grosmark_config)
+    plot_f1_score_by_position_per_session(bayesian_config_decoder, grosmark_config)
+    plot_f1_score_by_position(bayesian_config_decoder, grosmark_config)
+    plot_decoded_vs_actual_position_rsquare(bayesian_config_decoder, grosmark_config)
+    plot_decoded_vs_actual_position_f1(bayesian_config_decoder, grosmark_config)
 
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_online,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_online,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_pre,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_pre,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_online_ITI,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_online_ITI,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
-    # plot_rZ_scores(
-    #     bayesian_config=bayesian_config_post,
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_rZ_scores(
+        bayesian_config=bayesian_config_post,
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
-    # plot_normalised_rZ_scores(
-    #     bayesian_configs={
-    #         "pre": bayesian_config_pre,
-    #         "online": bayesian_config_online,
-    #         "post": bayesian_config_post,
-    #     },
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    # )
+    plot_normalised_rZ_scores(
+        bayesian_configs={
+            "pre": bayesian_config_pre,
+            "online": bayesian_config_online,
+            "post": bayesian_config_post,
+        },
+        grosmark_config=grosmark_config,
+        mode="circular",
+    )
 
-    # plot_n_significant_events(
-    #     bayesian_configs={
-    #         "pre": bayesian_config_pre,
-    #         "online": bayesian_config_online,
-    #         "post": bayesian_config_post,
-    #     },
-    #     grosmark_config=grosmark_config,
-    #     mode="circular",
-    #     significance=0.05,
-    # )
+    plot_n_significant_events(
+        bayesian_configs={
+            "pre": bayesian_config_pre,
+            "online": bayesian_config_online,
+            "post": bayesian_config_post,
+        },
+        grosmark_config=grosmark_config,
+        mode="circular",
+        significance=0.05,
+    )
 
-    # plot_correlation_across_stages(
-    #     mode="linear",
-    #     bayesian_config=bayesian_config_online,
-    #     grosmark_config=grosmark_config,
-    # )
-    # plot_correlation_across_stages(
-    #     mode="circular",
-    #     bayesian_config=bayesian_config_online,
-    #     grosmark_config=grosmark_config,
-    # )
-    # plot_correlation_across_stages(
-    #     mode="linear",
-    #     bayesian_config=bayesian_config_pre,
-    #     grosmark_config=grosmark_config,
-    # )
-    # plot_correlation_across_stages(
-    #     mode="circular",
-    #     bayesian_config=bayesian_config_pre,
-    #     grosmark_config=grosmark_config,
-    # )
+    plot_correlation_across_stages(
+        mode="linear",
+        bayesian_config=bayesian_config_online,
+        grosmark_config=grosmark_config,
+    )
+    plot_correlation_across_stages(
+        mode="circular",
+        bayesian_config=bayesian_config_online,
+        grosmark_config=grosmark_config,
+    )
+    plot_correlation_across_stages(
+        mode="linear",
+        bayesian_config=bayesian_config_pre,
+        grosmark_config=grosmark_config,
+    )
+    plot_correlation_across_stages(
+        mode="circular",
+        bayesian_config=bayesian_config_pre,
+        grosmark_config=grosmark_config,
+    )
 
-    # plot_correlation_across_stages(
-    #     mode="linear",
-    #     bayesian_config=bayesian_config_post,
-    #     grosmark_config=grosmark_config,
-    # )
-    # plot_correlation_across_stages(
-    #     mode="circular",
-    #     bayesian_config=bayesian_config_post,
-    #     grosmark_config=grosmark_config,
-    # )
+    plot_correlation_across_stages(
+        mode="linear",
+        bayesian_config=bayesian_config_post,
+        grosmark_config=grosmark_config,
+    )
+    plot_correlation_across_stages(
+        mode="circular",
+        bayesian_config=bayesian_config_post,
+        grosmark_config=grosmark_config,
+    )
 
-    # plot_correlation_across_stages_trajectories(
-    #     mode="linear",
-    #     bayesian_config=bayesian_config_online_ITI,
-    #     grosmark_config=grosmark_config,
-    # )
-    # plot_correlation_across_stages_trajectories(
-    #     mode="circular",
-    #     bayesian_config=bayesian_config_online_ITI,
-    #     grosmark_config=grosmark_config,
-    # )
+    plot_correlation_across_stages_trajectories(
+        mode="linear",
+        bayesian_config=bayesian_config_online_ITI,
+        grosmark_config=grosmark_config,
+    )
+    plot_correlation_across_stages_trajectories(
+        mode="circular",
+        bayesian_config=bayesian_config_online_ITI,
+        grosmark_config=grosmark_config,
+    )

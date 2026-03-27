@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import os
 from pathlib import Path
 from typing import List, Tuple, Optional, Literal, cast
 from scipy.ndimage import gaussian_filter1d
@@ -299,7 +300,7 @@ def calculate_circular_weighted_correlation(
     # TODO: for slightly off-diagonal: Python 0.7583601138637951 MATLAB 0.7584 (set pi to 3.14 to prevent pi-precision errors) -> AssertionError -> but fine? what tolerance?
 
 
-def check_significance(
+def check_significance_of_correlation(
     posterior_probability_matrix: np.ndarray,
     correlation: float,
     mode: Literal["linear", "circular"] = "circular",
@@ -361,19 +362,30 @@ def check_significance(
     return empirical_p, empirical_p < significance, rz_score
 
 
+def make_position_bins(track_min, track_max, bin_cm):
+    """Courtesy of Daniel Goodwin."""
+    edges = np.arange(track_min, track_max + bin_cm, bin_cm)
+    if edges[-1] < track_max:
+        edges = np.append(edges, track_max)
+    centers = (edges[:-1] + edges[1:]) / 2
+    return edges, centers
+
+
 def bin_for_classification(
     position_array: np.ndarray,
     bayesian_config: BayesianDecodingConfig,
 ) -> np.ndarray:
-    bin_edges = np.arange(
+    """
+    Assign positions to bins defined by `make_position_bins`.
+    This is the exact inverse of using `centers` for decoding.
+    """
+    edges, _ = make_position_bins(
         bayesian_config.start_spatial,
-        bayesian_config.end_spatial + bayesian_config.bin_size_spatial,
+        bayesian_config.end_spatial,
         bayesian_config.bin_size_spatial,
     )
-
-    bin_indices = np.digitize(position_array, bin_edges) - 1
-
-    return np.clip(bin_indices, 0, len(bin_edges) - 2)
+    bin_indices = np.digitize(position_array, edges) - 1
+    return np.clip(bin_indices, 0, len(edges) - 2)
 
 
 def pol2cart(rho, phi):
@@ -402,150 +414,169 @@ def compute_xp(image_shape: Tuple[int, int]):
     return xp
 
 
-def create_radon_lut(n_spatial_bins: int, n_time_bins: int) -> RadonLUT:
+def create_or_load_radon_lut(
+    n_spatial_bins: int, n_time_bins: int, use_cache: bool
+) -> RadonLUT:
     """
     Essentially a Python implementation of https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/makeRadonLookupTable.m.
+    Loading Radon lookup table from cache is especially helpful when shuffling the best fit line.
     """
-
-    # (spatial_bins, time_bins)
-    template = np.ones((n_spatial_bins, n_time_bins), float)
-
-    # Annoyingly, Grosmark changes theta used back and forth from degrees to radian and vice versa.
-    # From my understanding
-    # (1) all_slopes use radian
-    # (2) radon transform uses degrees
-    # (3) point computation uses radian
-    # (4) the saved theta array uses degrees (which makes sense, because it is later only used to do a radon transform again)
-    theta_degrees = np.arange(0, 179.5, 0.5)
-    theta_radian = np.deg2rad(theta_degrees)
-    all_slopes = 1 / np.tan(theta_radian)
-
-    # In Grosmark's MATLAB implementation, they manually set the offsets for the radon transform to try.
-    # As this would make it integral to have our own implementation of the radon transform and/or mess with the input to the radon function here,
-    # I have decided to not match the MATLAB code exactly but to use the skimage radon implementation instead.
-    # By default, MATLAB is enforcing an odd offset count. I.e., you radon trabsform here could have one more offset than in MATLAB.
-    # radon_transform = radon(template, theta=theta, circle=False)
-    radon_transform = radon(template, theta=theta_degrees, circle=False)
-    # savemat("template_python.mat", {"template": template})
-    # savemat("lut_radon_transform.mat", {"radon_transform": radon_transform})
-
-    # xp = np.arange(-(n_offsets // 2), n_offsets // 2 + n_offsets % 2)
-    xp = compute_xp(image_shape=template.shape)
-    savemat("lut_radon_transform.mat", {"RO": radon_transform, "xp": xp})
-    n_radon_points = radon_transform.shape[0]
-    assert n_radon_points == len(xp)
-    # TODO: in test: assert here not more than one offset more compared to matlab
-    # TODO: perhaps test independently for some posterior probability matrices?
-
-    # % centerX = floor((nTemporalBins(S) + 1)/2);
-    # % centerY = floor((nSpatialBins + 1)/2);
-    center_x = (n_time_bins + 1) // 2
-    center_y = (n_spatial_bins + 1) // 2
-
-    point1x = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
-    point1y = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
-    point2x = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
-    point2y = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
-    for b_idx, b in enumerate(xp):
-        for t_idx, t in enumerate(theta_radian):
-            # pi precision ladies and gentlemen!
-            x, y = pol2cart(b, t)
-
-            x2 = center_x + x
-            y2 = center_y - y
-
-            m = all_slopes[t_idx]
-            intercept = y2 - m * x2
-
-            # % calculate the 4 possible points which may intersect the edge
-            # % of the rectangle defined by the event size:
-            top_edge = n_spatial_bins + 0.5
-            right_edge = n_time_bins + 0.5
-            left_point = np.array([0.0, intercept])
-            right_point = np.array([right_edge, right_edge * m + intercept])
-            bottom_point = np.array([-intercept / m, 0.0])
-            top_point = np.array([(top_edge - intercept) / m, top_edge])
-
-            possible_points = np.vstack(
-                [left_point, right_point, bottom_point, top_point]
-            )
-
-            # % then pick the two points which actually intersect the
-            # % event-rectangle
-            valid = np.isfinite(possible_points).all(axis=1)
-            inside = (
-                (possible_points[:, 0] >= 0)
-                & (possible_points[:, 0] <= right_edge)
-                & (possible_points[:, 1] >= 0)
-                & (possible_points[:, 1] <= top_edge)
-            )
-            k = np.where(valid & inside)[0]
-
-            if k.size >= 2:
-                point1x[b_idx, t_idx] = possible_points[k[0], 0]
-                point1y[b_idx, t_idx] = possible_points[k[0], 1]
-                point2x[b_idx, t_idx] = possible_points[k[1], 0]
-                point2y[b_idx, t_idx] = possible_points[k[1], 1]
-
-    path_length_from_points = np.hypot(point2x - point1x, point2y - point1y)
-    space_offset = point2y - point1y
-    temp_offset = point2x - point1x
-    space_offset_round = np.round(space_offset)
-    temp_offset_round = np.round(temp_offset)
-    temp_offset_round_perc = 100 * np.abs(np.floor(temp_offset)) / n_time_bins
-    # temp_offset_round_perc = 100 * (abs(temp_offset) / n_time_bins)
-
-    # repeat the slope vector for all possible intersections
-    # out{nTemporalBins(S)}.slope = repmat(allSlopes(:)', [length(xp), 1]);
-    slope = np.tile(all_slopes.reshape(1, -1), (len(xp), 1))
-
-    # set all slopes to NaN for which the point1 x is NaN (i.e., set slopes to NaN which did not intersect the image properly)
-    # out{nTemporalBins(S)}.slope(isnan(out{nTemporalBins(S)}.point1X)) = NaN;
-    invalid = np.where(np.isnan(point1x))
-    slope[invalid] = np.nan
-
-    radon_lut = RadonLUT(
-        path_length=radon_transform,
-        xp=xp,
-        theta=theta_degrees,
-        n_radon_points=n_radon_points,
-        point1x=point1x,
-        point1y=point1y,
-        point2x=point2x,
-        point2y=point2y,
-        slope=slope,
-        path_length_from_points=path_length_from_points,
-        space_offset=space_offset,
-        temp_offset=temp_offset,
-        space_offset_round=space_offset_round,
-        temp_offset_round=temp_offset_round,
-        temp_offset_round_perc=temp_offset_round_perc,
+    cache_path = (
+        SERVER_PATH
+        / "viral_caches"
+        / "bayesian"
+        / f"radon_lut_{n_spatial_bins}_{n_time_bins}.npz"
     )
 
-    # 'pathLength', 'xp', 'theta', 'nRadonPoints', 'point1X', 'point1Y', 'point2X', 'point2Y',
-    # 'size', 'slope', 'pathLengthFromPoints', 'spaceOffset', 'tempOffset', 'spaceOffsetRound',
-    # 'tempOffsetRound', 'tempOffsetRoundPerc'
-    savemat(
-        "radon_lut_python.mat",
-        {
-            "pathLength": radon_lut.path_length,
-            "xp": radon_lut.xp,
-            "theta": radon_lut.theta,
-            "nRadonPoints": radon_lut.n_radon_points,
-            "point1X": radon_lut.point1x,
-            "point1Y": radon_lut.point1y,
-            "point2X": radon_lut.point2x,
-            "point2Y": radon_lut.point2y,
-            "size": radon_lut.path_length.shape,
-            "slope": radon_lut.slope,
-            "pathLengthFromPoints": radon_lut.path_length_from_points,
-            "spaceOffset": radon_lut.space_offset,
-            "tempOffset": radon_lut.temp_offset,
-            "spaceOffsetRound": radon_lut.space_offset_round,
-            "tempOffsetRound": radon_lut.temp_offset_round,
-            "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
-        },
-    )
+    if os.path.exists(cache_path) and use_cache:
+        loaded = np.load(cache_path, allow_pickle=True)
+        data = loaded["data"].item()
+        radon_lut = RadonLUT(**data)
+    else:
+        # (spatial_bins, time_bins)
+        template = np.ones((n_spatial_bins, n_time_bins), float)
+
+        # Annoyingly, Grosmark changes theta used back and forth from degrees to radian and vice versa.
+        # From my understanding
+        # (1) all_slopes use radian
+        # (2) radon transform uses degrees
+        # (3) point computation uses radian
+        # (4) the saved theta array uses degrees (which makes sense, because it is later only used to do a radon transform again)
+        theta_degrees = np.arange(0, 179.5, 0.5)
+        theta_radian = np.deg2rad(theta_degrees)
+        all_slopes = 1 / np.tan(theta_radian)
+
+        # In Grosmark's MATLAB implementation, they manually set the offsets for the radon transform to try.
+        # As this would make it integral to have our own implementation of the radon transform and/or mess with the input to the radon function here,
+        # I have decided to not match the MATLAB code exactly but to use the skimage radon implementation instead.
+        # By default, MATLAB is enforcing an odd offset count. I.e., you radon trabsform here could have one more offset than in MATLAB.
+        # radon_transform = radon(template, theta=theta, circle=False)
+        radon_transform = radon(template, theta=theta_degrees, circle=False)
+        # savemat("template_python.mat", {"template": template})
+        # savemat("lut_radon_transform.mat", {"radon_transform": radon_transform})
+
+        # xp = np.arange(-(n_offsets // 2), n_offsets // 2 + n_offsets % 2)
+        xp = compute_xp(image_shape=template.shape)
+        savemat("lut_radon_transform.mat", {"RO": radon_transform, "xp": xp})
+        n_radon_points = radon_transform.shape[0]
+        assert n_radon_points == len(xp)
+        # TODO: in test: assert here not more than one offset more compared to matlab
+        # TODO: perhaps test independently for some posterior probability matrices?
+
+        # % centerX = floor((nTemporalBins(S) + 1)/2);
+        # % centerY = floor((nSpatialBins + 1)/2);
+        center_x = (n_time_bins + 1) // 2
+        center_y = (n_spatial_bins + 1) // 2
+
+        point1x = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
+        point1y = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
+        point2x = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
+        point2y = np.full(shape=(len(xp), len(theta_radian)), fill_value=np.nan)
+        for b_idx, b in enumerate(xp):
+            for t_idx, t in enumerate(theta_radian):
+                # pi precision ladies and gentlemen!
+                x, y = pol2cart(b, t)
+
+                x2 = center_x + x
+                y2 = center_y - y
+
+                m = all_slopes[t_idx]
+                intercept = y2 - m * x2
+
+                # % calculate the 4 possible points which may intersect the edge
+                # % of the rectangle defined by the event size:
+                top_edge = n_spatial_bins + 0.5
+                right_edge = n_time_bins + 0.5
+                left_point = np.array([0.0, intercept])
+                right_point = np.array([right_edge, right_edge * m + intercept])
+                bottom_point = np.array([-intercept / m, 0.0])
+                top_point = np.array([(top_edge - intercept) / m, top_edge])
+
+                possible_points = np.vstack(
+                    [left_point, right_point, bottom_point, top_point]
+                )
+
+                # % then pick the two points which actually intersect the
+                # % event-rectangle
+                valid = np.isfinite(possible_points).all(axis=1)
+                inside = (
+                    (possible_points[:, 0] >= 0)
+                    & (possible_points[:, 0] <= right_edge)
+                    & (possible_points[:, 1] >= 0)
+                    & (possible_points[:, 1] <= top_edge)
+                )
+                k = np.where(valid & inside)[0]
+
+                if k.size >= 2:
+                    point1x[b_idx, t_idx] = possible_points[k[0], 0]
+                    point1y[b_idx, t_idx] = possible_points[k[0], 1]
+                    point2x[b_idx, t_idx] = possible_points[k[1], 0]
+                    point2y[b_idx, t_idx] = possible_points[k[1], 1]
+
+        path_length_from_points = np.hypot(point2x - point1x, point2y - point1y)
+        space_offset = point2y - point1y
+        temp_offset = point2x - point1x
+        space_offset_round = np.round(space_offset)
+        temp_offset_round = np.round(temp_offset)
+        temp_offset_round_perc = 100 * np.abs(np.floor(temp_offset)) / n_time_bins
+        # temp_offset_round_perc = 100 * (abs(temp_offset) / n_time_bins)
+
+        # repeat the slope vector for all possible intersections
+        # out{nTemporalBins(S)}.slope = repmat(allSlopes(:)', [length(xp), 1]);
+        slope = np.tile(all_slopes.reshape(1, -1), (len(xp), 1))
+
+        # set all slopes to NaN for which the point1 x is NaN (i.e., set slopes to NaN which did not intersect the image properly)
+        # out{nTemporalBins(S)}.slope(isnan(out{nTemporalBins(S)}.point1X)) = NaN;
+        invalid = np.where(np.isnan(point1x))
+        slope[invalid] = np.nan
+
+        radon_lut = RadonLUT(
+            path_length=radon_transform,
+            xp=xp,
+            theta=theta_degrees,
+            n_radon_points=n_radon_points,
+            point1x=point1x,
+            point1y=point1y,
+            point2x=point2x,
+            point2y=point2y,
+            slope=slope,
+            path_length_from_points=path_length_from_points,
+            space_offset=space_offset,
+            temp_offset=temp_offset,
+            space_offset_round=space_offset_round,
+            temp_offset_round=temp_offset_round,
+            temp_offset_round_perc=temp_offset_round_perc,
+        )
+
+        # 'pathLength', 'xp', 'theta', 'nRadonPoints', 'point1X', 'point1Y', 'point2X', 'point2Y',
+        # 'size', 'slope', 'pathLengthFromPoints', 'spaceOffset', 'tempOffset', 'spaceOffsetRound',
+        # 'tempOffsetRound', 'tempOffsetRoundPerc'
+        savemat(
+            "radon_lut_python.mat",
+            {
+                "pathLength": radon_lut.path_length,
+                "xp": radon_lut.xp,
+                "theta": radon_lut.theta,
+                "nRadonPoints": radon_lut.n_radon_points,
+                "point1X": radon_lut.point1x,
+                "point1Y": radon_lut.point1y,
+                "point2X": radon_lut.point2x,
+                "point2Y": radon_lut.point2y,
+                "size": radon_lut.path_length.shape,
+                "slope": radon_lut.slope,
+                "pathLengthFromPoints": radon_lut.path_length_from_points,
+                "spaceOffset": radon_lut.space_offset,
+                "tempOffset": radon_lut.temp_offset,
+                "spaceOffsetRound": radon_lut.space_offset_round,
+                "tempOffsetRound": radon_lut.temp_offset_round,
+                "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
+            },
+        )
+        data = radon_lut.model_dump()
+        np.savez(
+            cache_path,
+            data=np.array(data, dtype=object),
+        )
     return radon_lut
 
 
@@ -603,7 +634,9 @@ def calculate_radon_replay(
 
     # TODO: is that right? -> pretty sure this is correct, check
     # https://github.com/losonczylab/Grosmark_NatNeuro_2021/blob/main/demo_CircularReplayAnalysis.m line 107
-    radon_lut = create_radon_lut(n_spatial_bins=n_pos * 2, n_time_bins=n_time)
+    radon_lut = create_or_load_radon_lut(
+        n_spatial_bins=n_pos * 2, n_time_bins=n_time, use_cache=True
+    )
 
     # checked this against MATLAB, it works
     # % minPLength = sqrt((floor(uNS(U).*(minNBinPerc/100)) + 1)^2 + minSpatialDisp^2);
@@ -650,7 +683,6 @@ def calculate_radon_replay(
         #     radon_lut.path_length * (2 * n_nearby_bins + 1)
         # )
         # TODO: stay faithful to Grosmark for now?
-        # TODO: probably change the "scoring" flag later
         if scoring == "Grosmark":
             radon_transform_mean = radon_transform / radon_lut.path_length
         elif scoring == "Denovellis":
@@ -738,6 +770,41 @@ def calculate_radon_replay(
     )
 
 
+def check_significance_radon_fit(
+    real_radon: RadonReplayResult,
+    posterior_probability_matrix: np.ndarray,
+    bayesian_config: BayesianDecodingConfig,
+    incorporate_nearby_positions: bool,
+    nearby_positions: float,
+    min_n_bin_perc: float,
+    scoring: Literal["Grosmark", "Denovellis"],
+    n_shuffles: int = 2000,
+    significance: float = 0.05,
+) -> Tuple[float, bool]:
+    """Same time bin permuation as in check_significance_correlation"""
+    # TODO: Olafsdottir did a stricter shuffle, should we implement that as well?
+    print("Checking radon fit for significance.")
+
+    shuffled_radon_scores = list()
+    for _ in range(n_shuffles):
+        shuffled = shuffle_rows(posterior_probability_matrix)
+        shuffled_radon_scores.append(
+            calculate_radon_replay(
+                posterior_probability_matrix=shuffled,
+                bayesian_config=bayesian_config,
+                incorporate_nearby_positions=incorporate_nearby_positions,
+                nearby_positions=nearby_positions,
+                min_n_bin_perc=min_n_bin_perc,
+                scoring=scoring,
+            ).pos_mean
+        )
+    radon_score_real = np.abs(real_radon.pos_mean)
+    # TODO: it isn't clear, should the raw pse activity or the ppm be shuffled?
+    radon_scores_shuffled = np.abs(shuffled_radon_scores)
+    empirical_p = np.mean(radon_scores_shuffled >= radon_score_real)
+    return empirical_p, empirical_p < significance
+
+
 def test_construct_xy_by_bin_against_matlab() -> None:
     # matlab_xy = np.genfromtxt("xy_matlab.csv", delimiter=",")
     # python_xy = np.genfromtxt("xyByBin_linear.txt", delimiter=" ")
@@ -785,7 +852,7 @@ def compare_radon_against_matlab() -> None:
     ppm = create_dummy_ppm_perfect_diagonal(n_spatial_bins, n_time_bins)
 
     ### compare makeRadonLookupTable
-    create_radon_lut(n_spatial_bins=n_spatial_bins * 2, n_time_bins=n_time_bins)
+    create_or_load_radon_lut(n_spatial_bins=n_spatial_bins * 2, n_time_bins=n_time_bins)
     savemat("ppm_python.mat", {"ppm": ppm})
 
     ### OUTDATED
