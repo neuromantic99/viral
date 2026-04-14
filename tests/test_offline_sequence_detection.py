@@ -9,6 +9,7 @@ from viral.sequence_utils import (
     filter_candidate_events_by_inter_event_time,
     additional_pc_check,
     bin_for_classification,
+    filter_candidate_events_by_speed,
 )
 
 
@@ -280,3 +281,26 @@ def test_bin_for_classification_code_rabbit() -> None:
     binned_positions = bin_for_classification(position_array, bayesian_config)
     expected_binned_positions = np.array([0, 2, 4, 11, 15, 20, 24, 35])
     assert np.array_equal(binned_positions, expected_binned_positions)
+
+
+def test_candidate_events_speed_filter() -> None:
+    positions_vector = np.array(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 60, 80, 100, 120, 130, 140, 150]
+    )
+    candidate_events = [(3, 13), (14, 18)]
+    speed_threshold = 10
+    min_time = 0.7
+
+    expected = [(3, 13)]
+
+    with patch(
+        "viral.sequence_utils.compute_speed_grosmark",
+        side_effect=lambda position: np.append(
+            np.diff(position), np.diff(position)[-1]
+        ),
+    ):
+        result = filter_candidate_events_by_speed(
+            candidate_events, positions_vector, speed_threshold, min_time
+        )
+    assert result == expected
+    # TODO: bother to test edge cases?

@@ -248,7 +248,7 @@ class BayesianDecodingConfig:
     start_spatial: int  # cms
     end_spatial: int  # cms
     bin_size_spatial: int  # cms
-    epoch: Literal["pre", "online", "post"]
+    epoch: Literal["pre", "task", "task_ITI", "post"]
     sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
     sigma_online: int  # frames (for the convolving with Gaussian kernel bit)
     n_samples: int  # number of samples for subsampling during decoding
@@ -277,7 +277,7 @@ class DecodedEvent(BaseModel):
 
 
 class BayesianDecodingResult(BaseModel):
-    epoch: Literal["pre", "online", "online_ITI", "post"]
+    epoch: Literal["pre", "task", "task_ITI", "post"]
     decoded_events: List[DecodedEvent]
 
     class Config:

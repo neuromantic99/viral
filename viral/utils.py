@@ -1,7 +1,7 @@
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import Dict, List, Literal, Tuple, TypeVar, Any
+from typing import Dict, List, Literal, Tuple, TypeVar, Any, Optional
 import warnings
 from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
@@ -14,7 +14,8 @@ from scipy import stats
 from scipy.ndimage import gaussian_filter1d
 
 from scipy.linalg import issymmetric
-from viral.constants import ENCODER_TICKS_PER_TURN
+from viral.constants import ENCODER_TICKS_PER_TURN, SPREADSHEET_ID
+from viral.gsheets_importer import gsheet2df
 from viral.models import (
     Cached2pSession,
     SpeedPosition,
@@ -428,7 +429,7 @@ def get_rewarded_texture_for_session_type(
 
 
 class SessionType(Enum):
-    REVERSAl = "reversal"
+    REVERSAL = "reversal"
     RECALL_REVERSAL = "recall_reversal"
     RECALL = "recall"
     LEARNING = "learning"
@@ -441,7 +442,7 @@ def get_session_type(session_name: str) -> str:
         return (
             SessionType.RECALL_REVERSAL.value
             if "recall" in session_name
-            else SessionType.REVERSAl.value
+            else SessionType.REVERSAL.value
         )
     elif "recall" in session_name:
         return SessionType.RECALL.value
@@ -707,3 +708,17 @@ def interpolate_nans_vector(arr: np.ndarray) -> np.ndarray:
     x = np.arange(len(arr))
     arr[nans] = np.interp(x[nans], x[~nans], arr[~nans])
     return arr
+
+
+def session_has_wheel_freeze(date: str, metadata: pd.DataFrame) -> bool:
+    """Return whether the session on the given date has a wheel freeze."""
+    row = metadata[metadata["Date"] == date]
+    if row.empty:
+        raise ValueError(f"No metadata for session on {date}")
+    try:
+        wheel_blocked = str(row["Wheel blocked?"].iloc[0]).lower() == "yes"
+    except KeyError as e:
+        print(f"No column 'Wheel blocked?' found: {e}")
+        print("Wheel blocked set to None")
+        wheel_blocked = None
+    return wheel_blocked

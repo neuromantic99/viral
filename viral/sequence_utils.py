@@ -19,6 +19,7 @@ from viral.models import (
     RadonReplayResult,
 )
 from viral.utils import shuffle_rows
+from viral.ensemble_reactivation import compute_speed_grosmark
 
 
 def detect_candidate_events(
@@ -146,6 +147,24 @@ def additional_pc_check(
         pcs_with_spikes = np.where(np.sum(ssp[:, start_idx:end_idx], axis=1) >= 1)[0]
         if len(pcs_with_spikes) >= 5:
             additionally_checked.append((start_idx, end_idx))
+    return additionally_checked
+
+
+def filter_candidate_events_by_speed(
+    candidate_events: List[Tuple[int, int]],
+    positions_vector: np.ndarray,
+    speed_threshold: float,
+    min_time: float = 0.9,
+) -> List[Tuple[int, int]]:
+    """Filter out events that do not have at least min_time (between 0 and 1) of the time above the given min_speed."""
+    additionally_checked = list()
+    for start_idx, end_idx in candidate_events:
+        speed_vector = compute_speed_grosmark(positions_vector[start_idx:end_idx])
+        below = speed_vector < speed_threshold
+        if (np.where(below)[0].shape[0] / speed_vector.shape[0]) >= min_time:
+            additionally_checked.append((start_idx, end_idx))
+        else:
+            continue
     return additionally_checked
 
 
@@ -363,7 +382,7 @@ def check_significance_of_correlation(
 
 
 def make_position_bins(track_min, track_max, bin_cm):
-    """Courtesy of Daniel Goodwin."""
+    """Code by Daniel Goodwin."""
     edges = np.arange(track_min, track_max + bin_cm, bin_cm)
     if edges[-1] < track_max:
         edges = np.append(edges, track_max)
@@ -724,10 +743,8 @@ def calculate_radon_replay(
 
     # TODO: this seems off: check units
     bin_size_time_frames = (
-        bayesian_config.bin_size_time_online
-        if "online" in bayesian_config.epoch
-        else bayesian_config.bin_size_time_offline
-    )
+        bayesian_config.bin_size_time_offline
+    )  # always decode offline events in the pre, post or run epoch
     # bin_size_time_seconds = bin_size_time_frames / 30  # imaging @30 fps
     # # CircReplayOutput.Radon.slope = CircReplayOutput.Radon.slope...
     # # *(totalMazeLength/synthEvents.params.nSpatialBins)/synthEvents.params.eventBinDuration;
@@ -1138,11 +1155,12 @@ def get_cache_path(
     date: str,
     bayesian_config: BayesianDecodingConfig,
 ) -> Path:
+    # TODO: after deciding on either Grosmark/Climer decoder remove the flag
     return (
         SERVER_PATH
         / "viral_caches"
         / "bayesian"
-        / f"{mouse_name}_{date}_{bayesian_config.epoch}_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
+        / f"{mouse_name}_{date}_{bayesian_config.epoch}_CLIMER_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
     )
 
 
