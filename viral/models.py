@@ -234,9 +234,6 @@ class SSPVectorData:
     # outer list is trials;
     # inner lists are trials with the integers indicating the start of each chunk in correspondence to the ssp_vectors array
 
-    class Config:
-        arbitrary_types_allowed = True
-
 
 @dataclass
 class BayesianDecodingConfig:

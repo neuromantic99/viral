@@ -153,14 +153,14 @@ def additional_pc_check(
 def filter_candidate_events_by_speed(
     candidate_events: List[Tuple[int, int]],
     positions_vector: np.ndarray,
-    speed_threshold: float,
+    max_speed: float,
     min_time: float = 0.9,
 ) -> List[Tuple[int, int]]:
-    """Filter out events that do not have at least min_time (between 0 and 1) of the time above the given min_speed."""
+    """Filter out events that do not have at least min_time (between 0 and 1) of the time below the given max_speed."""
     additionally_checked = list()
     for start_idx, end_idx in candidate_events:
         speed_vector = compute_speed_grosmark(positions_vector[start_idx:end_idx])
-        below = speed_vector < speed_threshold
+        below = speed_vector < max_speed
         if (np.where(below)[0].shape[0] / speed_vector.shape[0]) >= min_time:
             additionally_checked.append((start_idx, end_idx))
         else:
@@ -419,7 +419,6 @@ def pol2cart(rho, phi):
     return (x, y)
 
 
-# TODO: how could we confirm this is correct??
 def compute_xp(image_shape: Tuple[int, int]):
     """
     xp is radial coordinate in radon transformation but never explicitly defined in the MATLAB code.
@@ -851,7 +850,6 @@ def create_dummy_ppm_more_complex(n_spatial_bins: int, n_time_bins: int) -> np.n
 
 def compare_radon_against_matlab() -> None:
     bayesian_config = BayesianDecodingConfig(
-        en_bloc=True,  #
         epoch="pre",
         sigma_offline=1,  #
         sigma_online=1,  #
@@ -1164,7 +1162,6 @@ def get_cache_path(
     )
 
 
-# TODO: make this more general?
 def save_bayesian_cache(cache_path: Path, result: BayesianDecodingResult) -> None:
     """Save Bayesian decoding result to cache."""
     data = result.model_dump()
@@ -1174,7 +1171,6 @@ def save_bayesian_cache(cache_path: Path, result: BayesianDecodingResult) -> Non
     )
 
 
-# TODO: make this more general?
 def load_bayesian_cache(cache_path: Path) -> BayesianDecodingResult:
     """Load Bayesian decoding result from cached file."""
     loaded = np.load(cache_path, allow_pickle=True)

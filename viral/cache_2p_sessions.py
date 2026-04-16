@@ -714,7 +714,7 @@ def main() -> None:
                 session_type = row["Type"].lower()
                 wheel_blocked = session_has_wheel_freeze(
                     date=date,
-                    metadata=row,
+                    metadata=metadata,
                 )
                 if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
                     print(f"Skipping {mouse_name} {date} as already exists")

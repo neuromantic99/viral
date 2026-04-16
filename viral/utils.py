@@ -716,7 +716,7 @@ def session_has_wheel_freeze(date: str, metadata: pd.DataFrame) -> bool:
     if row.empty:
         raise ValueError(f"No metadata for session on {date}")
     try:
-        wheel_blocked = str(row["Wheel blocked?"].iloc[0]).lower() == "yes"
+        wheel_blocked = str(row["Wheel blocked?"].iloc[0]).lower() in {"yes", "true"}
     except KeyError as e:
         print(f"No column 'Wheel blocked?' found: {e}")
         print("Wheel blocked set to None")
