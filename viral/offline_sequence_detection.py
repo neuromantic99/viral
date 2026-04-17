@@ -3016,12 +3016,12 @@ if __name__ == "__main__":
     )
 
     time.sleep(60)
-    plot_correlation_across_stages_trajectories(
+    plot_correlation_across_stages(
         mode="linear",
         bayesian_config=bayesian_config_task_ITI,
         grosmark_config=grosmark_config,
     )
-    plot_correlation_across_stages_trajectories(
+    plot_correlation_across_stages(
         mode="circular",
         bayesian_config=bayesian_config_task_ITI,
         grosmark_config=grosmark_config,

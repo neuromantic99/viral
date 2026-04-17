@@ -693,7 +693,10 @@ def mixed_effects(
         groups=df[group_name],
     )
     mdf = md.fit(reml=False)
-    assert mdf.converged, "MixedLM did not converge for resting baseline firing rates"
+    assert mdf.converged, (  
+            f"MixedLM did not converge for {dependent_var} ~ C({independent_var}), "  
+            f"grouped by {group_name}"  
+    )
     return mdf.pvalues
 
 
@@ -719,6 +722,6 @@ def session_has_wheel_freeze(date: str, metadata: pd.DataFrame) -> bool:
         wheel_blocked = str(row["Wheel blocked?"].iloc[0]).lower() in {"yes", "true"}
     except KeyError as e:
         print(f"No column 'Wheel blocked?' found: {e}")
-        print("Wheel blocked set to None")
-        wheel_blocked = None
+        print("Wheel blocked set to False")
+        wheel_blocked = False
     return wheel_blocked
