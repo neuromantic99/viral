@@ -7,6 +7,7 @@ from viral.models import TrialInfo, WheelFreeze
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
+    below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
@@ -35,6 +36,11 @@ def load_imaging_data(
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+    assert (
+        s2p_path / "full_grosmark_oasis_preprocessed.npy"
+    ).exists(), (
+        "This session may have been processed with an old version of the oasis pipeline"
+    )
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
 
@@ -51,7 +57,7 @@ def get_ITI_start_frame(trial: TrialInfo) -> int:
             assert (
                 state.closest_frame_start is not None
             ), "Imaging data not added to trial"
-            return state.closest_frame_start
+            return int(state.closest_frame_start)
     raise ValueError("ITI state not found")
 
 
@@ -67,6 +73,12 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
 
 
 def trial_is_imaged(trial: TrialInfo) -> bool:
+
+    # This is a temporary fix for JB015 "2024-10-24".
+    # The imaging was started during the spacers, which assigns the wrong tiff epoch to the trial.
+    # TODO: come up with a proper fix for this.
+    if trial.trial_start_time == 3502.912709:
+        return False
     trigger_panda_states = [
         state
         for state in trial.states_info
@@ -153,16 +165,25 @@ def compute_windowed_speed_1d(
 
 
 def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
+    """
+    "Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3 cm s-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5 cm s-1 for at least 3 consecutive seconds."
+    (Grosmark et al., 2021)
+
+    Compute speed and smooth it like Grosmark et al., 2021.
+    """
     speed = np.diff(position)
     # Keep the lengths the same
     speed = np.append(speed, (speed[-1]))
     speed = speed * 30
+    # imaging at 30 fps, after sync, position and speed are effectively 30 Hz -> 0.5 s * 30 -s
     speed = gaussian_filter1d(speed, sigma=0.5 * 30)
     assert speed.shape == position.shape
     return speed
 
 
-def get_online_position_and_frames(
+def get_resting_position_and_frames(
     trial: TrialInfo, wheel_circumference: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
@@ -185,20 +206,51 @@ def get_online_position_and_frames(
     assert len(position) == len(frame_position)
 
     speed = compute_speed_grosmark(position)
-
-    speed_threshold = 5
-    idx_keep = above_threshold_for_n_consecutive_samples(
+    speed_threshold = 1
+    idx_keep = below_threshold_for_n_consecutive_samples(
         speed, threshold=speed_threshold, n_samples=3 * 30
     )
-
-    # Removed the first two seconds as there is a bit of a burst of activity when the screens come on, which is not unexpected
-    # TODO: Not sure this is working correctly
-    trial_onset = frame_position < frame_position[0] + 60
-    # TODO: Make sure this works
-    idx_keep = idx_keep & ~trial_onset
-
     position = position[idx_keep]
     frame_position = frame_position[idx_keep]
+    assert len(position) == len(frame_position)
+
+    return position, frame_position
+
+
+def get_online_position_and_frames(
+    trial: TrialInfo,
+    wheel_circumference: float,
+    threshold_speed: bool = True,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
+    for at least 3 consecutive seconds."""
+
+    position = degrees_to_cm(
+        np.array(trial.rotary_encoder_position), wheel_circumference
+    )
+
+    frame_position = np.array(
+        [
+            state.closest_frame_start
+            for state in trial.states_info
+            if state.name
+            in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+        ]
+    )
+    assert len(position) == len(frame_position)
+
+    if threshold_speed:
+        # TODO: just for debugging
+        # print("thresholding speed for getting traces for online epochs")
+        speed = compute_speed_grosmark(position)
+        speed_threshold = 5
+        idx_keep = above_threshold_for_n_consecutive_samples(
+            speed, threshold=speed_threshold, n_samples=3 * 30
+        )
+        position = position[idx_keep]
+        frame_position = frame_position[idx_keep]
 
     assert len(position) == len(frame_position)
 
@@ -209,12 +261,13 @@ def activity_trial_position(
     trial: TrialInfo,
     flu: np.ndarray,
     wheel_circumference: float,
-    smoothing_sigma: float | None,
     bin_size: int = 1,
     start: int = 10,
     max_position: int = 170,
     verbose: bool = False,
     do_shuffle: bool = False,
+    threshold_speed: bool = True,
+    bin_occupancy_divide: bool = False,
 ) -> np.ndarray:
     """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
     trial: TrialInfo
@@ -227,8 +280,9 @@ def activity_trial_position(
     verbose: if True, print the binning information
     do_shuffle: if True, shuffle the rows of the dff matrix
     """
+    assert trial_is_imaged(trial), "Trial does not have imaging data"
     position, frame_position = get_online_position_and_frames(
-        trial, wheel_circumference
+        trial, wheel_circumference, threshold_speed
     )
 
     dff_position_list = []
@@ -240,19 +294,19 @@ def activity_trial_position(
             ]
         )
         dff_bin = flu[:, frame_idx_bin]
+        if bin_occupancy_divide:
+            dff_bin = (
+                dff_bin / len(frame_idx_bin) if len(frame_idx_bin) > 0 else dff_bin
+            )
 
         if verbose:
             print(f"bin_start: {bin_start}")
             print(f"bin_end: {bin_start + bin_size}")
             print(f"n_frames in bin: {len(frame_idx_bin)}")
 
-        # Does this answer David's question? We're averaging over the frames in the bin. So does this constitute controlling for speed?
         dff_position_list.append(np.mean(dff_bin, axis=1))
 
     dff_position = np.array(dff_position_list).T
-
-    if smoothing_sigma is not None:
-        dff_position = gaussian_filter1d(dff_position, sigma=smoothing_sigma, axis=1)
 
     if do_shuffle:
         return shuffle_rows(dff_position)
@@ -361,13 +415,19 @@ def get_ITI_matrix(
     matrices = []
 
     for trial in trials:
-        assert trial.trial_end_closest_frame is not None
+        end_ITI = (
+            trial.trial_end_closest_frame
+            if trial.trial_end_closest_frame is not None
+            else [state for state in trial.states_info if state.name == "ITI"][
+                0
+            ].closest_frame_end
+        )
 
         # This would be good, but in practise it rarely occurs
         # if running_during_ITI(trial):
         #     continue
 
-        chunk = flu[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
+        chunk = flu[:, get_ITI_start_frame(trial) : end_ITI]
 
         n_frames = chunk.shape[1]
 

@@ -45,6 +45,7 @@ from viral.utils import (
     get_tiff_paths_in_directory,
     time_list_to_datetime,
     uk_to_utc,
+    session_has_wheel_freeze,
 )
 
 from viral.correct_2p_sessions import apply_session_correction
@@ -704,19 +705,17 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB034"]:
+    for mouse_name in ["JB036"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
                 print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
-                try:
-                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
-                    print("Wheel blocked set to None")
-                    wheel_blocked = None
+                wheel_blocked = session_has_wheel_freeze(
+                    date=date,
+                    metadata=metadata,
+                )
                 if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
                     print(f"Skipping {mouse_name} {date} as already exists")
                     continue

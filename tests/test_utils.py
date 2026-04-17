@@ -10,6 +10,7 @@ from viral.models import SpeedPosition
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
+    below_threshold_for_n_consecutive_samples,
     get_speed_positions,
     has_n_consecutive_trues,
     remove_consecutive_ones,
@@ -251,6 +252,11 @@ def test_get_session_type() -> None:
     result = get_session_type(session_name)
     assert result == expected
 
+    session_name = "Unsupervised learning day 1"
+    expected = "unsupervised"
+    result = get_session_type(session_name)
+    assert result == expected
+
 
 def test_array_bin_mean() -> None:
     input = np.array([[1, 2, 3, 4], [4, 5, 6, 7]])
@@ -379,6 +385,47 @@ def test_above_threshold_for_n_consecutive_samples_edge_cases() -> None:
 
     arr[95:100] = 1
     result = above_threshold_for_n_consecutive_samples(arr, threshold=0.2, n_samples=5)
+    expected = np.zeros(100)
+    expected[95:100] = 1
+    assert np.array_equal(result, expected)
+
+
+def test_below_threshold_for_n_consecutive_samples_all_below() -> None:
+    arr = np.zeros(100)
+
+    for n_samples in range(1, 100):
+        result = below_threshold_for_n_consecutive_samples(
+            arr, threshold=0.5, n_samples=n_samples
+        )
+        assert np.array_equal(result, np.ones(100))
+
+
+def test_below_threshold_for_n_consecutive_samples_chunk_in_the_middle() -> None:
+    arr = np.ones(100)
+    arr[10:20] = 0.2
+    arr[30:33] = 0.2
+
+    result = below_threshold_for_n_consecutive_samples(arr, threshold=0.5, n_samples=5)
+    expected = np.zeros(100)
+    expected[10:20] = 1
+    assert np.array_equal(result, expected)
+
+    result = below_threshold_for_n_consecutive_samples(arr, threshold=0.5, n_samples=2)
+    expected = np.zeros(100)
+    expected[10:20] = 1
+    expected[30:33] = 1
+    assert np.array_equal(result, expected)
+
+
+def test_below_threshold_for_n_consecutive_samples_edge_cases() -> None:
+    arr = np.ones(100)
+    arr[98:99] = 0.2
+    result = below_threshold_for_n_consecutive_samples(arr, threshold=0.5, n_samples=5)
+    expected = np.zeros(100)
+    assert np.array_equal(result, expected)
+
+    arr[95:100] = 0.2
+    result = below_threshold_for_n_consecutive_samples(arr, threshold=0.5, n_samples=5)
     expected = np.zeros(100)
     expected[95:100] = 1
     assert np.array_equal(result, expected)
