@@ -716,7 +716,7 @@ def load_and_prepare_session_for_bayesian_decoding(
     mouse_name: str,
     date: str,
     grosmark_config: GrosmarkConfig,
-    use_train_test_split: bool = False,
+    split_strategy: Literal["rewarded_unrewarded", "odd_even", "random"] = None,
     train_size: Optional[float] = 0.5,
 ) -> Tuple[Cached2pSession, np.ndarray, np.ndarray, List[TrialInfo]] | None:
     """
@@ -747,16 +747,29 @@ def load_and_prepare_session_for_bayesian_decoding(
     )
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
-    if use_train_test_split:
+    if split_strategy is not None:
         # "training" the decoder (= place cell template) on a subset of trials
-        trials_train, trials_test = train_test_split(
-            trials, train_size=train_size, random_state=42
-        )
+        if split_strategy == "random":
+            trials_train, trials_test = train_test_split(
+                trials, train_size=train_size, random_state=42
+            )
+        elif split_strategy == "rewarded_unrewarded":
+            trials_train = [trial for trial in trials if trial.texture_rewarded]
+            trials_test = [trial for trial in trials if not trial.texture_rewarded]
+        elif split_strategy == "odd_even":
+            trials_train = list()
+            trials_test = list()
+            for idx, trial in enumerate(trials):
+                # train on odd trials
+                if idx % 2 != 0:
+                    trials_train.append(trial)
+                # test on even trials
+                else:
+                    trials_test.append(trial)
     else:
         # otherwise just keep all imaged trials
         trials_train = trials
         trials_test = trials
-        use_train_test_split = False
 
     # do the place cell template only on the training data!
     # the decoder is trained by supplying it with place cells and their respective place fields!
@@ -772,15 +785,13 @@ def load_and_prepare_session_for_bayesian_decoding(
         config=grosmark_config,
         bin_occupancy_divide=True,
         plot=False,
-        cache_file_additional_info={
-            "train-test-split" if use_train_test_split else None
-        },  # careful there when changing the train-test-split!!!
+        cache_file_additional_info=split_strategy,  # careful there when changing the train-test-split from e.g. 0.7 to something else
     )
     print(f"Time to get place cells: {time.time() - t0}")
     place_cells = spks[pcs_mask, :]
     pcs_place_fields = place_fields[pcs_mask, :]
 
-    if not use_train_test_split:
+    if split_strategy is None:
         return session, place_cells, pcs_place_fields, trials_test
     else:
         return session, place_cells, pcs_place_fields, trials_test, trials_train
@@ -939,6 +950,113 @@ def decode_events(
     return decoded_events
 
 
+def decode_task_immobility(
+    session: Cached2pSession,
+    trials: List[TrialInfo],
+    place_cells: np.ndarray,
+    bayesian_config: BayesianDecodingConfig,
+) -> None:
+    """Perform the Bayesian decoding on phases of immobility within the task."""
+    # get the ssp vector
+    # TODO: is ssp test the correct one? (in terms of convolution)
+    # phases of mobility
+    # ssp_config_mobility = SSPConfig(mode="above", speed_threshold=5, n_consecutive_samples=3*30)
+    ssp_config_mobility = SSPConfig(
+        mode="above",
+        speed_threshold=5,
+        n_consecutive_samples=3 * 30,
+    )
+    ssp_train = get_ssp_vectors(
+        trials=trials,
+        place_cells=place_cells,
+        sigma=bayesian_config.sigma_online,
+        mode=ssp_config_mobility.mode,
+        speed_threshold=ssp_config_mobility.speed_threshold,
+        n_consecutive_samples=ssp_config_mobility.n_consecutive_samples,
+        take_iti_out=False if bayesian_config.epoch == "task_ITI" else True,
+    )
+    # phases of immobility
+    """Offline immobility epochs were defined as those in which the animal's velocity,
+    smoothed with a half-second Gaussian kernel, was below 3 cm s-1 for at least 3 consecutive seconds.
+    Online running epochs were defined as those in which the animal's smoothed velocity was above 5 cm s-1 for at least 3 consecutive seconds."""
+    # smoothing is done in compute_grosmark_speed within get_ssp_vectors
+    # TODO: OLT/TRADITIONAL speed thresholding approach!!!!!
+    ssp_config_immobility = SSPConfig(
+        mode="below",
+        speed_threshold=3,
+        n_consecutive_samples=3 * 30,
+    )
+    ssp_test = get_ssp_vectors(
+        trials=trials,
+        place_cells=place_cells,
+        sigma=bayesian_config.sigma_online,
+        mode=ssp_config_immobility.mode,
+        speed_threshold=ssp_config_immobility.speed_threshold,
+        n_consecutive_samples=ssp_config_immobility.n_consecutive_samples,
+        take_iti_out=False if bayesian_config.epoch == "task_ITI" else True,
+    )
+    # TODO: is the use of ssp correct?
+    assert ssp_test.ssp_vectors.shape[0] == place_cells.shape[0]
+
+    plot_path = PLOT_PATH / "bayesian" / "task_immobility" / session.mouse_name
+    if not os.path.exists(plot_path):
+        os.makedirs(plot_path)
+
+    n_neurons = 50
+    n_samples = 100
+    dt = (
+        bayesian_config.bin_size_time_offline / 30
+    )  # e.g. 10 frames/bin / 30 frames/sec = 1/3 sec/bin
+
+    edges, centers = make_position_bins(
+        bayesian_config.start_spatial,
+        bayesian_config.end_spatial,
+        bayesian_config.bin_size_spatial,
+    )
+    # Train: compute g_{i,j} and prior pX
+    g, pX = compute_g_rates(
+        E_train=ssp_train.ssp_vectors, pos_train=ssp_train.position_vectors, edges=edges
+    )  # g: (n_pos_bins, M)
+
+    chunk_start_indices = ssp_test.chunk_start_indices
+    chunk_start_indices_flat = [
+        idx for sublist in chunk_start_indices for idx in sublist
+    ]
+    chunk_start_indices_flat.append(
+        ssp_test.ssp_vectors.shape[1]
+    )  # add end index for easier iteration
+    current_session_chunk_idx = 0
+    for trial_i, trial_chunk_start_indices in enumerate(chunk_start_indices):
+        for chunk_i, start in enumerate(trial_chunk_start_indices):
+            end = chunk_start_indices_flat[current_session_chunk_idx + 1]
+
+            chunk_ssp = ssp_test.ssp_vectors[:, start:end]
+            chunk_pos = ssp_test.position_vectors[start:end]
+
+            # true_positions = positions_test
+            _, _, _, posterior_probability_matrix = climer_bayesian_decoder(
+                E_test=chunk_ssp,
+                pos_test=chunk_pos,
+                g=g,
+                pX=pX,
+                edges=edges,
+                centers=centers,
+                frames_per_bin=bayesian_config.bin_size_time_offline,
+                n_samples=n_samples,
+                n_neurons=n_neurons,
+                dt=dt,
+            )
+            plot_ppm(
+                grosmark_config=grosmark_config,
+                session=session,
+                posterior_probability_matrix=posterior_probability_matrix,
+                temporal_bin_size=bayesian_config.bin_size_time_offline,
+                decoder_plot_path=plot_path,
+                additional_plot_info=f"trial{trial_i}_chunk{chunk_i}",
+            )
+            current_session_chunk_idx += 1
+
+
 def decode_task_epoch(
     session: Cached2pSession,
     trials: List[TrialInfo],
@@ -989,18 +1107,11 @@ def decode_task_epoch(
         n_consecutive_samples=ssp_config_immobility.n_consecutive_samples,
         take_iti_out=False if bayesian_config.epoch == "task_ITI" else True,
     )
-    # ssp_test, positions_test, _, _ = (
-    #     ssp_result.ssp_vectors,
-    #     ssp_result.position_vectors,
-    #     ssp_result.trial_start_indices,
-    #     ssp_result.chunk_start_indices,
-    # )
     # TODO: is the use of ssp correct?
     # if ssp_test.size == 0:
     if ssp_test.ssp_vectors.size == 0:
         print("Empty ssp vector, returning None")
         return None
-    # assert ssp_test.shape[0] == place_cells.shape[0]
     assert ssp_test.ssp_vectors.shape[0] == place_cells.shape[0]
 
     population_vector, _, _ = get_population_vector(
@@ -1125,6 +1236,7 @@ def decode_for_performance_check(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["rewarded_unrewarded", "odd_even", "random"] = "odd_even",
     use_cache: bool = False,
 ) -> BayesianDecoderPerformance:
     """
@@ -1135,14 +1247,14 @@ def decode_for_performance_check(
     Here, a train-test split of the trials has to be done to prevent data leakage!
     Here, the decoding is done on MOBILITY ssp vectors!!! Also, is not trying to detect PSE events!
     """
-    train_size = 0.7  # fraction of trials used to get place cells
+    train_size = 0.7  # fraction of trials used to get place cells (if split_strategy == "random")
 
     # TODO: after deciding on either Grosmark/Climer decoder remove the flag
     cache_path = (
         SERVER_PATH
         / "viral_caches"
         / "bayesian"
-        / f"{mouse_name}_{date}_decoder_performance_CLIMER_bin_size_time-{temporal_bin_size}_bin_size_spatial_-{bayesian_config.bin_size_spatial}_train_size-{train_size}.npz"
+        / f"{mouse_name}_{date}_decoder_performance_CLIMER_bin_size_time-{temporal_bin_size}_bin_size_spatial_-{bayesian_config.bin_size_spatial}_{split_strategy}.npz"
     )
 
     if os.path.exists(cache_path) and use_cache:
@@ -1157,7 +1269,7 @@ def decode_for_performance_check(
                 mouse_name=mouse_name,
                 date=date,
                 grosmark_config=grosmark_config,
-                use_train_test_split=True,
+                split_strategy=split_strategy,
                 train_size=train_size,
             )
         )
@@ -1248,21 +1360,20 @@ def decode_for_performance_check(
             )
         )
 
-        # TODO: for debugging, remove later
-        if not os.path.exists(
+        decoder_plot_path = (
             PLOT_PATH
             / "bayesian"
             / "decoded_vs_actual"
-            / f"temporal_bin_size_{temporal_bin_size}"
-        ):
-            os.makedirs(
-                PLOT_PATH
-                / "bayesian"
-                / "decoded_vs_actual"
-                / f"temporal_bin_size_{temporal_bin_size}"
-            )
+            / f"temporal_bin_size_{temporal_bin_size}_{split_strategy}"
+        )
+        if not os.path.exists(decoder_plot_path):
+            os.makedirs(decoder_plot_path)
         plot_ppm(
-            grosmark_config, session, posterior_probability_matrix, temporal_bin_size
+            grosmark_config,
+            session,
+            posterior_probability_matrix,
+            temporal_bin_size,
+            decoder_plot_path,
         )
 
         plot_decoded_vs_actual_position(
@@ -1271,6 +1382,7 @@ def decode_for_performance_check(
             session=session,
             bayesian_config=bayesian_config,
             temporal_bin_size=temporal_bin_size,
+            decoder_plot_path=decoder_plot_path,
         )
 
         # assert positions_test.shape == pr_max.shape
@@ -1294,6 +1406,7 @@ def decode_for_performance_check(
             session=session,
             bayesian_config=bayesian_config,
             temporal_bin_size=temporal_bin_size,
+            decoder_plot_path=decoder_plot_path,
         )
 
         # TODO: think about the averaging method
@@ -1336,24 +1449,45 @@ def plot_ppm(
     session: Cached2pSession,
     posterior_probability_matrix: np.ndarray,
     temporal_bin_size: int,
+    decoder_plot_path: Path,
+    additional_plot_info: Optional[str] = None,
 ):
-    plt.figure(figsize=(10, 8))
-    plt.imshow(
+    n_time, n_pos = posterior_probability_matrix.shape
+    fig, ax = plt.subplots()
+    im = ax.imshow(
         posterior_probability_matrix.T,
         vmin=0,
         vmax=np.max(posterior_probability_matrix) * 1.1,
         aspect="auto",
     )
-    plt.colorbar()
-    n_time, n_pos = posterior_probability_matrix.shape
-    plt.xlabel("Time (minutes)")
-    # for now setting one tick per minute, i.e. every 1800 frames
-    xtick_frames = np.arange(0, n_time * temporal_bin_size + 1, 1800)
-    xtick_bins = xtick_frames / temporal_bin_size
-    xtick_labels = np.round(xtick_frames / (30 * 60), 2)
-    plt.xticks(xtick_bins, xtick_labels)
-    plt.ylabel("Position (centimetres)")
-    plt.yticks(
+    fig.colorbar(im, ax=ax, label="Posterior Probability")
+    time_seconds = n_time * temporal_bin_size / 30
+    if time_seconds >= 65:
+        width = max(10, n_time / 100)
+        fig.set_size_inches(width, 6, forward=True)
+        ax.set_xlabel("Time (minutes)")
+        # for now setting one tick per minute, i.e. every 1800 frames
+        xtick_frames = np.arange(0, n_time * temporal_bin_size + 1, 1800)
+        xtick_bins = xtick_frames / temporal_bin_size
+        xtick_labels = np.round(xtick_frames / (30 * 60), 2)
+        ax.set_xticks(xtick_bins)
+        ax.set_xticklabels(xtick_labels)
+        ax.set_ylabel("Position (centimetres)")
+    else:
+        width = max(10, n_time / 10)
+        fig.set_size_inches(width, 6, forward=True)
+        ax.set_xlabel("Time (seconds)")
+        if time_seconds >= 3:
+            # one tick per second
+            xtick_frames = np.arange(0, n_time * temporal_bin_size + 1, 30)
+        else:
+            # one tick every half second
+            xtick_frames = np.arange(0, n_time * temporal_bin_size + 1, 15)
+        xtick_bins = xtick_frames / temporal_bin_size
+        xtick_labels = np.round(xtick_frames / 30, 2)
+        ax.set_xticks(xtick_bins)
+        ax.set_xticklabels(xtick_labels)
+    ax.set_yticks(
         np.linspace(0, n_pos - 1, 5),
         [
             str(x)
@@ -1362,14 +1496,14 @@ def plot_ppm(
             )
         ],
     )
-    # plt.ylim(0, n_pos - 1)
-    plt.ylim(n_pos - 1, 0)
-    plt.savefig(
-        PLOT_PATH
-        / "bayesian"
-        / "decoded_vs_actual"
-        / f"temporal_bin_size_{temporal_bin_size}"
-        / f"{session.mouse_name}_{session.date}_ppm_test_trials.png"
+    ax.set_ylim(n_pos - 1, 0)
+    fig.savefig(
+        (
+            decoder_plot_path
+            / f"{session.mouse_name}_{session.date}_ppm_{additional_plot_info}.png"
+            if additional_plot_info
+            else f"{session.mouse_name}_{session.date}_ppm.png"
+        ),
     )
 
 
@@ -1522,6 +1656,7 @@ def plot_decoded_vs_actual_position(
     session: Cached2pSession,
     bayesian_config: BayesianDecodingConfig,
     temporal_bin_size: int,
+    decoder_plot_path: Path,
 ) -> None:
     """Plot the actual position on the x-axis and the decoded position on the y-axis for tested decoder."""
     assert positions.shape == decoded_positions.shape
@@ -1532,14 +1667,9 @@ def plot_decoded_vs_actual_position(
     plt.title(
         f"{session.mouse_name} {session.date} - {session.session_type} (online) \n({bayesian_config.bin_size_time_offline} frames per bin, {bayesian_config.bin_size_spatial} cm per bin)"
     )
-    plot_root = (
-        PLOT_PATH
-        / "bayesian"
-        / "decoded_vs_actual"
-        / f"temporal_bin_size_{temporal_bin_size}"
-    )
     plt.savefig(
-        plot_root / f"{session.mouse_name}_{session.date}_decoded_vs_actual.png",
+        decoder_plot_path
+        / f"{session.mouse_name}_{session.date}_decoded_vs_actual.png",
         dpi=300,
     )
 
@@ -1679,6 +1809,7 @@ def get_statistics_decoder_performance(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["odd_even", "rewarded_unrewarded", "random"],
 ) -> pd.DataFrame:
     result = {
         "f1": [],
@@ -1706,13 +1837,13 @@ def get_statistics_decoder_performance(
             if date is None:
                 print("No session found for this stage in SESSIONS_KEEP, skip")
                 continue
-
             decoder_performance = decode_for_performance_check(
                 mouse_name=mouse_name,
                 date=date,
                 bayesian_config=bayesian_config,
                 grosmark_config=grosmark_config,
                 temporal_bin_size=temporal_bin_size,
+                split_strategy=split_strategy,
                 use_cache=use_cache,
             )
             result["f1"].append(decoder_performance.f1_score)
@@ -1734,13 +1865,22 @@ def plot_decoded_vs_actual_position_rsquare(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["odd_even", "rewarded_unrewarded", "random"],
 ) -> None:
     """Plot the decoder's r2."""
     wt = get_statistics_decoder_performance(
-        "WT", bayesian_config, grosmark_config, temporal_bin_size
+        "WT",
+        bayesian_config,
+        grosmark_config,
+        temporal_bin_size,
+        split_strategy=split_strategy,
     )
     nlgf = get_statistics_decoder_performance(
-        "NLGF", bayesian_config, grosmark_config, temporal_bin_size
+        "NLGF",
+        bayesian_config,
+        grosmark_config,
+        temporal_bin_size,
+        split_strategy=split_strategy,
     )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
     fig = plt.figure()
@@ -1785,7 +1925,7 @@ def plot_decoded_vs_actual_position_rsquare(
         PLOT_PATH
         / "bayesian"
         / "decoded_vs_actual"
-        / f"temporal_bin_size_{temporal_bin_size}"
+        / f"temporal_bin_size_{temporal_bin_size}_{split_strategy}"
         / "rsquare.png"
     )
 
@@ -1794,18 +1934,21 @@ def plot_decoded_vs_actual_position_f1(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["odd_even", "rewarded_unrewarded", "random"],
 ) -> None:
     wt = get_statistics_decoder_performance(
         "WT",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     nlgf = get_statistics_decoder_performance(
         "NLGF",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
@@ -1869,6 +2012,7 @@ def plot_confusion_matrix_actual_vs_decoded_position(
     session: Cached2pSession,
     bayesian_config: BayesianDecodingConfig,
     temporal_bin_size: int,
+    decoder_plot_path: Path,
     plot_landmarks: bool = True,
 ) -> None:
     landmarks_cm = [45, 90, 135]
@@ -1887,14 +2031,8 @@ def plot_confusion_matrix_actual_vs_decoded_position(
         f"{session.mouse_name} {session.date} - {get_session_type(session.session_type)} (online) \n({bayesian_config.bin_size_time_offline} frames per bin, {bayesian_config.bin_size_spatial} cm per bin)"
     )
     plt.tight_layout()
-    plot_root = (
-        PLOT_PATH
-        / "bayesian"
-        / "decoded_vs_actual"
-        / f"temporal_bin_size_{temporal_bin_size}"
-    )
     plt.savefig(
-        plot_root / f"{session.mouse_name}_{session.date}_confusion_matrix.png",
+        decoder_plot_path / f"{session.mouse_name}_{session.date}_confusion_matrix.png",
         dpi=300,
     )
 
@@ -1903,18 +2041,21 @@ def plot_mean_decoding_error(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["odd_even", "rewarded_unrewarded", "random"],
 ) -> None:
     wt = get_statistics_decoder_performance(
         "WT",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     nlgf = get_statistics_decoder_performance(
         "NLGF",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     all_data = pd.concat([wt, nlgf], ignore_index=True)
 
@@ -1965,7 +2106,7 @@ def plot_mean_decoding_error(
         PLOT_PATH
         / "bayesian"
         / "decoded_vs_actual"
-        / f"temporal_bin_size_{temporal_bin_size}"
+        / f"temporal_bin_size_{temporal_bin_size}_{split_strategy}"
         / "mean_absolute_error.png"
     )
 
@@ -2235,18 +2376,21 @@ def plot_f1_score_by_position_per_session(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["odd_even", "rewarded_unrewarded", "random"],
 ) -> None:
     wt = get_statistics_decoder_performance(
         "WT",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     nlgf = get_statistics_decoder_performance(
         "NLGF",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     all_data = pd.concat(
         [wt, nlgf],
@@ -2300,7 +2444,7 @@ def plot_f1_score_by_position_per_session(
                 PLOT_PATH
                 / "bayesian"
                 / "decoded_vs_actual"
-                / f"temporal_bin_size_{temporal_bin_size}"
+                / f"temporal_bin_size_{temporal_bin_size}_{split_strategy}"
                 / f"{mouse}_f1_score_by_position.png"
             )
 
@@ -2309,18 +2453,21 @@ def plot_f1_score_by_position(
     bayesian_config: BayesianDecodingConfig,
     grosmark_config: GrosmarkConfig,
     temporal_bin_size: int,
+    split_strategy: Literal["odd_even", "rewarded_unrewarded", "random"],
 ) -> None:
     wt = get_statistics_decoder_performance(
         "WT",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     nlgf = get_statistics_decoder_performance(
         "NLGF",
         bayesian_config=bayesian_config,
         grosmark_config=grosmark_config,
         temporal_bin_size=temporal_bin_size,
+        split_strategy=split_strategy,
     )
     all_data = pd.concat(
         [wt, nlgf],
@@ -2900,29 +3047,74 @@ if __name__ == "__main__":
     bayesian_config_decoder = copy.deepcopy(bayesian_config_task)
     bayesian_config_decoder.epoch = "task"
 
-    for temporal_bin_size in {
-        bayesian_config_decoder.bin_size_time_online,
-        bayesian_config_decoder.bin_size_time_offline,
-    }:
-        plot_mean_decoding_error(
-            bayesian_config=bayesian_config_decoder,
-            grosmark_config=grosmark_config,
-            temporal_bin_size=temporal_bin_size,
-        )
+    # # how to split trials for training and testing the decoder
+    # SPLIT_STRATEGY: Literal["odd_even", "rewarded_unrewarded", "random"] = (
+    #     "rewarded_unrewarded"  # "odd_even"
+    # )
+    # for temporal_bin_size in {
+    #     bayesian_config_decoder.bin_size_time_online,
+    #     bayesian_config_decoder.bin_size_time_offline,
+    # }:
+    #     plot_mean_decoding_error(
+    #         bayesian_config=bayesian_config_decoder,
+    #         grosmark_config=grosmark_config,
+    #         temporal_bin_size=temporal_bin_size,
+    #         split_strategy=SPLIT_STRATEGY,
+    #     )
 
-        plot_f1_score_by_position_per_session(
-            bayesian_config_decoder, grosmark_config, temporal_bin_size
-        )
-        plot_f1_score_by_position(
-            bayesian_config_decoder, grosmark_config, temporal_bin_size
-        )
-        plot_decoded_vs_actual_position_rsquare(
-            bayesian_config_decoder, grosmark_config, temporal_bin_size
-        )
-        plot_decoded_vs_actual_position_f1(
-            bayesian_config_decoder, grosmark_config, temporal_bin_size
-        )
+    #     plot_f1_score_by_position_per_session(
+    #         bayesian_config_decoder,
+    #         grosmark_config,
+    #         temporal_bin_size,
+    #         split_strategy=SPLIT_STRATEGY,
+    #     )
+    #     plot_f1_score_by_position(
+    #         bayesian_config_decoder,
+    #         grosmark_config,
+    #         temporal_bin_size,
+    #         split_strategy=SPLIT_STRATEGY,
+    #     )
+    #     plot_decoded_vs_actual_position_rsquare(
+    #         bayesian_config_decoder,
+    #         grosmark_config,
+    #         temporal_bin_size,
+    #         split_strategy=SPLIT_STRATEGY,
+    #     )
+    #     plot_decoded_vs_actual_position_f1(
+    #         bayesian_config_decoder,
+    #         grosmark_config,
+    #         temporal_bin_size,
+    #         split_strategy=SPLIT_STRATEGY,
+    #     )
 
+    for mouse_name in SESSIONS_KEEP.keys():
+        metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
+        for stage in ["unsupervised", "learning", "learned"]:
+            print(f"Doing {mouse_name} at {stage} stage")
+            try:
+                date = SESSIONS_KEEP[mouse_name][stage]
+            except KeyError:
+                print("No session found for this stage in SESSIONS_KEEP, skip")
+                continue
+            if date is None:
+                print("No session found for this stage in SESSIONS_KEEP, skip")
+                continue
+            prepared_session = load_and_prepare_session_for_bayesian_decoding(
+                mouse_name=mouse_name,
+                date=date,
+                grosmark_config=grosmark_config,
+            )
+            if not prepared_session:
+                continue
+            session, place_cells, place_fields, trials_test = prepared_session
+            decode_task_immobility(
+                session=session,
+                trials=trials_test,
+                place_cells=place_cells,
+                bayesian_config=bayesian_config_task_ITI,
+            )
+
+    1 / 0
     # start decoding the "task" epoch (the pse thresholds are used for both of the wheel freeze epochs)
 
     plot_rZ_scores(

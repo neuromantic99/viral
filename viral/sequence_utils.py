@@ -475,7 +475,7 @@ def create_or_load_radon_lut(
 
         # xp = np.arange(-(n_offsets // 2), n_offsets // 2 + n_offsets % 2)
         xp = compute_xp(image_shape=template.shape)
-        savemat("lut_radon_transform.mat", {"RO": radon_transform, "xp": xp})
+        # savemat("lut_radon_transform.mat", {"RO": radon_transform, "xp": xp})
         n_radon_points = radon_transform.shape[0]
         assert n_radon_points == len(xp)
         # TODO: in test: assert here not more than one offset more compared to matlab
@@ -569,27 +569,27 @@ def create_or_load_radon_lut(
         # 'pathLength', 'xp', 'theta', 'nRadonPoints', 'point1X', 'point1Y', 'point2X', 'point2Y',
         # 'size', 'slope', 'pathLengthFromPoints', 'spaceOffset', 'tempOffset', 'spaceOffsetRound',
         # 'tempOffsetRound', 'tempOffsetRoundPerc'
-        savemat(
-            "radon_lut_python.mat",
-            {
-                "pathLength": radon_lut.path_length,
-                "xp": radon_lut.xp,
-                "theta": radon_lut.theta,
-                "nRadonPoints": radon_lut.n_radon_points,
-                "point1X": radon_lut.point1x,
-                "point1Y": radon_lut.point1y,
-                "point2X": radon_lut.point2x,
-                "point2Y": radon_lut.point2y,
-                "size": radon_lut.path_length.shape,
-                "slope": radon_lut.slope,
-                "pathLengthFromPoints": radon_lut.path_length_from_points,
-                "spaceOffset": radon_lut.space_offset,
-                "tempOffset": radon_lut.temp_offset,
-                "spaceOffsetRound": radon_lut.space_offset_round,
-                "tempOffsetRound": radon_lut.temp_offset_round,
-                "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
-            },
-        )
+        # savemat(
+        #     "radon_lut_python.mat",
+        #     {
+        #         "pathLength": radon_lut.path_length,
+        #         "xp": radon_lut.xp,
+        #         "theta": radon_lut.theta,
+        #         "nRadonPoints": radon_lut.n_radon_points,
+        #         "point1X": radon_lut.point1x,
+        #         "point1Y": radon_lut.point1y,
+        #         "point2X": radon_lut.point2x,
+        #         "point2Y": radon_lut.point2y,
+        #         "size": radon_lut.path_length.shape,
+        #         "slope": radon_lut.slope,
+        #         "pathLengthFromPoints": radon_lut.path_length_from_points,
+        #         "spaceOffset": radon_lut.space_offset,
+        #         "tempOffset": radon_lut.temp_offset,
+        #         "spaceOffsetRound": radon_lut.space_offset_round,
+        #         "tempOffsetRound": radon_lut.temp_offset_round,
+        #         "tempOffsetRoundPerc": radon_lut.temp_offset_round_perc,
+        #     },
+        # )
         data = radon_lut.model_dump()
         np.savez(
             cache_path,

@@ -179,6 +179,8 @@ def get_place_cells(
             / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
         )
 
+    print(get_cache_path("place_threshold"))
+
     if use_cache and get_cache_path("place_threshold").exists():
         print("Found cached place threshold")
         place_threshold = np.load(get_cache_path("place_threshold"))
