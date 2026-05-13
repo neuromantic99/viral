@@ -819,15 +819,6 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
         / "full_grosmark_oasis_preprocessed.npy"
     ).exists(), f"Correct oasis not run for {mouse} on {date}"
 
-    assert (
-        TIFF_UMBRELLA
-        / date
-        / mouse
-        / "suite2p"
-        / "plane0"
-        / "full_grosmark_oasis_preprocessed.npy"
-    ).exists(), f"Correct oasis not run for {mouse} on {date}"
-
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
 

@@ -7,6 +7,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
 from pydantic import ValidationError
+from scipy import stats
 
 from ensemble_reactivation import main as ensemble_main
 from viral.grosmark_analysis import get_place_cells
@@ -40,6 +41,14 @@ from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
 from viral.multiple_sessions import parse_session_number
 from viral.sessions_keep import SESSIONS_KEEP
 from viral.single_session import load_data
+from viral.utils import (
+    boxplot,
+    degrees_to_cm,
+    get_genotype,
+    get_speed_positions,
+    get_wheel_circumference_from_rig,
+    shaded_line_plot,
+)
 
 CACHE_PATH = HERE.parent / "data" / "cached_2p"
 
@@ -49,7 +58,6 @@ CACHE_PATH = HERE.parent / "data" / "cached_2p"
 def get_session(
     mouse_name: str, date: str, metadata: pd.DataFrame, stage: str
 ) -> Cached2pSession:
-
     path = CACHE_PATH / f"{mouse_name}_{date}.json"
     try:
         cached_session = Cached2pSession.model_validate_json(path.read_text())
@@ -105,7 +113,6 @@ def get_session(
 
 
 def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
-
     results = [None, None, None]
     for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
         path = CACHE_PATH / f"{mouse_name}_{SESSIONS_KEEP[mouse_name][stage]}.json"

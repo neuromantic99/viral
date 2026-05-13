@@ -81,7 +81,8 @@ def check_if_tiff_is_broken(tiff_path: Path) -> bool:
 def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
     """Looks for broken tiff files in a given session. It then caches all tiff metadata and saves fixed tiff files."""
     tiffs_dir = TIFF_UMBRELLA / date / mouse_name
-    tiff_files = sorted(tiffs_dir.glob("*.tif*"))
+    tiff_files = sorted(tiffs_dir.glob("*.tif")) + sorted(tiffs_dir.glob("*.tiff"))
+    tiff_files_checked = list()
     broken_tiffs = list()
     if cache_metadata:
         stack_lengths = list()
@@ -91,6 +92,7 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
         broken = check_if_tiff_is_broken(f)
         if broken:
             broken_tiffs.append(f)
+            tiff_files_checked.append((f, True))
             if cache_metadata:
                 stack_length, epoch, timestamps = extract_metadata_broken_tiff(f)
                 stack_lengths.append(stack_length)
@@ -98,6 +100,7 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
                 check_no_dropped_frames(timestamps)
                 all_tiff_timestamps.extend(timestamps)
         else:
+            tiff_files_checked.append((f, False))
             if cache_metadata:
                 stack_length, epoch, timestamps = extract_metadata(
                     ScanImageTiffReader(str(f))

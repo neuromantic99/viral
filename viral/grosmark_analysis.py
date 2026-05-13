@@ -224,9 +224,6 @@ def get_place_cells(
         place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
         np.save(get_cache_path("place_threshold"), place_threshold)
 
-    # if plot:
-    #     plot_speed(session, rewarded, config)
-
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
 
