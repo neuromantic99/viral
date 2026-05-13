@@ -4,10 +4,11 @@ from pathlib import Path
 import sys
 import warnings
 from matplotlib import pyplot as plt
-from scipy.stats import zscore, pearsonr
+from scipy.stats import median_abs_deviation, zscore, pearsonr, ttest_ind
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
+import seaborn as sns
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -276,12 +277,15 @@ def plot_speed(
         and (rewarded is None or trial.texture_rewarded == rewarded)
     ]
 
+    plt.figure()
     shaded_line_plot(
         np.array(speeds),
         x_axis=np.arange(config.start, config.end, config.bin_size),
         color="red",
         label="speed",
     )
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Speed (cm/s)")
 
 
 def offline_correlations(
@@ -399,6 +403,8 @@ def get_offline_correlation_matrix(
     if plot:
         plt.figure()
         plt.title("shuffled" if do_shuffle else "real")
+        if do_shuffle:
+            np.random.shuffle(corrs)
         plt.imshow(
             gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
             vmin=0,
@@ -451,9 +457,13 @@ def correlations_vs_peak_distance(
         y.append(np.mean(cell_corrs[in_bin]))
 
     if plot:
-        plt.plot(x, y, color=colour, label=label)
-    r, p = pearsonr(x, y)
-    return r, p
+        plt.figure()
+        plt.plot(x, y)
+        r, p = pearsonr(x, y)
+
+        plt.xlabel("Distance between peaks")
+        plt.ylabel("Average pearson correlation")
+        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
