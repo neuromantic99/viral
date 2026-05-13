@@ -149,6 +149,8 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
+                threshold_speed=False if bin_occupancy_divide else True,
+                bin_occupancy_divide=bin_occupancy_divide,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
