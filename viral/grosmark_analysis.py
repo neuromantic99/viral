@@ -4,11 +4,12 @@ from pathlib import Path
 import sys
 import warnings
 from matplotlib import pyplot as plt
-from scipy.stats import zscore, pearsonr
+from scipy.stats import median_abs_deviation, zscore, pearsonr, ttest_ind
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
 from tqdm import tqdm
+import seaborn as sns
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -101,7 +102,10 @@ def get_place_cells(
     spks: np.ndarray,
     config: GrosmarkConfig,
     rewarded: bool | None,
+    use_cache: bool = True,
+    bin_occupancy_divide: bool = False,
     plot: bool = True,
+    cache_file_additional_info: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     From Grosmark et al.:
@@ -145,6 +149,8 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
+                threshold_speed=False if bin_occupancy_divide else True,
+                bin_occupancy_divide=bin_occupancy_divide,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
@@ -156,15 +162,23 @@ def get_place_cells(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
 
-    use_cache = True
-
-    get_cache_path = lambda variable_name: (
-        SERVER_PATH
-        / "viral_caches"
-        / "place_cells"
-        / variable_name
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
-    )
+    if not cache_file_additional_info:
+        get_cache_path = lambda variable_name: (
+            SERVER_PATH
+            / "viral_caches"
+            / "place_cells"
+            / variable_name
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+        )
+    else:
+        # e.g. train-test split
+        get_cache_path = lambda variable_name: (
+            SERVER_PATH
+            / "viral_caches"
+            / "place_cells"
+            / variable_name
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+        )
 
     if use_cache and get_cache_path("place_threshold").exists():
         print("Found cached place threshold")
@@ -192,6 +206,8 @@ def get_place_cells(
                             max_position=config.end,
                             verbose=False,
                             do_shuffle=True,
+                            threshold_speed=False if bin_occupancy_divide else True,
+                            bin_occupancy_divide=bin_occupancy_divide,
                         )
                         for trial in session.trials
                         if trial_is_imaged(trial)
@@ -207,6 +223,9 @@ def get_place_cells(
 
         place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
         np.save(get_cache_path("place_threshold"), place_threshold)
+
+    # if plot:
+    #     plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -277,12 +296,15 @@ def plot_speed(
         and (rewarded is None or trial.texture_rewarded == rewarded)
     ]
 
+    plt.figure()
     shaded_line_plot(
         np.array(speeds),
         x_axis=np.arange(config.start, config.end, config.bin_size),
         color="red",
         label="speed",
     )
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Speed (cm/s)")
 
 
 def offline_correlations(
@@ -400,6 +422,8 @@ def get_offline_correlation_matrix(
     if plot:
         plt.figure()
         plt.title("shuffled" if do_shuffle else "real")
+        if do_shuffle:
+            np.random.shuffle(corrs)
         plt.imshow(
             gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
             vmin=0,
@@ -613,6 +637,12 @@ if __name__ == "__main__":
     ), "Tiff is too short"
 
     is_unsupervised = session_is_unsupervised(session)
+
+    config = GrosmarkConfig(
+        bin_size=5,
+        start=30,
+        end=160,
+    )
 
     grosmark_place_field(
         session,

@@ -15,6 +15,7 @@ import re
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple
+import os
 from ScanImageTiffReader import ScanImageTiffReader
 
 HERE = Path(__file__).parent
@@ -80,8 +81,7 @@ def check_if_tiff_is_broken(tiff_path: Path) -> bool:
 def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
     """Looks for broken tiff files in a given session. It then caches all tiff metadata and saves fixed tiff files."""
     tiffs_dir = TIFF_UMBRELLA / date / mouse_name
-    tiff_files = sorted(tiffs_dir.glob("*.tif")) + sorted(tiffs_dir.glob("*.tiff"))
-    tiff_files_checked = list()
+    tiff_files = sorted(tiffs_dir.glob("*.tif*"))
     broken_tiffs = list()
     if cache_metadata:
         stack_lengths = list()
@@ -91,7 +91,6 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
         broken = check_if_tiff_is_broken(f)
         if broken:
             broken_tiffs.append(f)
-            tiff_files_checked.append((f, True))
             if cache_metadata:
                 stack_length, epoch, timestamps = extract_metadata_broken_tiff(f)
                 stack_lengths.append(stack_length)
@@ -99,7 +98,6 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
                 check_no_dropped_frames(timestamps)
                 all_tiff_timestamps.extend(timestamps)
         else:
-            tiff_files_checked.append((f, False))
             if cache_metadata:
                 stack_length, epoch, timestamps = extract_metadata(
                     ScanImageTiffReader(str(f))
@@ -124,8 +122,80 @@ def main(mouse_name: str, date: str, cache_metadata: bool) -> None:
         save_tiff_until_broken(path)
 
 
+def manual_save_tiff_metadata(
+    tiff_paths: List[Path], mouse_name: str, date: str
+) -> None:
+    """Takes a list of original tiff file paths, extracts the tiff metadata and saves it without re-saving tiff files.
+    This function is meant for cases when you decided not to analyse a tiff in a session after you already fixed broken tiffs or when the metadata caching did not work for some reason.
+
+    Arguments:
+        tiff_paths (List[Path]):    File paths of all (original!) tiff files in the right order.
+        mouse_name (str):           Name of the mouse.
+        date (str):                 Date of the session.
+
+    Returns:
+        None
+
+    Raises:
+        FileNotFoundError:          If one of the given tiff file paths is incorrect.
+    """
+    for file in tiff_paths:
+        if not os.path.exists(file):
+            raise FileNotFoundError
+    broken_tiffs = list()
+    stack_lengths = list()
+    epochs = list()
+    all_tiff_timestamps = list()
+    for _, f in enumerate(tiff_paths):
+        broken = check_if_tiff_is_broken(f)
+        if broken:
+            broken_tiffs.append(f)
+            stack_length, epoch, timestamps = extract_metadata_broken_tiff(f)
+            stack_lengths.append(stack_length)
+            epochs.append(epoch)
+            check_no_dropped_frames(timestamps)
+            all_tiff_timestamps.extend(timestamps)
+        else:
+            stack_length, epoch, timestamps = extract_metadata(
+                ScanImageTiffReader(str(f))
+            )
+            stack_lengths.append(stack_length)
+            epochs.append(epoch)
+            check_no_dropped_frames(timestamps)
+            all_tiff_timestamps.extend(timestamps)
+    print("All tiff files checked")
+    print(f"Broken tiffs: {broken_tiffs}")
+    print("Just caching metadata")
+    for variable, name in zip(
+        [stack_lengths, all_tiff_timestamps, epochs],
+        ["stack_lengths", "all_tiff_timestamps", "epochs"],
+    ):
+        np.save(
+            TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
+            variable,
+        )
+    print("Metadata extracted and cached")
+
+
 if __name__ == "__main__":
-    mouse_name = "JB011"
-    dates = ["2024-11-20"]
-    for date in dates:
-        main(mouse_name, date, True)
+    # mouse_name = "JB035"
+    # dates = ["2025-09-16"]
+    # for date in dates:
+    #     main(mouse_name, date, True)
+
+    mouse_name = "JB034"
+    date = "2025-07-04"
+    mouse_folder = TIFF_UMBRELLA / date / mouse_name
+    damaged_tiff_folder = TIFF_UMBRELLA / "damaged_tiffs"
+    tiff_file_paths = [
+        mouse_folder / "2025-04-07_JB034_rightHem_2x _00002.tif",
+        mouse_folder / "2025-04-07_JB034_rightHem_2x _00003.tif",
+        damaged_tiff_folder / "2025-04-07_JB034_rightHem_2x _00004.tif",
+        mouse_folder / "2025-04-07_JB034_rightHem_2x _00005.tif",
+        damaged_tiff_folder / "2025-04-07_JB034_rightHem_2x _00006.tif",
+        mouse_folder / "2025-04-07_JB034_rightHem_2x _00007.tif",
+    ]
+
+    manual_save_tiff_metadata(
+        tiff_paths=tiff_file_paths, mouse_name=mouse_name, date=date
+    )

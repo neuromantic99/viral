@@ -346,7 +346,6 @@ def main(
 
 
 if __name__ == "__main__":
-
     cache_files = list(CACHE_PATH.glob("*.json"))
     for cache_file in cache_files:
         print("Processing", cache_file)

@@ -7,12 +7,21 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
 from pydantic import ValidationError
+
+from ensemble_reactivation import main as ensemble_main
+from viral.grosmark_analysis import get_place_cells
+from viral.sessions_keep import SESSIONS_KEEP
 from scipy import stats
+
+from viral.utils import boxplot, degrees_to_cm, get_speed_positions
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
+
+
+from viral.models import Cached2pSession, Mouse2pSessions
 from viral.cache_2p_sessions import process_session
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -31,28 +40,35 @@ from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
 from viral.multiple_sessions import parse_session_number
 from viral.sessions_keep import SESSIONS_KEEP
 from viral.single_session import load_data
-from viral.utils import (
-    boxplot,
-    degrees_to_cm,
-    get_genotype,
-    get_speed_positions,
-    get_wheel_circumference_from_rig,
-    shaded_line_plot,
-)
 
-## TODO: Do we want to include the first day of learning?
-# There's likely a lot of interesting reactivated activtity there
+CACHE_PATH = HERE.parent / "data" / "cached_2p"
+
+#### PRETTY SURE I MESSED THIS UP IN THE GIT MERGE
 
 
 def get_session(
     mouse_name: str, date: str, metadata: pd.DataFrame, stage: str
 ) -> Cached2pSession:
+
     path = CACHE_PATH / f"{mouse_name}_{date}.json"
     try:
         cached_session = Cached2pSession.model_validate_json(path.read_text())
         print(f"Loaded cached session for {mouse_name} {date} from {path}")
         return cached_session
     except (FileNotFoundError, ValidationError) as e:
+        print(f"Cache missing for {mouse_name} {date}. Reprocessing session.")
+        row = metadata[metadata["Date"] == date].squeeze(axis=0)
+        session_type = row["Type"].lower()
+        assert (
+            "learning" in session_type if stage == "learned" else stage in session_type
+        )
+        session_numbers = parse_session_number(row["Session Number"])
+        trials = []
+        for session_number in session_numbers:
+            session_path = (
+                BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
+            )
+            trials.extend(load_data(session_path))
         print(f"Cache missing for {mouse_name} {date}. Reprocessing session.")
         row = metadata[metadata["Date"] == date].squeeze(axis=0)
         session_type = row["Type"].lower()
@@ -86,6 +102,25 @@ def get_session(
         )
 
     return Cached2pSession.model_validate_json(path.read_text())
+
+
+def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
+
+    results = [None, None, None]
+    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
+        path = CACHE_PATH / f"{mouse_name}_{SESSIONS_KEEP[mouse_name][stage]}.json"
+        try:
+            results[idx] = Cached2pSession.model_validate_json(path.read_text())
+            print(f"Loaded cached session for {mouse_name} {stage} from {path}")
+        except (ValidationError, FileNotFoundError) as e:
+            print(f"Error retrieving unsupervised session for {mouse_name}: {e}")
+
+    return Mouse2pSessions(
+        mouse_name=mouse_name,
+        unsupervised=results[0],
+        learning=results[1],
+        learned=results[2],
+    )
 
 
 def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
@@ -717,7 +752,51 @@ def landmark_comparison_plot() -> None:
         / f"landmark_tuning_comparison_plot.png"
     )
 
+
+def place_cells_plot_learning_stages(mouse_name: str, date: str) -> None:
+    with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
+        session = Cached2pSession.model_validate_json(f.read())
+
+    config = GrosmarkConfig(
+        bin_size=5,
+        start=0,
+        end=170,
+    )
+
+    spks = np.load(
+        TIFF_UMBRELLA
+        / session.date
+        / session.mouse_name
+        / "suite2p"
+        / "plane0"
+        / "oasis_spikes.npy"
+    )
+
+    pcs_mask, _ = get_place_cells(
+        session=session, spks=spks, rewarded=None, config=config, plot=True
+    )
     1 / 0
+
+
+def main() -> None:
+    # for mouse_name in SESSIONS_KEEP.keys():
+    #     mouse_sessions = get_mouse_sessions(mouse_name)
+
+    stages = ["unsupervised", "learning", "learned"]
+    result = {stage: None for stage in stages}
+
+    for mouse_name in SESSIONS_KEEP.keys():
+
+        # if mouse_name not in {"JB034", "JB035", "JB036"}:
+        if mouse_name not in {"JB034"}:
+            continue
+        for stage in stages:
+            if SESSIONS_KEEP[mouse_name][stage] is None:
+                continue
+            place_cells_plot_learning_stages(
+                mouse_name, date=SESSIONS_KEEP[mouse_name][stage]
+            )
+            # ensemble_main(mouse_name, date=SESSIONS_KEEP[mouse_name][stage], plot=False)
 
 
 if __name__ == "__main__":
