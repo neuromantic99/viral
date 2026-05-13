@@ -588,7 +588,6 @@ def test_threshold_detect_continuous_multiple_crossings() -> None:
     assert np.array_equal(result, expected)
 
 
-# TODO: remove eventually
 def test_code_rabbit() -> None:
     signal = np.array([0, 0, 0, 10, 10, 100, 0])
     threshold = np.array([1, -1, 10, 11, 10000, 99, 0])

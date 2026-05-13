@@ -271,6 +271,20 @@ def extract_frozen_wheel_chunks(
     return (first_chunk, last_chunk)
 
 
+def manual_wheel_freezes(
+    mouse_name: str, date: str, session_sync: SessionImagingInfo
+) -> WheelFreeze | None:
+    if (mouse_name, date) == ("JB035", "2025-07-04"):
+        return WheelFreeze(
+            pre_training_start_frame=0,
+            pre_training_end_frame=19011 + 8000,
+            post_training_start_frame=sum(session_sync.stack_lengths_tiffs[:-1]),
+            post_training_end_frame=sum(session_sync.stack_lengths_tiffs),
+        )
+
+    return None
+
+
 def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
     """Get wheel freeze object."""
     # TODO: if this occurs more often, find a more elegant fix
@@ -654,7 +668,7 @@ def process_session(
     mouse_name: str,
     date: str,
     session_type: str,
-    wheel_blocked: bool = False,
+    wheel_blocked: bool,
 ) -> None:
     print(f"Off we go for {mouse_name} {date} {session_type}")
     imaging_crashed = get_imaging_crashed(mouse_name, date)
@@ -673,7 +687,14 @@ def process_session(
         trials=trials,
         imaging_crashed=imaging_crashed,
     )
-    wheel_freeze = get_wheel_freeze(session_sync) if wheel_blocked else None
+
+    manual = manual_wheel_freezes(mouse_name, date, session_sync)
+    wheel_freeze = (
+        manual
+        if manual is not None
+        else get_wheel_freeze(session_sync) if wheel_blocked else None
+    )
+
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze, daq_crashed)
 
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
@@ -694,9 +715,11 @@ def process_session(
 def check_against_suite2p_output(
     mouse: str, date: str, valid_frame_times: np.ndarray
 ) -> None:
-    dff, spks, denoised = load_imaging_data(mouse, date)
-    assert dff.shape == spks.shape == denoised.shape
-    assert len(valid_frame_times) == spks.shape[1]
+    s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+    # Just check the fluoresence shape. We need to cache before we run
+    # oasis now, so it doesn't make sense to look at the spikes too
+    f = np.load(s2p_path / "F.npy")
+    assert len(valid_frame_times) == f.shape[1]
 
 
 def main() -> None:

@@ -35,6 +35,11 @@ def load_imaging_data(
     if not s2p_path.exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
+    assert (
+        s2p_path / "full_grosmark_oasis_preprocessed.npy"
+    ).exists(), (
+        "This session may have been processed with an old version of the oasis pipeline"
+    )
     spks = np.load(s2p_path / "oasis_spikes.npy")[iscell, :]
     denoised = np.load(s2p_path / "oasis_denoised.npy")[iscell, :]
 
@@ -51,7 +56,7 @@ def get_ITI_start_frame(trial: TrialInfo) -> int:
             assert (
                 state.closest_frame_start is not None
             ), "Imaging data not added to trial"
-            return state.closest_frame_start
+            return int(state.closest_frame_start)
     raise ValueError("ITI state not found")
 
 
@@ -67,6 +72,12 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
 
 
 def trial_is_imaged(trial: TrialInfo) -> bool:
+
+    # This is a temporary fix for JB015 "2024-10-24".
+    # The imaging was started during the spacers, which assigns the wrong tiff epoch to the trial.
+    # TODO: come up with a proper fix for this.
+    if trial.trial_start_time == 3502.912709:
+        return False
     trigger_panda_states = [
         state
         for state in trial.states_info
@@ -361,13 +372,19 @@ def get_ITI_matrix(
     matrices = []
 
     for trial in trials:
-        assert trial.trial_end_closest_frame is not None
+        end_ITI = (
+            trial.trial_end_closest_frame
+            if trial.trial_end_closest_frame is not None
+            else [state for state in trial.states_info if state.name == "ITI"][
+                0
+            ].closest_frame_end
+        )
 
         # This would be good, but in practise it rarely occurs
         # if running_during_ITI(trial):
         #     continue
 
-        chunk = flu[:, get_ITI_start_frame(trial) : int(trial.trial_end_closest_frame)]
+        chunk = flu[:, get_ITI_start_frame(trial) : end_ITI]
 
         n_frames = chunk.shape[1]
 
