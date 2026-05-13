@@ -1,4 +1,6 @@
 annotated-types==0.7.0
+BaselineRemoval==0.1.6
+black==25.9.0
 appier==1.34.5
 appnope==0.1.4
 asttokens==3.0.0
@@ -32,10 +34,14 @@ jupyter_core==5.7.2
 kiwisolver==1.4.8
 llvmlite==0.44.0
 matplotlib==3.10.0
+mypy==1.18.2
+mypy_extensions==1.1.0
 natsort==8.4.0
 nose2==0.15.1
 matplotlib-inline==0.1.7
 natsort==8.4.0
+nose2==0.15.1
+matplotlib-inline==0.1.7
 nest-asyncio==1.6.0
 npTDMS==1.10.0
 numba==0.61.0

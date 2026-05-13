@@ -4,10 +4,11 @@ from pathlib import Path
 import sys
 import warnings
 from matplotlib import pyplot as plt
-from scipy.stats import zscore, pearsonr
+from scipy.stats import median_abs_deviation, zscore, pearsonr, ttest_ind
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
+import seaborn as sns
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -32,6 +33,7 @@ from viral.utils import (
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
+    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -160,8 +162,10 @@ def get_place_cells(
         / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_shuffled_matrices.npy"
     )
     if use_cache and cache_file.exists():
+        print("Found cached shuffled matrices")
         shuffled_matrices = np.load(cache_file)
     else:
+        print("No cached shuffled matrices, calculating")
         # Create array of shape (n_shuffles, n_cells, n_bins)
         # where each (n_cells x bins) matrix is trial averaged but shuffled on a per-trial basis (as in Grosmark)
         # You can then apply percentiles along the first dimension to find "real" place cells
@@ -197,8 +201,8 @@ def get_place_cells(
 
     place_threshold = np.nanpercentile(shuffled_matrices, 99, axis=0)
 
-    if plot:
-        plot_speed(session, rewarded, config)
+    # if plot:
+    #     plot_speed(session, rewarded, config)
 
     # 5 if the bin size matches grosmark, otherwise adjust
     n_consecutive_trues = int((2 / config.bin_size) * 5)
@@ -276,12 +280,15 @@ def plot_speed(
         and (rewarded is None or trial.texture_rewarded == rewarded)
     ]
 
+    plt.figure()
     shaded_line_plot(
         np.array(speeds),
         x_axis=np.arange(config.start, config.end, config.bin_size),
         color="red",
         label="speed",
     )
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Speed (cm/s)")
 
 
 def offline_correlations(
@@ -399,6 +406,8 @@ def get_offline_correlation_matrix(
     if plot:
         plt.figure()
         plt.title("shuffled" if do_shuffle else "real")
+        if do_shuffle:
+            np.random.shuffle(corrs)
         plt.imshow(
             gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
             vmin=0,
@@ -451,9 +460,13 @@ def correlations_vs_peak_distance(
         y.append(np.mean(cell_corrs[in_bin]))
 
     if plot:
-        plt.plot(x, y, color=colour, label=label)
-    r, p = pearsonr(x, y)
-    return r, p
+        plt.figure()
+        plt.plot(x, y)
+        r, p = pearsonr(x, y)
+
+        plt.xlabel("Distance between peaks")
+        plt.ylabel("Average pearson correlation")
+        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
@@ -471,7 +484,7 @@ def plot_place_cells(
 ) -> None:
     plt.figure()
     plt.imshow(
-        zscore(sort_matrix_peak(smoothed_matrix), axis=1),
+        zscore(sort_matrix_peak(smoothed_matrix), axis=1, nan_policy="omit"),
         aspect="auto",
         cmap="bwr",
         vmin=-1,
@@ -605,7 +618,7 @@ if __name__ == "__main__":
     is_unsupervised = session_is_unsupervised(session)
 
     config = GrosmarkConfig(
-        bin_size=2,
+        bin_size=5,
         start=30,
         end=160,
     )

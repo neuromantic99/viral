@@ -173,6 +173,44 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     )
 
 
+@register_correction("JB035", "2025-07-04")
+def jb035_2025_07_04(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs
+    # The pre freeze is the first and second chunk
+    # [19011,  8000,  2457, 39952, 41186, 21999, 27000]
+    # chunk_lengths_daq
+    # [19031,  8000,  2459,   148, 39954, 41188, 22001, 27000]
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, 3)
+    c.chunk_lengths_daq[0] -= 20
+
+    bad_daq_frames = np.concatenate(
+        [
+            np.arange(19011, 19031),
+            np.arange(
+                c.chunk_lengths_daq[0]
+                + c.chunk_lengths_daq[1]
+                + c.chunk_lengths_daq[2],
+                c.chunk_lengths_daq[0]
+                + c.chunk_lengths_daq[1]
+                + c.chunk_lengths_daq[2]
+                + 148,
+            ),
+        ]
+    )
+    c.frame_times_daq = np.delete(c.frame_times_daq, bad_daq_frames)
+    # Adding on all the acceptable differences between stack_lengths_tiffs and chunk_lengths_daq
+    assert len(c.frame_times_daq) == sum(c.stack_lengths_tiffs) + 2 + 2 + 2 + 2
+
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq.astype("int32"),
+        frame_times_daq=c.frame_times_daq.astype("int32"),
+        offset_after_pre_epoch=0,
+    )
+
+
 # Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
 # The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
 # The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
