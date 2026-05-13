@@ -73,7 +73,6 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
 
 
 def trial_is_imaged(trial: TrialInfo) -> bool:
-
     # This is a temporary fix for JB015 "2024-10-24".
     # The imaging was started during the spacers, which assigns the wrong tiff epoch to the trial.
     # TODO: come up with a proper fix for this.

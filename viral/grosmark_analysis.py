@@ -9,7 +9,6 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
 from tqdm import tqdm
-import seaborn as sns
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -253,7 +252,7 @@ def get_place_cells(
         f"percent place cells after extra check {np.sum(pcs_combined) / n_cells_total}"
     )
     if plot:
-        plot_place_cells(
+        plot_place_cell_heatmap(
             smoothed_matrix=smoothed_matrix[pcs_combined, :],
             config=config,
         )
@@ -500,7 +499,7 @@ def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
     plt.xlabel("Cell number")
 
 
-def plot_place_cells(
+def plot_place_cell_heatmap(
     smoothed_matrix: np.ndarray,
     config: GrosmarkConfig,
 ) -> None:
@@ -612,7 +611,9 @@ if __name__ == "__main__":
     mouse = "JB027"
     date = "2025-02-26"
 
-    with open(HERE.parent / "data" / "cached_2p" / f"{mouse}_{date}.json", "r") as f:
+    with open(
+        SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
+    ) as f:
         session = Cached2pSession.model_validate_json(f.read())
 
     print(f"Total number of trials: {len(session.trials)}")
@@ -634,12 +635,6 @@ if __name__ == "__main__":
     ), "Tiff is too short"
 
     is_unsupervised = session_is_unsupervised(session)
-
-    config = GrosmarkConfig(
-        bin_size=5,
-        start=30,
-        end=160,
-    )
 
     grosmark_place_field(
         session,

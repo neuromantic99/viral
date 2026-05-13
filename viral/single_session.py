@@ -7,19 +7,17 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 import random
-from natsort import natsorted
 from typing import Dict, List
+
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from natsort import natsorted
 from scipy.stats import ttest_ind
-from viral.gsheets_importer import gsheet2df
 
 from viral.constants import BEHAVIOUR_DATA_PATH, ENCODER_TICKS_PER_TURN, SPREADSHEET_ID
-
+from viral.gsheets_importer import gsheet2df
 from viral.models import SpeedPosition, TrialInfo, TrialSummary
-
-
 from viral.utils import (
     check_trial_file_sorting,
     degrees_to_cm,

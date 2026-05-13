@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+
+HERE = Path(__file__).parent
+sys.path.append(str(HERE.parent))
+sys.path.append(str(HERE.parent.parent))
+
+import time
 from pathlib import Path
 import sys
 from typing import Dict, List
@@ -5,6 +14,8 @@ from typing import Dict, List
 import pandas as pd
 from scipy import stats
 
+from matplotlib import pyplot as plt
+from tifffile import imwrite
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -16,7 +27,16 @@ import numpy as np
 import seaborn as sns
 from scipy.ndimage import gaussian_filter1d
 from tqdm import tqdm
-from viral.constants import SERVER_PATH, TIFF_UMBRELLA, CACHE_PATH, grosmark_config
+from viral.gsheets_importer import gsheet2df
+from viral.single_session import load_data, summarise_trial
+from viral.constants import (
+    BEHAVIOUR_DATA_PATH,
+    SERVER_PATH,
+    SPREADSHEET_ID,
+    TIFF_UMBRELLA,
+    CACHE_PATH,
+    grosmark_config,
+)
 from viral.imaging_utils import (
     activity_trial_position,
     get_online_position_and_frames,
@@ -24,6 +44,7 @@ from viral.imaging_utils import (
     subtract_neuropil,
     trial_is_imaged,
 )
+from viral.learning_stages import get_mouse_sessions
 from viral.run_oasis import correct_f
 from viral.models import Cached2pSession
 from viral.representational_drift import interpolate_nans
@@ -35,9 +56,15 @@ from viral.utils import (
     imshow,
     mixed_effects,
     moving_average,
+    upper_triangle_no_diagonal,
     remove_diagonal,
+    save_figure,
     upper_triangle_no_diagonal,
 )
+from viral.multiple_sessions import load_cache, parse_session_number
+
+
+plt.rcParams["pdf.fonttype"] = 42
 
 
 def get_firing_rates(
@@ -137,18 +164,18 @@ def firing_rates_plot(rewarded: bool | None) -> None:
             ).filter(like="C(genotype)")
             p_values[f"{state}_{stage}"] = p_value
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    fig, axes = plt.subplots(2, 1, figsize=(6, 8), sharey=True)
     colors = sns.color_palette(n_colors=2)
     palette = {"WT": colors[0], "NLGF": colors[1]}
 
-    sns.boxplot(
+    sns.violinplot(
         data=all_data[all_data["state"] == "resting"],
         x="stage",
         y="firing_rate",
         hue="genotype",
         hue_order=["WT", "NLGF"],
         palette=palette,
-        showfliers=False,
+        cut=0,
         ax=axes[0],
     )
     # add p-value annotations above each stage for the resting axis
@@ -157,15 +184,16 @@ def firing_rates_plot(rewarded: bool | None) -> None:
 
     axes[0].set_title("Resting")
     axes[0].set_ylabel("Transients / second")
+    axes[0].set_ylim(0, None)
 
-    sns.boxplot(
+    sns.violinplot(
         data=all_data[all_data["state"] == "running"],
         x="stage",
         y="firing_rate",
         hue="genotype",
         hue_order=["WT", "NLGF"],
         palette=palette,
-        showfliers=False,
+        cut=0,
         ax=axes[1],
     )
     sns.despine()
@@ -196,9 +224,10 @@ def firing_rates_plot(rewarded: bool | None) -> None:
         SERVER_PATH
         / "viral_plots"
         / "firing_rates"
-        / f"comparison_firing_rates_rewarded_{rewarded}.png"
+        / f"comparison_firing_rates_rewarded_{rewarded}.pdf",
+        bbox_inches="tight",
+        transparent=True,
     )
-    1 / 0
 
 
 def get_firing_rates_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
@@ -263,6 +292,11 @@ def get_firing_rates_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
 
 def save_firing_rates(genotype: str) -> None:
 
+    result: Dict[str, List[tuple[np.ndarray, np.ndarray]]] = {
+        "unsupervised": [],
+        "learning": [],
+        "learned": [],
+    }
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
@@ -274,6 +308,9 @@ def save_firing_rates(genotype: str) -> None:
 
             spks_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
             spks_all = np.load(spks_path / "oasis_spikes.npy")
+            is_cell = np.load(spks_path / "iscell.npy")[:, 0].astype(bool)
+            spks_all = spks_all[is_cell, :]
+
             session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
             session = Cached2pSession.model_validate_json(session_path.read_text())
 
@@ -283,7 +320,7 @@ def save_firing_rates(genotype: str) -> None:
                     SERVER_PATH
                     / "viral_caches"
                     / "firing_rates"
-                    / f"{mouse_name}_{date}_rewarded_{rewarded}_firing_rates.npy"
+                    / f"{mouse_name}_{date}_rewarded_{rewarded}_firing_rates_iscell_filtered.npy"
                 )
                 # Weird suffix fiddle because the file is saved as .npy.npz
                 load_path = save_path.with_suffix(save_path.suffix + ".npz")
@@ -331,13 +368,13 @@ def save_firing_rates(genotype: str) -> None:
                 )
 
 
-def n_responders(session: Cached2pSession, rewarded: bool | None) -> float:
+def n_responders_session(session: Cached2pSession, rewarded: bool | None) -> float:
     pc_mask = np.load(
         SERVER_PATH
         / "viral_caches"
         / "place_cells"
         / "pcs_combined"
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{grosmark_config}_pcs_combined.npy"
+        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{grosmark_config}_pcs_combined_BOD_True.npy"
     )
     return np.sum(pc_mask) / len(pc_mask)
 
@@ -355,7 +392,7 @@ def get_n_responders(genotype: str, rewarded: bool | None) -> Dict[str, List[flo
             session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
             session = Cached2pSession.model_validate_json(session_path.read_text())
 
-            n = n_responders(session=session, rewarded=rewarded)
+            n = n_responders_session(session=session, rewarded=rewarded)
             stage_name = "Baseline" if stage == "unsupervised" else "Trained"
             result[stage_name].append(n)
 
@@ -363,18 +400,18 @@ def get_n_responders(genotype: str, rewarded: bool | None) -> Dict[str, List[flo
 
 
 def n_responders_comparison_plot() -> None:
-    # result = {"genotype": [], "stage": [], "rewarded": [], "n_responders": []}
-    # for genotype in ["WT", "NLGF"]:
-    #     for rewarded in [True, False]:
-    #         temp_result = get_n_responders(genotype=genotype, rewarded=rewarded)
-    #         for stage in temp_result.keys():
-    #             result["genotype"].extend([genotype] * len(temp_result[stage]))
-    #             result["stage"].extend([stage] * len(temp_result[stage]))
-    #             result["rewarded"].extend([rewarded] * len(temp_result[stage]))
-    #             result["n_responders"].extend(temp_result[stage])
+    result = {"genotype": [], "stage": [], "rewarded": [], "n_responders": []}
+    for genotype in ["WT", "NLGF"]:
+        for rewarded in [True, False]:
+            temp_result = get_n_responders(genotype=genotype, rewarded=rewarded)
+            for stage in temp_result.keys():
+                result["genotype"].extend([genotype] * len(temp_result[stage]))
+                result["stage"].extend([stage] * len(temp_result[stage]))
+                result["rewarded"].extend([rewarded] * len(temp_result[stage]))
+                result["n_responders"].extend(temp_result[stage])
 
-    # df = pd.DataFrame(result)
-    # df.to_pickle("n_responders_df.pkl")
+    df = pd.DataFrame(result)
+    df.to_pickle("n_responders_df.pkl")
 
     df = pd.read_pickle("n_responders_df.pkl")
 
@@ -622,9 +659,33 @@ def get_correlation_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
     return pd.DataFrame(result)
 
 
+def display_fov(stat: np.ndarray, cell_highlight: List[int]) -> None:
+    img = np.zeros((512, 512))
+    for idx, cell in enumerate(stat):
+        ypix = cell["ypix"]
+        xpix = cell["xpix"]
+        if idx in cell_highlight:
+            img[ypix, xpix] = 2
+            print(
+                f"Highlighting cell {idx} the center is at ({cell['xpix'].mean()}, {cell['ypix'].mean()})"
+            )
+        else:
+            img[ypix, xpix] = 1
+
+    plt.figure()
+    plt.imshow(img, cmap="gray")
+
+
 def example_traces() -> None:
 
     s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-04/JB034/suite2p/plane0/")
+
+    stat = np.load(s2p_path / "stat.npy", allow_pickle=True)
+    ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
+    imwrite(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", ops["meanImg"])
+
+    pass
+    # np.save(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", stat['me')
 
     # f_raw = np.load(s2p_path / "F.npy")
     # f_neu = np.load(s2p_path / "Fneu.npy")
@@ -642,13 +703,17 @@ def example_traces() -> None:
 
     colors = sns.color_palette(n_colors=2)
 
-    plt.clf()
-    # cells_keep = [5, 6, 9, 19, 26, 35, 40, 45, 50, 55, 60]
     cells_keep = [5, 6, 9, 19, 26, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100, 150]
-    np.random.shuffle(cells_keep)
+    plt.figure()
+
+    # For grant plot
+    cells_keep = cells_keep[:7]
+    display_fov(stat, cells_keep)
+
+    # np.random.shuffle(cells_keep)
     n = 0
     for idx in cells_keep:
-        data = dff[idx] + n * 1.4
+        data = dff[idx] + n * 1.6
         data = moving_average(data, 5)
 
         plt.plot(data, color=colors[0], linewidth=1)
@@ -721,7 +786,7 @@ def example_traces() -> None:
         return f"{int(round(v))}" if abs(v - round(v)) < 1e-6 else f"{v:.1f}"
 
     time_label = f"{_fmt_val(bar_t)} s"
-    dff_label = f"{_fmt_val(bar_dff)} dF/F"
+    dff_label = f"{_fmt_val(bar_dff)} ΔF/F"
 
     # Place time label centered under the horizontal bar (clamp to stay inside axes)
     x_mid = x_start + 0.5 * bar_t_frames
@@ -751,16 +816,129 @@ def example_traces() -> None:
         color="black",
     )
 
-    plt.savefig(SERVER_PATH / "viral_plots" / "example_traces" / f"example_traces.png")
+    # plt.savefig(SERVER_PATH / "viral_plots" / "example_traces" / f"example_traces.png")
+    save_figure(
+        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_grant.pdf"
+    )
+    plt.show()
+
+
+def compute_anticipatory_licking() -> Dict[str, List[tuple[float, float]]]:
+    result: Dict[str, List[tuple[float, float]]] = {
+        "Baseline": [],
+        "Trained": [],
+    }
+
+    for mouse, sessions in SESSIONS_KEEP.items():
+        date_trained = sessions["learned"]
+
+        if date_trained is None:
+            continue
+
+        metadata = gsheet2df(SPREADSHEET_ID, mouse, 1)
+        first_session_row = metadata[metadata["Type"].str.lower() == "learning day 1"]
+        assert len(first_session_row) == 1
+        first_session_date = first_session_row["Date"].values[0]
+
+        for date, session_type in zip(
+            [first_session_date, date_trained], ["First Session", "Final Session"]
+        ):
+
+            session_number = metadata[metadata["Date"] == date][
+                "Session Number"
+            ].values[0]
+            session_path = (
+                BEHAVIOUR_DATA_PATH
+                / mouse
+                / date
+                / parse_session_number(session_number)[0]
+            )
+            trials = load_data(session_path)
+            summaries = [
+                summarise_trial(trial, get_wheel_circumference_from_rig("2P"))
+                for trial in trials
+            ]
+            rewarded = [trial.licks_AZ > 0 for trial in summaries if trial.rewarded]
+            not_rewarded = [
+                trial.licks_AZ > 0 for trial in summaries if not trial.rewarded
+            ]
+
+            result_tuple = (
+                (sum(rewarded) / len(rewarded)) * 100,
+                (sum(not_rewarded) / len(not_rewarded)) * 100,
+            )
+
+            if session_type == "First Session":
+                result["Baseline"].append(result_tuple)
+            else:
+                result["Trained"].append(result_tuple)
+    return result
+
+
+def basic_anticipatory_licking_plot() -> None:
+    if Path("AL_dict.pkl.npy").exists():
+        data = np.load("AL_dict.pkl.npy", allow_pickle=True).item()
+    else:
+        data = compute_anticipatory_licking()
+        np.save("AL_dict.pkl.npy", data)
+
+    def make_plot(tuples: List[tuple[float, float]], ax: plt.Axes) -> None:
+        means = np.mean(tuples, axis=0)
+        for session in tuples:
+            ax.plot([1, 0], session, color="gray", alpha=0.3)
+
+        ax.plot([1, 0], means, color="black", linewidth=3, marker="o")
+
+        ax.set_xlim(-0.2, 1.2)
+        ax.set_xticks([0, 1], ["Unrewarded\nTexture", "Rewarded\nTexture"])
+        arr = np.array(tuples)
+        p_value = stats.ttest_rel(arr[:, 0], arr[:, 1]).pvalue
+        ax.text(
+            0.5,
+            80,
+            f"P = {p_value:.2g}",
+            ha="center",
+            va="bottom",
+            fontsize=12,
+            font="arial",
+        )
+
+    fig, axes = plt.subplots(1, 2, figsize=(8, 5), sharey=True)
+
+    make_plot(data["Baseline"], axes[0])
+    make_plot(data["Trained"], axes[1])
+    axes[0].set_ylabel("Trials with licks in AZ (%)")
+    axes[1].set_title("After Learning")
+    axes[0].set_title("Before Learning")
+    sns.despine()
+    plt.tight_layout()
+
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "anticipatory_licking"
+        / f"basic_anticipatory_licking_plot.pdf",
+        bbox_inches="tight",
+        transparent=True,
+    )
+
     1 / 0
 
 
 if __name__ == "__main__":
-    # firing_rates_plot(None)
+    # basic_anticipatory_licking_plot()
+
+    # save_firing_rates("WT")
+    # save_firing_rates("NLGF")
+
+    firing_rates_plot(None)
     # for genotype in tqdm(
     #     ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"], desc="corrleations"
     # ):
     #     # for rewarded in [True, False, None]:
-    n_responders_comparison_plot()
-    # firing_rates_plot(False)
+
+    # example_traces()
+    # n_responders_comparison_plot()
+    # firing_rates_plot(None)
     # 1 / 0

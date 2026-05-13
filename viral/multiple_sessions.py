@@ -806,7 +806,7 @@ if __name__ == "__main__":
                 print(f"mouse_name {mouse_name} cached now")
 
     plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    # plot_mouse_performance(mice[0], config=config)
+    plot_mouse_performance(mice[0], config=config)
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # ## Probably not interesting as related to speed
     # plot_trial_time_summaries(mice, "learning")

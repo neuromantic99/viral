@@ -123,7 +123,16 @@
       "request": "launch",
       "program": "viral/basic_plots.py",
       "console": "integratedTerminal",
-      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "5"},
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "5" },
+      "justMyCode": true
+    },
+    {
+      "name": "response profiles",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/response_profiles.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "5" },
       "justMyCode": true
     }
   ]
