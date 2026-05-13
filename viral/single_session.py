@@ -7,6 +7,7 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 import random
+from natsort import natsorted
 from typing import Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,7 +19,9 @@ from viral.constants import BEHAVIOUR_DATA_PATH, ENCODER_TICKS_PER_TURN, SPREADS
 
 from viral.models import SpeedPosition, TrialInfo, TrialSummary
 
+
 from viral.utils import (
+    check_trial_file_sorting,
     degrees_to_cm,
     get_speed_positions,
     get_wheel_circumference_from_rig,
@@ -28,17 +31,21 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "JB015"
-DATE = "2025-01-30"
+MOUSE = "JB036"
+DATE = "2025-09-16"
 SESSION_NUMBER = "002"
+
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
 
 def load_data(session_path: Path) -> List[TrialInfo]:
-    trial_files = list(session_path.glob("trial*.json"))
+    trial_files = natsorted(list(session_path.glob("trial*.json")))
     if not trial_files:
         raise FileNotFoundError(f"No trial files found in path {session_path}")
+
+    check_trial_file_sorting(trial_files)
+
     trials: List[TrialInfo] = []
     for trial_file in trial_files:
         with open(trial_file) as f:
@@ -125,7 +132,7 @@ def get_anticipatory_licking(trial: TrialInfo, wheel_circumference: float) -> in
     return np.sum(
         np.logical_and(
             np.logical_and(lick_positions > 150, lick_positions < 180),
-            lick_times < reward_state_time + 0.1,
+            lick_times < reward_state_time,
         )
     )
 
@@ -366,6 +373,7 @@ def plot_speed_reward_unrewarded(
 
     first_position = 0
     last_position = 200
+    # last_position = 180
     step_size = 5
     for idx, trial in enumerate(trials):
         position = degrees_to_cm(
@@ -393,8 +401,9 @@ def plot_speed_reward_unrewarded(
 
     # Should be the same for all trials
     # Use the bin_stop so there is no forward look ahead
-    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=0)
+    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=-1)
     plt.xlim(0, 200)
+    # plt.xlim(0, 180)
     x_axis = [bin.position_stop for bin in rewarded[0]]
     shaded_line_plot(
         np.array([[bin.speed for bin in trial] for trial in rewarded]),

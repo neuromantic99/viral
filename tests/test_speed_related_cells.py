@@ -10,10 +10,6 @@ def test_bin_activity() -> None:
     bin_size = 2
     expected = np.array([[0, 4 / 7], [1, 3 / 7]])
     result = bin_activity(spks, position, bin_start, bin_end, bin_size)
-    print(expected.shape)
-    print(result.shape)
-    print(result.dtype)
-    print(expected.dtype)
     assert np.all(np.isclose(result, expected))
 
 

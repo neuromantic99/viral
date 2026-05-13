@@ -3,6 +3,7 @@ import math
 from pathlib import Path
 from typing import List, Tuple, TypeVar, Any
 import warnings
+from zoneinfo import ZoneInfo
 from matplotlib import pyplot as plt
 import numpy as np
 from enum import Enum
@@ -141,6 +142,39 @@ def threshold_detect(signal: np.ndarray, threshold: float) -> np.ndarray:
     return times[0]
 
 
+def threshold_detect_continuous(
+    signal: np.ndarray, threshold: np.ndarray
+) -> np.ndarray:
+    """
+    Detect threshold crossings where signal > threshold (elementwise).
+    Suppresses consecutive detections to only return first index of each crossing.
+
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal.
+    threshold : np.ndarray
+        Threshold array of same shape as signal.
+
+    Returns
+    -------
+    np.ndarray
+        Indices where signal crosses threshold.
+    """
+    if signal.shape != threshold.shape:
+        raise ValueError("signal and threshold must have the same shape")
+
+    # Compare elementwise
+    thresh_signal = signal > threshold
+
+    # Keep only rising edge detections
+    thresh_signal[1:][thresh_signal[:-1] & thresh_signal[1:]] = False
+
+    # Return indices
+    times = np.where(thresh_signal)
+    return times[0]
+
+
 def pade_approx_norminv(p: float) -> float:
     q = (
         math.sqrt(2 * math.pi) * (p - 1 / 2)
@@ -173,7 +207,7 @@ def threshold_detect_edges(
 
 
 def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
-    return list(directory.glob("*.tif"))
+    return list(directory.glob("*.tif*"))
 
 
 def extract_TTL_chunks(
@@ -270,6 +304,8 @@ def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
 def get_genotype(mouse_name: str) -> str:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
+    elif mouse_name in {"JB034", "JB035"}:
+        return "Neuronal-BACE1-KO"
     elif mouse_name in {
         "JB011",
         "JB012",
@@ -279,6 +315,7 @@ def get_genotype(mouse_name: str) -> str:
         "JB019",
         "JB021",
         "JB023",
+        "JB036",
     }:
         return "NLGF"
 
@@ -308,6 +345,8 @@ def get_sex(mouse_name: str) -> str:
         "JB025",
         "JB026",
         "JB027",
+        "JB034",
+        "JB036",
     }:
         return "male"
     if mouse_name in {
@@ -323,6 +362,7 @@ def get_sex(mouse_name: str) -> str:
         "JB031",
         "JB032",
         "JB033",
+        "JB035",
     }:
         return "female"
     else:
@@ -448,25 +488,25 @@ def shuffle_rows(matrix: np.ndarray) -> np.ndarray:
     return shuffled_matrix
 
 
-def has_five_consecutive_trues(matrix: np.ndarray) -> np.ndarray:
+def has_n_consecutive_trues(matrix: np.ndarray, n: int = 5) -> np.ndarray:
     matrix = np.array(matrix, dtype=bool)  # Ensure it's a boolean NumPy array
-    kernel = np.ones(5, dtype=int)  # Kernel to check consecutive 5 Trues
+    kernel = np.ones(n, dtype=int)  # Kernel to check consecutive 5 Trues
     # Perform a 1D convolution along each row
     conv_results = np.apply_along_axis(
         lambda row: np.convolve(row, kernel, mode="valid"), axis=1, arr=matrix
     )
-    # Check if any value in the result equals 5 (meaning 5 consecutive Trues)
-    return np.any(conv_results == 5, axis=1)
+    # Check if any value in the result equals n (meaning n consecutive Trues)
+    return np.any(conv_results == n, axis=1)
 
 
-def find_five_consecutive_trues_center(matrix: np.ndarray) -> np.ndarray:
+def find_n_consecutive_trues_center(matrix: np.ndarray, n: int = 5) -> np.ndarray:
     def find_center(row: np.ndarray) -> int:
-        conv_result = np.convolve(row, np.ones(5, dtype=int), mode="valid") == 5
+        conv_result = np.convolve(row, np.ones(n, dtype=int), mode="valid") == n
         if np.any(conv_result):
             start = np.argmax(conv_result).astype(
                 int
             )  # First occurrence of 5 consecutive Trues
-            return start + 2  # Center index
+            return start + (n // 2)  # Center index
         raise ValueError(
             "You should only pass PCs run through has_five_consective_trues to this function"
         )
@@ -488,3 +528,53 @@ def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
 
 def session_is_unsupervised(session: Cached2pSession) -> bool:
     return session.session_type.lower().startswith("unsupervised learning")
+
+
+def uk_to_utc(dt: datetime) -> datetime:
+    """Converts a datetime object in UK time to UTC time and strips the timezone info for further calculations.
+    dt: datetime object in UK time
+    """
+    return (
+        dt.replace(tzinfo=ZoneInfo("Europe/London"))
+        .astimezone(ZoneInfo("UTC"))
+        .replace(tzinfo=None)
+    )
+
+
+def above_threshold_for_n_consecutive_samples(
+    arr: np.ndarray,
+    threshold: float,
+    n_samples: int,
+) -> np.ndarray:
+    """
+    Returns a boolean mask where True indicates the array element is within a bout of being
+    above threshold for n_samples length (all elements in any qualifying window are True).
+
+    Returns:
+        np.ndarray: Boolean mask, same length as arr.
+    """
+    above = arr > threshold
+    # Rolling sum to find windows of n_samples above threshold
+    run_lengths = np.convolve(
+        above.astype(int), np.ones(n_samples, dtype=int), mode="valid"
+    )
+    # Find start indices of valid runs
+    valid_starts = np.where(run_lengths >= n_samples)[0]
+    mask = np.zeros_like(arr, dtype=bool)
+    for start in valid_starts:
+        mask[start : start + n_samples] = True
+    return mask
+
+
+def split_continuous_chunks(arr: np.ndarray) -> List[np.ndarray]:
+    """Split an array into continuous chunks"""
+    split_indices = np.where(np.diff(arr) != 1)[0] + 1
+    return np.split(arr, split_indices)
+
+
+def check_trial_file_sorting(trial_files: List[Path]) -> None:
+    """Check that trials are sorted by trial number"""
+    for trial, next_trial in zip(trial_files[:-1], trial_files[1:], strict=True):
+        this_number = int(trial.stem.split("trial")[-1])
+        next_number = int(next_trial.stem.split("trial")[-1])
+        assert next_number == this_number + 1

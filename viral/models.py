@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel, computed_field
+from datetime import datetime
 import numpy as np
 
 
@@ -10,15 +11,15 @@ class StateInfo(BaseModel):
     end_time: float
     start_time_daq: float | None = None  # Possibly redundant
     end_time_daq: float | None = None
-    closest_frame_start: int | None = None
-    closest_frame_end: int | None = None
+    closest_frame_start: float | int | None = None
+    closest_frame_end: float | int | None = None
 
 
 class EventInfo(BaseModel):
     name: str
     start_time: float
     start_time_daq: float | None = None
-    closest_frame: int | None = None
+    closest_frame: float | int | None = None
 
 
 class SpeedPosition(BaseModel):
@@ -71,8 +72,8 @@ class MouseSummary(BaseModel):
 class TrialInfo(BaseModel):
     trial_start_time: float
     trial_end_time: float
-    trial_start_closest_frame: float | None = None
-    trial_end_closest_frame: float | None = None
+    trial_start_closest_frame: float | int | None = None
+    trial_end_closest_frame: float | int | None = None
     pc_timestamp: str
     states_info: List[StateInfo]
     events_info: List[EventInfo]
@@ -104,11 +105,26 @@ class TrialInfo(BaseModel):
         ]
 
 
+class WheelFreeze(BaseModel):
+    pre_training_start_frame: int
+    pre_training_end_frame: int
+    post_training_start_frame: int
+    post_training_end_frame: int
+
+
 class Cached2pSession(BaseModel):
     trials: List[TrialInfo]
     mouse_name: str
     date: str
     session_type: str
+    wheel_freeze: WheelFreeze | None = None
+
+
+class Mouse2pSessions(BaseModel):
+    mouse_name: str
+    unsupervised: Cached2pSession
+    learning: Cached2pSession
+    learned: Cached2pSession
 
 
 class ImagedTrialInfo(BaseModel):
@@ -134,3 +150,63 @@ class GrosmarkConfig:
     bin_size: int
     start: int
     end: int
+
+    def __repr__(self) -> str:
+        return f"GrosmarkConfig(bin_size={self.bin_size}, start={self.start}, end={self.end})"
+
+
+@dataclass
+class SortedPlaceCells:
+    sorted_indices: np.ndarray
+    n_ensemble_a: int
+    n_ensemble_b: int
+
+
+@dataclass
+class SessionImagingInfo:
+    # these variables are needed for sessions when DAQ crashed
+    mouse_name: str
+    date: str
+    # 2p / ScanImage info
+    stack_lengths_tiffs: np.ndarray
+    epochs: np.ndarray
+    all_tiff_timestamps: np.ndarray
+    # DAQ info
+    chunk_lengths_daq: np.ndarray
+    daq_start_time: datetime
+    # "results"
+    valid_frame_times: np.ndarray
+    behaviour_chunk_lens: np.ndarray
+    behaviour_times: np.ndarray
+    sampling_rate: int
+    offset_after_pre_epoch: int
+
+
+@dataclass
+class SessionCorrection:
+    epochs: np.ndarray
+    all_tiff_timestamps: np.ndarray
+    stack_lengths_tiffs: np.ndarray
+    chunk_lengths_daq: np.ndarray
+    frame_times_daq: np.ndarray
+    offset_after_pre_epoch: int
+
+
+@dataclass
+class EnsembleSessionResult:
+    reactivation_triggered_response: Tuple[np.ndarray, np.ndarray]
+    number_of_events: Tuple[np.ndarray, np.ndarray]
+    sum_values_over_threshold: Tuple[np.ndarray, np.ndarray]
+
+
+@dataclass
+class MultipleSessionsConfig:
+    window: int
+    speed: float
+    licking: float
+
+    def __post_init__(self):
+        if sum([self.speed, self.licking]) != 1:
+            raise ValueError(
+                f"Invalid weights for speed and licking in learning metric! Sum has to equal to 1, instead it is {sum([self.speed, self.licking])}"
+            )
