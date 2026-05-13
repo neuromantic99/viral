@@ -4,12 +4,6 @@ performing a series of checks before appending this information.
 However, a range of user-dependent or experimental circumstances can occasionally cause the caching process to fail.
 In these cases, manual correction is required."""
 
-"""cache_2p_sessions.py is responsible for adding frame stamps and time stamps to behavioural event data.
-It processes imaging files (.tiff), behavioural events (trial.json), and the corresponding synchronisation file (DAQami) as inputs,
-performing a series of checks before appending this information.
-However, a range of user-dependent or experimental circumstances can occasionally cause the caching process to fail.
-In these cases, manual correction is required."""
-
 import sys
 import numpy as np
 from pathlib import Path
@@ -97,6 +91,16 @@ def apply_session_correction(
 
 # Session corrections ordered by mouse name and date.
 
+# TODO: think about a fix
+# @register_correction("JB031", "2025-03-10")
+# stack_lengths_tiffs array([23034, 26668, 26412,  4466,  2534])
+# chunk_lengths_daq array([23036, 26670, 26414,  4475,  2536])
+
+# TODO: what is going on?
+# "2025-03-17"
+# stack_lengths_tiffs array([40412, 40408, 80291])
+# chunk_lengths_daq array([40410, 80293])
+
 
 # epochs:               (n_tiffs, 6);   start time of each tiff file (they are in a matlab format, hence each epoch has 6 values)
 # all_tiff_timestamps:  (n_frames);     timestamps of each frame in all tiff files (in seconds since start of the DAQ)
@@ -149,8 +153,6 @@ def jb031_2025_03_31(c: SessionCorrection) -> SessionCorrection:
 
 # Ex.: classic case of manual 'focus' without grabbing, resulting in a daq chunk with no associated tiff frames.
 # The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
-# Ex.: classic case of manual 'focus' without grabbing, resulting in a tiff stack with no associated DAQ chunk.
-# The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
 @register_correction("JB031", "2025-04-01")
 def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
@@ -171,10 +173,44 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-# Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
-# The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
-# The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
-# so that the DAQ signals keep on being aligned while the pre_session_epoch will be skipped.
+@register_correction("JB035", "2025-07-04")
+def jb035_2025_07_04(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs
+    # The pre freeze is the first and second chunk
+    # [19011,  8000,  2457, 39952, 41186, 21999, 27000]
+    # chunk_lengths_daq
+    # [19031,  8000,  2459,   148, 39954, 41188, 22001, 27000]
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, 3)
+    c.chunk_lengths_daq[0] -= 20
+
+    bad_daq_frames = np.concatenate(
+        [
+            np.arange(19011, 19031),
+            np.arange(
+                c.chunk_lengths_daq[0]
+                + c.chunk_lengths_daq[1]
+                + c.chunk_lengths_daq[2],
+                c.chunk_lengths_daq[0]
+                + c.chunk_lengths_daq[1]
+                + c.chunk_lengths_daq[2]
+                + 148,
+            ),
+        ]
+    )
+    c.frame_times_daq = np.delete(c.frame_times_daq, bad_daq_frames)
+    # Adding on all the acceptable differences between stack_lengths_tiffs and chunk_lengths_daq
+    assert len(c.frame_times_daq) == sum(c.stack_lengths_tiffs) + 2 + 2 + 2 + 2
+
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq.astype("int32"),
+        frame_times_daq=c.frame_times_daq.astype("int32"),
+        offset_after_pre_epoch=0,
+    )
+
+
 # Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
 # The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
 # The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
@@ -243,6 +279,34 @@ def jb031_2025_04_04(c: SessionCorrection) -> SessionCorrection:
         chunk_lengths_daq=c.chunk_lengths_daq,
         frame_times_daq=c.frame_times_daq,
         offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB031", "2025-04-07")
+def jb031_2025_04_07(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs array([ 27000,    506,    319, 164379,  27000])
+    # chunk_lengths_daq array([   508,   3127,    321, 164381,    324,    424,   1299,  27000])
+    # "Forgot to start the DAQami before pre-trial wheel blocking.[...]
+    # Readjusted imaging plane between wheel-blocking and main task as focus appeared to drift. First few trials were not imaged, as I had to adjust focal plane. [...]
+    # Focal plane was readjusted before post-trial wheel blocking.[...]"
+    # visually inspected "2025-04-07_JB031_.leftHem_2x_00002.tif" and "2025-04-07_JB031_.leftHem_2x_00003.tif" -> decided to keep
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [1, 4, 5, 6])
+    c.stack_lengths_tiffs = np.delete(c.stack_lengths_tiffs, [0])
+    c.all_tiff_timestamps = c.all_tiff_timestamps[27000:]
+    c.epochs = np.delete(c.epochs, [0], axis=0)
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[sum([508, 3127]) : sum([508, 3127, 321, 164381])],
+            c.frame_times_daq[sum([508, 3127, 321, 164381, 324, 424, 1299]) :],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=27000,
     )
 
 
@@ -400,15 +464,152 @@ def jb032_2025_04_10(c: SessionCorrection) -> SessionCorrection:
 @register_correction("JB033", "2025-03-20")
 def jb033_2025_03_20(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
-    # array([  3215,    464,  28014, 122997,    105,  29148])
+    # array([27000, 12249, 35828, 81547, 27000])
     # chunk_lengths_daq
-    # array([   466,  28016, 122999,    107,  29151])
-    # Deleting the first two grabs (3215; 464, 466 respectively) before the pre epoch
-    c.stack_lengths_tiffs = np.delete(c.stack_lengths_tiffs, [0, 1])
-    c.epochs = np.delete(c.epochs, [0, 1], axis=0)
-    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0])
-    c.frame_times_daq = c.frame_times_daq[466:]
-    c.all_tiff_timestamps = c.all_tiff_timestamps[3215 + 464 :]
+    # array([  157, 27000, 12251, 35830, 81549,    44, 27000])
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0, 5])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[157 : sum([157, 27000, 12251, 35830, 81549])],
+            c.frame_times_daq[sum([157, 27000, 12251, 35830, 81549, 44]) :],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB032", "2025-04-04")
+def jb032_2025_04_04(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs [ 27000 111656  27000]
+    # chunk_lengths_daq [ 27000     25 111659   1392    313  27000]
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [1, 3, 4])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[:27000],
+            c.frame_times_daq[sum([27000, 25]) : sum([27000, 25, 111659])],
+            c.frame_times_daq[sum([27000, 25, 111659, 1392, 313]) :],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB032", "2025-04-08")
+def jb032_2025_04_08(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs array([ 27000, 116293,  27000])
+    # chunk_lengths_daq array([ 27000, 116295,    458,  27000])
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [2])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: sum([27000, 116295])],
+            c.frame_times_daq[
+                sum(
+                    [
+                        27000,
+                        116295,
+                        458,
+                    ]
+                ) :
+            ],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB032", "2025-04-12")
+def jb032_2025_04_12(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs array([27000, 18799, 16305, 42609, 41797, 27000])
+    # chunk_lengths_daq array([27000, 18801,    64,   380, 16307, 42611,   961, 41799,  1386, 27000])
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [2, 3, 6, 8])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: sum([27000, 18801])],
+            c.frame_times_daq[
+                sum([27000, 18801, 64, 380]) : sum(
+                    [27000, 18801, 64, 380, 16307, 42611]
+                )
+            ],
+            c.frame_times_daq[
+                sum([27000, 18801, 64, 380, 16307, 42611, 961]) : sum(
+                    [27000, 18801, 64, 380, 16307, 42611, 961, 41799]
+                )
+            ],
+            c.frame_times_daq[
+                sum([27000, 18801, 64, 380, 16307, 42611, 961, 41799, 1386]) :
+            ],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB032", "2025-04-13")
+def jb032_2025_04_13(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs array([27000, 94289, 17538, 27000])
+    # chunk_lengths_daq array([27000, 94291,   417, 17540, 27000])
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [2])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: sum([27000, 94291])],
+            c.frame_times_daq[sum([27000, 94291, 417]) :],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB032", "2025-04-15")
+def jb032_2025_04_15(c: SessionCorrection) -> SessionCorrection:
+    # stack_lengths_tiffs array([27000, 13867,   688, 24008,  2323,  1715, 18914, 15043,  9713, 17884, 27000])
+    # chunk_lengths_daq array([27000, 13870,   690,   872, 24010,  2325,  1717, 18916, 15046, 9716,   940, 17886, 27000])
+    # TODO: check for flickering / weird signal
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [3, 10])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: sum([27000, 13870, 690])],
+            c.frame_times_daq[
+                sum([27000, 13870, 690, 872]) : sum(
+                    [27000, 13870, 690, 872, 24010, 2325, 1717, 18916, 15046, 9716]
+                )
+            ],
+            c.frame_times_daq[
+                sum(
+                    [27000, 13870, 690, 872, 24010, 2325, 1717, 18916, 15046, 9716, 940]
+                ) :
+            ],
+        ]
+    )
     return SessionCorrection(
         epochs=c.epochs,
         all_tiff_timestamps=c.all_tiff_timestamps,

@@ -122,9 +122,9 @@ class Cached2pSession(BaseModel):
 
 class Mouse2pSessions(BaseModel):
     mouse_name: str
-    unsupervised: Cached2pSession
-    learning: Cached2pSession
-    learned: Cached2pSession
+    unsupervised: Cached2pSession | None
+    learning: Cached2pSession | None
+    learned: Cached2pSession | None
 
 
 class ImagedTrialInfo(BaseModel):
@@ -197,6 +197,7 @@ class EnsembleSessionResult:
     reactivation_triggered_response: Tuple[np.ndarray, np.ndarray]
     number_of_events: Tuple[np.ndarray, np.ndarray]
     sum_values_over_threshold: Tuple[np.ndarray, np.ndarray]
+    three_sd_events: Tuple[np.ndarray, np.ndarray]
 
 
 @dataclass

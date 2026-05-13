@@ -32,21 +32,19 @@ def shaded_line_plot(
     x_axis: np.ndarray | List[float],
     color: str,
     label: str,
-    do_moving_average: bool = False,
-    axis: plt.Axes | None = None,
+    moving_average: bool = False,
 ) -> None:
 
-    plotter = axis if axis is not None else plt
-
-    if do_moving_average:
-        mean = gaussian_filter1d(np.nanmean(arr, 0), sigma=1)
-        sem = gaussian_filter1d(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), sigma=1)
+    if moving_average:
+        mean = moving_average(np.nanmean(arr, 0), 5)
+        sem = moving_average(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), 5)
+        x_axis = x_axis[1 : len(mean) + 1]  # Adjust x_axis to match the mean length
     else:
         mean = np.nanmean(arr, 0)
         sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[1])
 
-    plotter.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
-    plotter.fill_between(
+    plt.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
+    plt.fill_between(
         x_axis,
         np.subtract(
             mean,

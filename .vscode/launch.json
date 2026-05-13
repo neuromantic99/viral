@@ -23,7 +23,7 @@
       "name": "presentation",
       "type": "debugpy",
       "request": "launch",
-      "program": "presentations/2024-06-18_replaymeeting.py",
+      "program": "presentations/2025-06-02_replaymeeting.py",
       "console": "integratedTerminal",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "justMyCode": true
@@ -98,7 +98,13 @@
       "type": "debugpy",
       "request": "launch",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "100" },
-      "program": "viral/run_oasis.py",
+      "program": "viral/run_oasis.py"
+    },
+    {
+      "name": "fix tiff",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fix_tiff.py",
       "console": "integratedTerminal",
       "justMyCode": true
     }
