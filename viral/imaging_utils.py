@@ -232,6 +232,8 @@ def get_online_position_and_frames(
     assert len(position) == len(frame_position)
 
     if threshold_speed:
+        # TODO: just for debugging
+        print("thresholding speed for getting traces for online epochs")
         speed = compute_speed_grosmark(position)
         speed_threshold = 5
         idx_keep = above_threshold_for_n_consecutive_samples(
@@ -463,5 +465,14 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
     return (mouse_name, date) in [
         ("JB011", "2024-10-22"),
         ("JB011", "2024-10-25"),
+        ("JB031", "2025-03-10"),
+        ("JB034", "2025-07-04"),
+    ]
+
+
+def get_daq_crashed(mouse_name: str, date: str) -> bool:
+    """Manually define if DAQ crashed during session. Currently only used to loosen assertion in `check_timestamps`."""
+    # TODO: If occuring more often, think of a better fix.
+    return (mouse_name, date) in [
         ("JB034", "2025-07-04"),
     ]

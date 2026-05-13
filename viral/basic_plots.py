@@ -7,14 +7,21 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 import time
+from pathlib import Path
+import sys
 from typing import Dict, List
 
 import pandas as pd
 from scipy import stats
 
-
 from matplotlib import pyplot as plt
 from tifffile import imwrite
+
+HERE = Path(__file__).parent
+sys.path.append(str(HERE.parent))
+sys.path.append(str(HERE.parent.parent))
+
+from matplotlib import pyplot as plt
 from scipy.ndimage import percentile_filter
 import numpy as np
 import seaborn as sns
@@ -49,6 +56,7 @@ from viral.utils import (
     imshow,
     mixed_effects,
     moving_average,
+    upper_triangle_no_diagonal,
     remove_diagonal,
     save_figure,
     upper_triangle_no_diagonal,
@@ -220,7 +228,6 @@ def firing_rates_plot(rewarded: bool | None) -> None:
         bbox_inches="tight",
         transparent=True,
     )
-    1 / 0
 
 
 def get_firing_rates_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
@@ -326,31 +333,31 @@ def save_firing_rates(genotype: str) -> None:
                     continue
 
                 print(f"Processing {mouse_name} on {date} for {stage} stage.")
-                # mask_files = [
-                #     file
-                #     for file in list(
-                #         (
-                #             SERVER_PATH
-                #             / "viral_caches"
-                #             / "place_cells"
-                #             / "pcs_combined"
-                #         ).glob("*.npy")
-                #     )
-                #     if mouse_name in file.name
-                #     and date in file.name
-                #     and f"rewarded_{rewarded}" in file.name
-                #     and str(grosmark_config) in file.name
-                # ]
+                mask_files = [
+                    file
+                    for file in list(
+                        (
+                            SERVER_PATH
+                            / "viral_caches"
+                            / "place_cells"
+                            / "pcs_combined"
+                        ).glob("*.npy")
+                    )
+                    if mouse_name in file.name
+                    and date in file.name
+                    and f"rewarded_{rewarded}" in file.name
+                    and str(grosmark_config) in file.name
+                ]
 
-                # assert (
-                #     len(mask_files) == 1
-                # ), f"Should find one mask file, found {mask_files}"
+                assert (
+                    len(mask_files) == 1
+                ), f"Should find one mask file, found {mask_files}"
 
-                # pc_mask = np.load(mask_files[0])
-
+                pc_mask = np.load(mask_files[0])
+                spks = spks_all[pc_mask, :]
                 resting_rates, running_rates = get_firing_rates(
                     session=session,
-                    spks=spks_all,
+                    spks=spks,
                     rewarded=rewarded,
                 )
 
@@ -505,7 +512,6 @@ def n_responders_comparison_plot() -> None:
     plt.savefig(
         SERVER_PATH / "viral_plots" / "n_responders" / f"comparison_n_responders.png"
     )
-    1 / 0
 
 
 def save_correlations(genotype: str) -> None:
@@ -737,7 +743,7 @@ def example_traces() -> None:
 
     # Choose a vertical amplitude scalebar in dF/F units from nice values
     # The traces are offset by 1.4 between cells; choose a modest vertical scalebar
-    nice_dff = np.array([1.0, 2.0])
+    nice_dff = np.array([0.1, 0.2, 0.5, 1.0])
     # Aim for ~8% of the total y-range
     ymin, ymax = ax.get_ylim()
     y_range = ymax - ymin if ymax > ymin else max(1.0, len(cells_keep) * 1.4)

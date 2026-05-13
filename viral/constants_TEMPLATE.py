@@ -3,6 +3,9 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 
+from viral.models import GrosmarkConfig
+
+
 SERVER_PATH = Path("YOUR/SERVER/FOLDER")
 
 
@@ -22,3 +25,10 @@ ENCODER_TICKS_PER_TURN = 360
 # https://docs.google.com/spreadsheets/d/ID-GOES-HERE
 
 SPREADSHEET_ID = "YOUR-SPREADSHEET-ID"
+
+# Add your config for the grosmark analysis here
+grosmark_config = GrosmarkConfig(
+    bin_size=2,
+    start=0,
+    end=180,
+)
