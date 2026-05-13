@@ -4,11 +4,12 @@ from pathlib import Path
 import sys
 import warnings
 from matplotlib import pyplot as plt
-from scipy.stats import zscore, pearsonr
+from scipy.stats import median_abs_deviation, zscore, pearsonr, ttest_ind
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
 import numpy as np
 from tqdm import tqdm
+import seaborn as sns
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -34,6 +35,7 @@ from viral.utils import (
     find_n_consecutive_trues_center,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
+    interpolate_nans_vector,
     remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
@@ -100,7 +102,10 @@ def get_place_cells(
     spks: np.ndarray,
     config: GrosmarkConfig,
     rewarded: bool | None,
+    use_cache: bool = True,
+    bin_occupancy_divide: bool = False,
     plot: bool = True,
+    cache_file_additional_info: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     From Grosmark et al.:
@@ -155,15 +160,23 @@ def get_place_cells(
         np.nanmean(all_trials, 0), sigma=sigma_bins, axis=1
     )
 
-    use_cache = True
-
-    get_cache_path = lambda variable_name: (
-        SERVER_PATH
-        / "viral_caches"
-        / "place_cells"
-        / variable_name
-        / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}.npy"
-    )
+    if not cache_file_additional_info:
+        get_cache_path = lambda variable_name: (
+            SERVER_PATH
+            / "viral_caches"
+            / "place_cells"
+            / variable_name
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+        )
+    else:
+        # e.g. train-test split
+        get_cache_path = lambda variable_name: (
+            SERVER_PATH
+            / "viral_caches"
+            / "place_cells"
+            / variable_name
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+        )
 
     if use_cache and get_cache_path("place_threshold").exists():
         print("Found cached place threshold")
@@ -191,6 +204,8 @@ def get_place_cells(
                             max_position=config.end,
                             verbose=False,
                             do_shuffle=True,
+                            threshold_speed=False if bin_occupancy_divide else True,
+                            bin_occupancy_divide=bin_occupancy_divide,
                         )
                         for trial in session.trials
                         if trial_is_imaged(trial)
@@ -276,12 +291,15 @@ def plot_speed(
         and (rewarded is None or trial.texture_rewarded == rewarded)
     ]
 
+    plt.figure()
     shaded_line_plot(
         np.array(speeds),
         x_axis=np.arange(config.start, config.end, config.bin_size),
         color="red",
         label="speed",
     )
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Speed (cm/s)")
 
 
 def offline_correlations(
@@ -399,6 +417,8 @@ def get_offline_correlation_matrix(
     if plot:
         plt.figure()
         plt.title("shuffled" if do_shuffle else "real")
+        if do_shuffle:
+            np.random.shuffle(corrs)
         plt.imshow(
             gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
             vmin=0,
@@ -417,14 +437,13 @@ def correlations_vs_peak_distance(
     plot: bool = False,
 ) -> tuple[float, tuple[np.ndarray, np.ndarray]]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
-    distance between their place field peaks.
-
+        distance between their place field peaks.
     Args:
-    corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
-    peak_position_cm: the position of the peak firing rate of each neuron in cm
-    colour: colour for the plot
-    label: label for the plot
-    plot: whether to plot
+        corrs: the Pearson correlation matrix between neurons during offline periods of shape (n_cells, n_cells)
+        peak_position_cm: the position of the peak firing rate of each neuron in cm
+        colour: colour for the plot
+        label: label for the plot
+        plot: whether to plot
     """
 
     n_cells = corrs.shape[0]
@@ -460,7 +479,13 @@ def correlations_vs_peak_distance(
     # Need to put this back if grosmarking
     # r, p = pearsonr(x, y)
     # return r, p
-    m = compute_linear_slope((np.array(x) / 60), np.array(y) / y[0])
+    x = np.array(x)
+    y = np.array(y)
+
+    y = interpolate_nans_vector(y)
+
+    m = compute_linear_slope((x / 60), y / y[0])
+
     return m, (np.array(x), np.array(y))
 
 
@@ -607,6 +632,12 @@ if __name__ == "__main__":
     ), "Tiff is too short"
 
     is_unsupervised = session_is_unsupervised(session)
+
+    config = GrosmarkConfig(
+        bin_size=5,
+        start=30,
+        end=160,
+    )
 
     grosmark_place_field(
         session,

@@ -1,14 +1,13 @@
 from typing import Dict
 
 
-# TODO: Deal with the None case
-SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
-    # Imaging of poor quality, dont analyse
-    # "JB011": {
-    #     "unsupervised": "2024-10-22",
-    #     "learning": "2024-10-25",
-    #     "learned": "2024-10-30",
-    # },
+SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
+    # Imaging in unsupervised of poor quality, don't analyse
+    "JB011": {
+        # "unsupervised": "2024-10-22",
+        "learning": "2024-10-25",
+        "learned": "2024-10-30",
+    },
     "JB014": {  # LOOKS GOOD
         "unsupervised": "2024-10-24",
         "learning": "2024-10-31",
@@ -54,13 +53,18 @@ SESSIONS_KEEP: Dict[str, Dict[str, str]] = {
         "learning": "2024-12-13",
         "learned": "2024-12-15",
     },
+    "JB027": {
+        "unsupervised": "2024-12-10",
+        "learning": "2024-12-11",
+        "learned": "2024-12-15",
+    },
     "JB030": {
         "unsupervised": "2025-03-07",
         "learning": "2025-03-13",
         "learned": "2025-03-14",
     },
     # Imaging was ok for the first few days but then degraded to become not usable
-    # "JB031": {"unsupervised": "2025-03-07", "learning": "2025-03-12", "learned": None},
+    "JB031": {"unsupervised": "2025-03-07", "learning": "2025-03-12", "learned": None},
     "JB033": {
         "unsupervised": "2025-03-13",
         "learning": "2025-03-17",

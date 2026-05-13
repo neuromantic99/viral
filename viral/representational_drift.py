@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+import pandas as pd
 from scipy import stats
 from sklearn.metrics import balanced_accuracy_score
 from tqdm import tqdm
@@ -582,12 +583,12 @@ def plot_overall_scores(genotype: str) -> None:
                 / f"{mouse_name}_{date}_drift.npz"
             )
 
-            # if not cache_path.exists():
-            #     continue
+            if not cache_path.exists():
+                continue
 
             data = np.load(cache_path)
-            drift_score = data["drift_score"]
-            scores = data["scores"]
+            drift_score = data["drift"]
+            scores = data["odd_even"]
             all_data.append(scores)
             all_drift.append(drift_score)
 
@@ -597,7 +598,7 @@ def plot_overall_scores(genotype: str) -> None:
         x_axis = np.arange(5, 185, 10)
 
         shaded_line_plot(
-            arr=all_data.mean(2),
+            arr=all_data,
             x_axis=x_axis,
             color="blue",
             label=f"Mixed",
@@ -648,17 +649,25 @@ def plot_overall_scores(genotype: str) -> None:
     )
 
 
-def plot_drift_correlation_results(
+def get_drift_correlation_results(
     genotype: Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"],
     rewarded: bool | None,
-) -> None:
+    type: Literal["cell", "population"] = "cell",
+) -> dict[str, list[tuple[np.ndarray, np.ndarray, np.ndarray]]]:
     # _, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
-    result = {"unsupervised": [], "learning": [], "learned": []}
+    result: dict[str, list[tuple[np.ndarray, np.ndarray, np.ndarray]]] = {
+        "Baseline": [],
+        "Trained": [],
+    }
     for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
         all_population = []
         all_cell = []
         all_speed = []
-        for mouse_name in tqdm(SESSIONS_KEEP.keys()):
+        for mouse_name in SESSIONS_KEEP.keys():
+
+            # Weird, look into this
+            if mouse_name == "JB033" and stage == "unsupervised":
+                continue
             if get_genotype(mouse_name) != genotype:
                 continue
             date = SESSIONS_KEEP[mouse_name][stage]
@@ -698,6 +707,9 @@ def plot_drift_correlation_results(
                 bin_starts,
                 label=f"{mouse_name}_population",
             )
+            # TODO: CHECK THIS CLOSELY
+            if len(y_pop) < 20:
+                continue
             cell_distance_corr, (x_cell, y_cell) = correlations_vs_peak_distance(
                 cell_wise, trial_times, bin_starts, label=f"{mouse_name}_cell"
             )
@@ -708,27 +720,10 @@ def plot_drift_correlation_results(
             all_cell.append((cell_distance_corr, x_cell, y_cell))
             all_speed.append((speed_distance_corr, x_speed, y_speed))
 
-        result[stage] = all_population
+        stage_name = "Trained" if stage in ["learning", "learned"] else "Baseline"
+        result[stage_name].extend(all_cell if type == "cell" else all_population)
 
-    plt.figure()
-    sns.boxplot({k: [x[0] for x in v] for k, v in result.items()}, showfliers=False)
-    sns.stripplot(
-        {k: [x[0] for x in v] for k, v in result.items()}, color="black", alpha=0.5
-    )
-
-    plt.title(f"{genotype}")
-    plt.tight_layout()
-    plt.ylim(-0.2, 0.2)
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
-        for mouse in result[stage]:
-            axes[idx].plot(mouse[1], mouse[2])
-        axes[idx].set_title(stage)
-    plt.ylim(-1, 1)
-
-    plt.tight_layout()
-    plt.suptitle(genotype)
+    return result
 
 
 def compute_tau(to_fit: np.ndarray, plot: bool = False) -> float:
@@ -818,11 +813,107 @@ def plot_landmark_drift_correlation_results(
     plt.suptitle(genotype)
 
 
-if __name__ == "__main__":
-    # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-    #     plot_overall_scores(genotype)
-    # for genotype in ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
-    #     plot_landmark_drift_correlation_results(genotype, None)
-    main()
+def wt_vs_nlgf_summary() -> None:
 
-    1 / 0
+    type = "population"
+
+    wt = get_drift_correlation_results("WT", None, type=type)
+    nlgf = get_drift_correlation_results("NLGF", None, type=type)
+
+    # Plot the mean drift over time
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5), sharey=True)
+    colors = sns.color_palette(n_colors=2)
+    palette = {"WT": colors[0], "NLGF": colors[1]}
+
+    for axis, stage in zip(axes, ["Baseline", "Trained"]):
+
+        min_length = min([len(x[2]) for x in wt[stage]])
+        wt_all = np.array([x[2][:min_length] for x in wt[stage]])
+        x_axis = wt[stage][0][1][:min_length] / 60
+        shaded_line_plot(
+            arr=wt_all,
+            x_axis=x_axis,
+            color=colors[0],
+            label="WT",
+            axis=axis,
+        )
+
+        min_length = min([len(x[2]) for x in nlgf[stage]])
+        nlgf_all = np.array([x[2][:min_length] for x in nlgf[stage]])
+        x_axis_nlgf = nlgf[stage][0][1][:min_length] / 60
+        shaded_line_plot(
+            arr=nlgf_all,
+            x_axis=x_axis_nlgf,
+            color=colors[1],
+            label="NLGF",
+            axis=axis,
+        )
+        axis.set_title(stage)
+        axis.set_xlabel("Time (minutes)")
+        axis.set_ylabel("Correlation")
+        axis.set_xlim(None, 50)
+        axis.legend()
+
+    plt.suptitle(
+        f"{'Cell-by-cell' if type == 'cell' else 'Population'} correlation over time"
+    )
+    plt.tight_layout()
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "drift"
+        / f"{"cell" if type == "cell" else "population"}_drift.png",
+    )
+
+    all_results = {"Genotype": [], "Stage": [], "Slope": []}
+
+    for genotype, data in zip(["WT", "NLGF"], [wt, nlgf]):
+        for stage in ["Baseline", "Trained"]:
+            for mouse_data in data[stage]:
+                slope = mouse_data[0]
+                all_results["Genotype"].append(genotype)
+                all_results["Stage"].append(stage)
+                all_results["Slope"].append(slope)
+
+    df = pd.DataFrame(all_results)
+    plt.figure()
+
+    sns.boxplot(
+        data=df,
+        x="Stage",
+        y="Slope",
+        hue="Genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        showfliers=False,
+    )
+
+    sns.stripplot(
+        data=df,
+        x="Stage",
+        y="Slope",
+        hue="Genotype",
+        hue_order=["WT", "NLGF"],
+        palette=palette,
+        dodge=True,
+        linewidth=1,
+        edgecolor="black",
+        legend=False,
+    )
+
+    plt.title(f"{'Cell-by-cell' if type == 'cell' else 'Population'} drift Slopes")
+
+    plt.ylim(-0.025, 0.015)
+    plt.axhline(0, color="gray", linestyle="--")
+    plt.tight_layout()
+    plt.savefig(
+        SERVER_PATH
+        / "viral_plots"
+        / "drift"
+        / f"{'cell' if type == 'cell' else 'population'}_drift_slopes.png",
+        dpi=300,
+    )
+
+
+if __name__ == "__main__":
+    wt_vs_nlgf_summary()

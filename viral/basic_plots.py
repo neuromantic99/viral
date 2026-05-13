@@ -374,9 +374,9 @@ def n_responders_comparison_plot() -> None:
     #             result["n_responders"].extend(temp_result[stage])
 
     # df = pd.DataFrame(result)
-    # df.to_pickle("n_responders_df")
+    # df.to_pickle("n_responders_df.pkl")
 
-    df = pd.read_pickle("n_responders_df")
+    df = pd.read_pickle("n_responders_df.pkl")
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 5), sharey=True)
     colors = sns.color_palette(n_colors=2)
