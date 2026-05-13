@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Literal
 from pydantic import BaseModel, computed_field
 from datetime import datetime
 import numpy as np
@@ -211,3 +211,91 @@ class MultipleSessionsConfig:
             raise ValueError(
                 f"Invalid weights for speed and licking in learning metric! Sum has to equal to 1, instead it is {sum([self.speed, self.licking])}"
             )
+
+
+@dataclass
+class SSPConfig:
+    mode: Literal["below", "above"]
+    speed_threshold: float
+    n_consecutive_samples: int
+
+
+@dataclass
+class SSPVectorData:
+    ssp_vectors: np.ndarray  # neural activity data, filtered by speed
+    position_vectors: (
+        np.ndarray
+    )  # actual position of the mouse at the corresponding imaging frame
+    trial_start_indices: (
+        np.ndarray
+    )  # frame indices indicating the start of each trial within the ssp_vectors array
+    chunk_start_indices: List[List[int]]  # nested list of chunk boundaries per trial:
+    # outer list is trials;
+    # inner lists are trials with the integers indicating the start of each chunk in correspondence to the ssp_vectors array
+
+
+@dataclass
+class BayesianDecodingConfig:
+    peak_threshold: float  # SDs above mean
+    edge_threshold: float  # SDs above mean
+    event_duration: Tuple[float, float]  # min, max (frames)
+    bin_size_time_offline: int  # frames
+    bin_size_time_online: int  # frames
+    start_spatial: int  # cms
+    end_spatial: int  # cms
+    bin_size_spatial: int  # cms
+    epoch: Literal["pre", "online", "post"]
+    sigma_offline: int  # frames (for the convolving with Gaussian kernel bit)
+    sigma_online: int  # frames (for the convolving with Gaussian kernel bit)
+
+    @computed_field
+    @property
+    def total_length(self) -> float:
+        # TODO: Think about this! Grosmark used metres instead of centimetres
+        return (self.end_spatial - self.start_spatial) / 100
+
+
+class BayesianDecodingResult(BaseModel):
+    posterior_probability_matrices: List[np.ndarray]
+    pr_max_matrices: List[np.ndarray]
+    linear_weighted_r: Optional[List[float]]
+    circular_weighted_r: Optional[List[float]]
+    actual_positions: Optional[List[np.ndarray]]
+    linear_rZ_scores: Optional[List[float]]
+    circular_rZ_scores: Optional[List[float]]
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+@dataclass
+class RadonLUT:
+    path_length: np.ndarray
+    xp: np.ndarray
+    theta: np.ndarray
+    n_radon_points: int
+    point1x: np.ndarray
+    point1y: np.ndarray
+    point2x: np.ndarray
+    point2y: np.ndarray
+    slope: np.ndarray
+    path_length_from_points: np.ndarray
+    space_offset: np.ndarray
+    temp_offset: np.ndarray
+    space_offset_round: np.ndarray
+    temp_offset_round: np.ndarray
+    temp_offset_round_perc: np.ndarray
+
+
+@dataclass
+class RadonReplayResult:
+    pos_mean: float  # mean posterior probability of best line
+    # max_id: int  # linear index of best line
+    path_length: float
+    point1x: float
+    point1y: float
+    point2x: float
+    point2y: float
+    slope: float
+    slope_metres_per_sec: float
+    replay_type: Literal["forward", "reverse"]
