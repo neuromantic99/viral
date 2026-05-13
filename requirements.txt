@@ -39,6 +39,9 @@ mypy_extensions==1.1.0
 natsort==8.4.0
 nose2==0.15.1
 matplotlib-inline==0.1.7
+natsort==8.4.0
+nose2==0.15.1
+matplotlib-inline==0.1.7
 nest-asyncio==1.6.0
 npTDMS==1.10.0
 numba==0.61.0
