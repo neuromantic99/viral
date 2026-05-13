@@ -34,16 +34,11 @@ MarkupSafe==3.0.2
 matplotlib==3.10.0
 mypy==1.18.2
 mypy_extensions==1.1.0
-natsort==8.4.0
 nose2==0.15.1
-matplotlib-inline==0.1.7
-<<<<<<< HEAD
-=======
 networkx==3.6.1
 natsort==8.4.0
 nose2==0.15.1
 matplotlib-inline==0.1.7
->>>>>>> main
 nest-asyncio==1.6.0
 npTDMS==1.10.0
 numpy==2.2.3
