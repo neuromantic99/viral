@@ -17,6 +17,7 @@ from typing import Any, Dict
 from viral.grosmark_analysis import binarise_spikes, grosmark_place_field
 from viral.imaging_utils import load_only_spks
 from viral.models import GrosmarkConfig, Mouse2pSessions
+from viral.constants import grosmark_config
 
 import seaborn as sns
 
@@ -59,11 +60,6 @@ def already_done_grosmark(session: Any, rewarded: bool) -> bool:
 
 def grosmark_plot(genotype_dict: Dict) -> None:
 
-    config = GrosmarkConfig(
-        bin_size=2,
-        start=30,
-        end=160,
-    )
     for genotype, mouse_2p_sessions in genotype_dict.items():
 
         for mouse in mouse_2p_sessions:
@@ -91,7 +87,7 @@ def grosmark_plot(genotype_dict: Dict) -> None:
                         session,
                         spks,
                         rewarded=None if is_unsupervised else False,
-                        config=config,
+                        config=grosmark_config,
                     )
                 except Exception as e:
                     print(

@@ -19,7 +19,7 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA
+from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA, grosmark_config
 from viral.models import (
     Cached2pSession,
     EnsembleSessionResult,
@@ -804,11 +804,20 @@ def get_ssp_vectors(
         )
 
 
-def main(mouse: str, date: str, plot: bool = True) -> None:
+def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> None:
     print(f"Processing mouse {mouse}, date {date}")
 
     verbose = True
-    use_cache = True
+    use_cache = False
+
+    assert (
+        TIFF_UMBRELLA
+        / date
+        / mouse
+        / "suite2p"
+        / "plane0"
+        / "full_grosmark_oasis_preprocessed.npy"
+    ).exists(), f"Correct oasis not run for {mouse} on {date}"
 
     assert (
         TIFF_UMBRELLA
@@ -836,7 +845,7 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         SERVER_PATH
         / "viral_caches"
         / "ensemble_caches"
-        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation.npz"
+        / f"{session.mouse_name}suite2p_{session.date}_ensemble_reactivation_{grosmark_config}_rewarded_{rewarded}.npz"
     )
 
     if use_cache and cache_file.exists():
@@ -855,11 +864,6 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             return
     else:
         print("No cached data found, processing data")
-        config = GrosmarkConfig(
-            bin_size=5,
-            start=0,
-            end=170,
-        )
 
         spks = np.load(
             TIFF_UMBRELLA
@@ -871,8 +875,12 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
         )
 
         t1 = time.time()
-        pcs_mask, _ = get_place_cells(
-            session=session, spks=spks, rewarded=None, config=config, plot=True
+        pcs_mask, _, _ = get_place_cells(
+            session=session,
+            spks=spks,
+            rewarded=rewarded,
+            config=grosmark_config,
+            plot=False,
         )
 
         print(f"Time to get place cells: {time.time() - t1}")
@@ -882,7 +890,12 @@ def main(mouse: str, date: str, plot: bool = True) -> None:
             flu=place_cells, wheel_freeze=session.wheel_freeze
         )
 
-        trials = [trial for trial in session.trials if trial_is_imaged(trial)]
+        trials = [
+            trial
+            for trial in session.trials
+            if trial_is_imaged(trial)
+            and ((rewarded is None) or trial.texture_rewarded == rewarded)
+        ]
 
         ssp_result = get_ssp_vectors(
             trials=trials,

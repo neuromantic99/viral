@@ -153,6 +153,8 @@ def jb031_2025_03_31(c: SessionCorrection) -> SessionCorrection:
 
 # Ex.: classic case of manual 'focus' without grabbing, resulting in a daq chunk with no associated tiff frames.
 # The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
+# Ex.: classic case of manual 'focus' without grabbing, resulting in a tiff stack with no associated DAQ chunk.
+# The signals in the DAQ files have to be deleted, i.e. in chunk_lengths_daq and frame_times_daq.
 @register_correction("JB031", "2025-04-01")
 def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
@@ -211,6 +213,10 @@ def jb035_2025_07_04(c: SessionCorrection) -> SessionCorrection:
     )
 
 
+# Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
+# The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
+# The 'offset_after_pre_epoch' is set to the length of the first tiff stack,
+# so that the DAQ signals keep on being aligned while the pre_session_epoch will be skipped.
 # Ex.: Classic case of starting the DAQ after the pre-session epoch, resulting in a tiff stack with no associated DAQ chunk.
 # The first tiff has to be removed from the syncing, i.e. in stack_lengths_tiffs, all_tiff_timestamps and epochs.
 # The 'offset_after_pre_epoch' is set to the length of the first tiff stack,

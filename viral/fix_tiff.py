@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Utils to fix broken tiff files by saving all but the last, presumably broken, frame.
 Recommended to fix in this order:
@@ -12,11 +11,11 @@ When using main(), it will check all tiff files in a given session directory, ca
 
 import tifffile
 import sys
-import os
 import re
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple
+import os
 from ScanImageTiffReader import ScanImageTiffReader
 
 HERE = Path(__file__).parent
