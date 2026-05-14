@@ -1152,13 +1152,14 @@ def get_cache_path(
     mouse_name: str,
     date: str,
     bayesian_config: BayesianDecodingConfig,
+    additional_info: Optional[str] = None,
 ) -> Path:
     # TODO: after deciding on either Grosmark/Climer decoder remove the flag
     return (
         SERVER_PATH
         / "viral_caches"
         / "bayesian"
-        / f"{mouse_name}_{date}_{bayesian_config.epoch}_CLIMER_bin_size_spatial-{bayesian_config.bin_size_spatial}.npz"
+        / f"{mouse_name}_{date}_{bayesian_config.epoch}_CLIMER_bin_size_spatial-{bayesian_config.bin_size_spatial}_{additional_info}.npz"
     )
 
 
