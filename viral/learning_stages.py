@@ -9,10 +9,20 @@ from matplotlib import pyplot as plt
 from pydantic import ValidationError
 from scipy import stats
 
+from ensemble_reactivation import main as ensemble_main
+from viral.grosmark_analysis import get_place_cells
+from viral.sessions_keep import SESSIONS_KEEP
+from scipy import stats
+
+from viral.utils import boxplot, degrees_to_cm, get_speed_positions
+
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
+
+
+from viral.models import Cached2pSession, Mouse2pSessions
 from viral.cache_2p_sessions import process_session
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -40,8 +50,9 @@ from viral.utils import (
     shaded_line_plot,
 )
 
-## TODO: Do we want to include the first day of learning?
-# There's likely a lot of interesting reactivated activtity there
+CACHE_PATH = HERE.parent / "data" / "cached_2p"
+
+#### PRETTY SURE I MESSED THIS UP IN THE GIT MERGE
 
 
 def get_session(
@@ -86,6 +97,24 @@ def get_session(
         )
 
     return Cached2pSession.model_validate_json(path.read_text())
+
+
+def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
+    results = [None, None, None]
+    for idx, stage in enumerate(["unsupervised", "learning", "learned"]):
+        path = CACHE_PATH / f"{mouse_name}_{SESSIONS_KEEP[mouse_name][stage]}.json"
+        try:
+            results[idx] = Cached2pSession.model_validate_json(path.read_text())
+            print(f"Loaded cached session for {mouse_name} {stage} from {path}")
+        except (ValidationError, FileNotFoundError) as e:
+            print(f"Error retrieving unsupervised session for {mouse_name}: {e}")
+
+    return Mouse2pSessions(
+        mouse_name=mouse_name,
+        unsupervised=results[0],
+        learning=results[1],
+        learned=results[2],
+    )
 
 
 def get_completed_mouse_sessions(mouse_name: str) -> Mouse2pSessions:
@@ -300,7 +329,7 @@ class PlaceCellResults:
                 if self.verbose:
                     print(f"Mouse is {self.genotype} genotype, processing {mouse_name}")
 
-                for rewarded in [False, True, None]:
+                for rewarded in [False, True]:
                     try:
                         result = self.collapsed_matrix_result(
                             mouse_name, stage=stage, rewarded=rewarded

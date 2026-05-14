@@ -65,11 +65,18 @@
       "justMyCode": true
     },
     {
-      "name": "Ensemble reactivation",
+      "name": "ensemble reactivation",
       "type": "debugpy",
       "request": "launch",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "program": "viral/ensemble_reactivation.py"
+    },
+    {
+      "name": "offline sequence",
+      "type": "debugpy",
+      "request": "launch",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "program": "viral/offline_sequence_detection.py"
     },
     {
       "name": "learning stages",
@@ -79,6 +86,12 @@
       "program": "viral/learning_stages.py",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "fix tiff",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fix_tiff.py"
     },
     {
       "name": "run oasis",

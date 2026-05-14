@@ -81,7 +81,6 @@ def do_classify(
             do_shuffle=False,
             threshold_speed=False,
         )
-
         X_list.append(data)
         if trial.texture_rewarded:
             # if random.random() > 0.5:

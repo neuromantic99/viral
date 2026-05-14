@@ -1,4 +1,4 @@
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Literal
 import numpy as np
 import sys
 import concurrent.futures
@@ -26,25 +26,25 @@ from viral.models import (
     GrosmarkConfig,
     SortedPlaceCells,
     TrialInfo,
+    SSPVectorData,
 )
 from viral.sessions_keep import SESSIONS_KEEP
 from viral.rastermap_utils import (
-    get_frame_position,
-    get_speed_frame,
     align_validate_data,
     process_trials_data,
     filter_speed_position,
 )
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
+    below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     shaded_line_plot,
     shuffle_rows,
     split_continuous_chunks,
-    threshold_detect,
     threshold_detect_continuous,
     threshold_detect_edges,
+    trial_is_imaged,
 )
 from viral.imaging_utils import (
     compute_speed_grosmark,
@@ -663,7 +663,12 @@ def plot_grosmark_panel(
 def get_ssp_vectors(
     trials: List[TrialInfo],
     place_cells: np.ndarray,
-) -> np.ndarray:
+    sigma: int = 30,
+    mode: Literal["above", "below", "all"] = "above",
+    speed_threshold: float = 5,
+    n_consecutive_samples: int = 3 * 30,
+    min_chunk_length: int | None = 2 * 30,
+) -> SSPVectorData:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
     The place cell finding step is run in grosmark_analysis/get_place_cells
@@ -675,14 +680,20 @@ def get_ssp_vectors(
     'PC run running-bout spike estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel
         corresponding to behavioral timescales.'
     """
-    sigma = 30
     ssp_vectors = []
+    position_vectors = []
+    trial_start_indices = []
+    chunk_start_indices = []
+    current_idx = 0
+
     for trial in trials:
+        trial_chunk_start_indices = []
         position = degrees_to_cm(
             np.array(trial.rotary_encoder_position),
             get_wheel_circumference_from_rig("2P"),
         )
 
+        # actual position of the mouse at each imaging frame
         frame_position = np.array(
             [
                 state.closest_frame_start
@@ -695,27 +706,102 @@ def get_ssp_vectors(
 
         speed = compute_speed_grosmark(position)
 
-        speed_threshold = 5
-        idx_keep = above_threshold_for_n_consecutive_samples(
-            speed, threshold=speed_threshold, n_samples=3 * 30
-        )
+        # safely map indices in the ssp vector to indices in the position/speed vectors
+        frame_to_pos_index = {int(f): idx for idx, f in enumerate(frame_position)}
+
+        if mode == "above":
+            idx_keep = above_threshold_for_n_consecutive_samples(
+                speed, threshold=speed_threshold, n_samples=n_consecutive_samples
+            )
+        elif mode == "below":
+            idx_keep = below_threshold_for_n_consecutive_samples(
+                speed, threshold=speed_threshold, n_samples=n_consecutive_samples
+            )
+        elif mode == "all":
+            # don't filter for speed
+            idx_keep = np.ones_like(speed, dtype=bool)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
         # Take the ITI out
         idx_keep = idx_keep & (position < 180)
         frames_keep = np.unique(frame_position[idx_keep])
 
+        if frames_keep.size == 0:
+            # skip trial if there aren't any valid frames
+            continue
+
+        trial_start_idx = None
+        trial_has_chunks = False
         # Don't smooth across non-continuous chunks
         for chunk in split_continuous_chunks(frames_keep):
-            if len(chunk) < 2 * 30:  # Arbitrary removal of short chunks
+            if min_chunk_length is not None and len(chunk) < min_chunk_length:
                 continue
-            ssp_vectors.append(
-                gaussian_filter1d(
-                    input=place_cells[:, chunk],
-                    sigma=sigma,
-                    axis=1,
+
+            if np.any(np.array(chunk) < 0) or np.any(
+                np.array(chunk) >= place_cells.shape[1]
+            ):
+                raise IndexError(
+                    "Ssp chunk contains invalid frame indices for place_cells"
                 )
+
+            segment = gaussian_filter1d(
+                input=place_cells[:, chunk],
+                sigma=sigma,
+                axis=1,
             )
 
-    return np.hstack(ssp_vectors)
+            # add the smoothed segment of neural activity to the ssp_vectors
+            ssp_vectors.append(segment)
+
+            pos_idx = [frame_to_pos_index.get(int(f), None) for f in chunk]
+            if any(x is None for x in pos_idx):
+                raise IndexError("Missing frames")
+
+            # search for the positions of the mouse at each frame of the chunk
+            chunk_positions = position[np.searchsorted(frame_position, chunk)]
+            position_vectors.append(chunk_positions)
+
+            trial_chunk_start_indices.append(current_idx)
+            # treat the beginning of the first valid chunk found as the trial start idx
+            if not trial_has_chunks:
+                trial_start_idx = current_idx
+                trial_has_chunks = True
+
+            current_idx += segment.shape[1]
+
+        # only append the trial start idx if there are valid chunks within the trial
+        if trial_has_chunks:
+            trial_start_indices.append(trial_start_idx)
+            # append the list of start indices of the chunks within the trial to the nested list
+            chunk_start_indices.append((trial_chunk_start_indices))
+
+    if len(ssp_vectors) == 0:
+        print("No frames matched the criteria, returning empty ssp vector")
+        return SSPVectorData(
+            ssp_vectors=np.array([]),
+            position_vectors=np.array([]),
+            trial_start_indices=np.array([]),
+            chunk_start_indices=np.array([]),
+        )
+    else:
+        total_length = np.hstack(ssp_vectors).shape[1]
+        assert all(
+            0 <= s <= total_length for s in trial_start_indices
+        ), "Invalid trial start indices"
+        assert len(trial_start_indices) <= len(trials), "Too many trial start indices"
+
+        assert len(ssp_vectors) == len(position_vectors)
+
+        assert len(chunk_start_indices) == len(
+            trial_start_indices
+        ), "For each valid trial, there must be an array of chunk start indices"
+        return SSPVectorData(
+            ssp_vectors=np.hstack(ssp_vectors),
+            position_vectors=np.hstack(position_vectors),
+            trial_start_indices=np.array(trial_start_indices),
+            chunk_start_indices=chunk_start_indices,
+        )
 
 
 def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> None:
@@ -802,10 +888,12 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
             and ((rewarded is None) or trial.texture_rewarded == rewarded)
         ]
 
-        ssp_vectors = get_ssp_vectors(
+        ssp_result = get_ssp_vectors(
             trials=trials,
             place_cells=place_cells,
         )
+
+        ssp_vectors = ssp_result.ssp_vectors
 
         ssp_vectors_shuffled = shuffle_rows(ssp_vectors)
         # TODO: are we returning the right thing here?
@@ -1563,16 +1651,17 @@ def all_mouse_plots(
 
 if __name__ == "__main__":
     # This is the file that's saved by the full grosmark oasis preprocessing as a flag
-    valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
+    # valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
 
-    for session_idx in range(len(valid_sessions)):
-        session_path = valid_sessions[session_idx]
-        mouse = session_path.parts[-4]
-        date = session_path.parts[-5]
+    # for session_idx in range(len(valid_sessions)):
+    #     session_path = valid_sessions[session_idx]
+    #     mouse = session_path.parts[-4]
+    #     date = session_path.parts[-5]
 
-        if mouse not in {"JB034", "JB035", "JB036"}:
-            continue
+    #     # Bad imaging, replace eventually with column
+    #     # in spreadsheet, or filter by number of place cells
+    #     if mouse in {"JB033", "JB032"}:
+    #         continue
 
-        for rewarded in [True, False, None]:
-            print(f"Starting {session_idx+1}/{len(valid_sessions)}: {mouse} {date}")
-            main(mouse, date, rewarded=rewarded, plot=True)
+    #     main(mouse, date, plot=False)
+    multiple_sessions()
