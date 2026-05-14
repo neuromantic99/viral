@@ -1,6 +1,6 @@
 """Contains functions that act on fluorescence data, either spks or dff, either alone or with behavioural data"""
 
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, percentile_filter
 from typing import List, Tuple
 import numpy as np
 from viral.models import TrialInfo, WheelFreeze
@@ -26,6 +26,15 @@ def compute_dff(f: np.ndarray) -> np.ndarray:
 
 def subtract_neuropil(f_raw: np.ndarray, f_neu: np.ndarray) -> np.ndarray:
     return f_raw - f_neu * 0.7
+
+
+def compute_dff_percentile_filter(
+    f: np.ndarray, percentile: float, window_size_seconds: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Probably want to do this for dff, but it requires the server to compute"""
+    window_size = int(window_size_seconds * 30)
+    baseline = percentile_filter(f, percentile, size=window_size)
+    return (f - baseline) / baseline, baseline
 
 
 def load_imaging_data(
@@ -211,11 +220,17 @@ def get_online_position_and_frames(
     trial: TrialInfo,
     wheel_circumference: float,
     threshold_speed: bool = True,
+    speed_threshold: float | None = 5,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
     smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
     Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
-    for at least 3 consecutive seconds."""
+    for at least 3 consecutive seconds.
+
+    speed_threshold is in cm / s
+    """
+    if threshold_speed and speed_threshold is None:
+        raise ValueError("If threshold_speed is True, speed_threshold must be provided")
 
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference
@@ -232,10 +247,7 @@ def get_online_position_and_frames(
     assert len(position) == len(frame_position)
 
     if threshold_speed:
-        # TODO: just for debugging
-        print("thresholding speed for getting traces for online epochs")
         speed = compute_speed_grosmark(position)
-        speed_threshold = 5
         idx_keep = above_threshold_for_n_consecutive_samples(
             speed, threshold=speed_threshold, n_samples=3 * 30
         )

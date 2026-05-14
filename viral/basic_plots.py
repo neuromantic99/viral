@@ -3,23 +3,17 @@ from pathlib import Path
 
 
 HERE = Path(__file__).parent
-sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 import time
-from pathlib import Path
-import sys
 from typing import Dict, List
 
 import pandas as pd
 from scipy import stats
 
-from matplotlib import pyplot as plt
+
 from tifffile import imwrite
 
-HERE = Path(__file__).parent
-sys.path.append(str(HERE.parent))
-sys.path.append(str(HERE.parent.parent))
 
 from matplotlib import pyplot as plt
 from scipy.ndimage import percentile_filter

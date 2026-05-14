@@ -134,6 +134,26 @@
       "console": "integratedTerminal",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "5" },
       "justMyCode": true
+    },
+
+    {
+      "name": "spatial information",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/spatial_information.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "justMyCode": true
+    },
+
+    {
+      "name": "fisher",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/fisher.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "justMyCode": true
     }
   ]
 }
