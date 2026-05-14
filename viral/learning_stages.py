@@ -392,7 +392,6 @@ def get_speed_summary(
 
 def tuning_comparison_plot() -> None:
 
-    1 / 0
 
     wt = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
@@ -437,7 +436,6 @@ def tuning_comparison_plot() -> None:
         transparent=True,
     )
 
-    1 / 0
 
 
 def plot_place_cell_results(
