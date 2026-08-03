@@ -1,25 +1,28 @@
-from datetime import datetime
+import gc
 import math
-from pathlib import Path
-from typing import Dict, List, Literal, Tuple, TypeVar, Any
 import warnings
-from zoneinfo import ZoneInfo
-from matplotlib import pyplot as plt
-import seaborn as sns
-from statsmodels.formula.api import mixedlm
-import numpy as np
+from datetime import datetime
 from enum import Enum
-import pandas as pd
-from scipy import stats
-from scipy.ndimage import gaussian_filter1d
+from pathlib import Path
+from typing import Any, Dict, Literal, Tuple, TypeVar
+from zoneinfo import ZoneInfo
 
+import cv2
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from matplotlib import pyplot as plt
+from scipy import stats
 from scipy.linalg import issymmetric
+from scipy.ndimage import gaussian_filter1d
+from statsmodels.formula.api import mixedlm
+
 from viral.constants import ENCODER_TICKS_PER_TURN
 from viral.models import (
     Cached2pSession,
+    MouseSummary,
     SpeedPosition,
     TrialInfo,
-    MouseSummary,
 )
 
 
@@ -29,13 +32,12 @@ def moving_average(arr: np.ndarray, window: int) -> np.ndarray:
 
 def shaded_line_plot(
     arr: np.ndarray,
-    x_axis: np.ndarray | List[float],
+    x_axis: np.ndarray | list[float],
     color: str,
     label: str,
     do_moving_average: bool = False,
     axis: plt.Axes | None = None,
 ) -> None:
-
     plotter = axis if axis is not None else plt
 
     if do_moving_average:
@@ -105,7 +107,7 @@ def get_speed_positions(
     last_position: int,
     step_size: int,
     sampling_rate: int,
-) -> List[SpeedPosition]:
+) -> list[SpeedPosition]:
     """Compute speed as function of position
 
     position: The rotary encoder position at each sample
@@ -124,7 +126,7 @@ def get_speed_positions(
         last_position - first_position
     ) % step_size == 0, "step_size should evenly divide the range"
 
-    speed_position: List[SpeedPosition] = []
+    speed_position: list[SpeedPosition] = []
     for start, stop in zip(
         range(first_position, last_position - step_size + 1, step_size),
         range(first_position + step_size, last_position + 1, step_size),
@@ -224,7 +226,7 @@ def threshold_detect_edges(
     return rising_indices, falling_indices
 
 
-def get_tiff_paths_in_directory(directory: Path) -> List[Path]:
+def get_tiff_paths_in_directory(directory: Path) -> list[Path]:
     return list(directory.glob("*.tif*"))
 
 
@@ -262,7 +264,7 @@ def get_wheel_circumference_from_rig(rig: str) -> float:
         raise ValueError(f"Unknown rig: {rig}")
 
 
-def time_list_to_datetime(time_list: List[float]) -> datetime:
+def time_list_to_datetime(time_list: list[float]) -> datetime:
     assert len(time_list) == 6, "time_list should have 6 elements"
     whole_seconds = int(time_list[5])
     fractional_seconds = time_list[5] - whole_seconds
@@ -277,7 +279,7 @@ def time_list_to_datetime(time_list: List[float]) -> datetime:
     )
 
 
-def find_chunk(chunk_lens: List[int] | np.ndarray, index: int) -> int:
+def find_chunk(chunk_lens: list[int] | np.ndarray, index: int) -> int:
     """Given a list of chunk lengths and an index, find the chunk that contains the index"""
     cumulative_length = 0
     for i, length in enumerate(chunk_lens):
@@ -287,7 +289,7 @@ def find_chunk(chunk_lens: List[int] | np.ndarray, index: int) -> int:
     return -1  # If index is out of bounds
 
 
-def average_different_lengths(data: List[np.ndarray]) -> np.ndarray:
+def average_different_lengths(data: list[np.ndarray]) -> np.ndarray:
     max_length = max(len(d) for d in data)
 
     for idx, d in enumerate(data):
@@ -302,7 +304,7 @@ def get_genotype(
 ) -> Literal["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"]:
     if mouse_name in {"JB014", "JB015", "JB018", "JB020", "JB022"}:
         return "Oligo-BACE1-KO"
-    if mouse_name in {"JB034", "JB035"}:
+    if mouse_name in {"JB034", "JB035", "J036", "J037", "J038"}:
         return "Neuronal-BACE1-KO"
     if mouse_name in {
         "JB011",
@@ -314,6 +316,9 @@ def get_genotype(
         "JB021",
         "JB023",
         "JB036",
+        "J030",
+        "J031",
+        "J032",
     }:
         return "NLGF"
 
@@ -326,6 +331,8 @@ def get_genotype(
         "JB031",
         "JB032",
         "JB033",
+        "J034",
+        "J035",
     }:
         return "WT"
 
@@ -345,6 +352,11 @@ def get_sex(mouse_name: str) -> str:
         "JB027",
         "JB034",
         "JB036",
+        "J030",
+        "J031",
+        "J034",
+        "J036",
+        "J037",
     }:
         return "male"
     if mouse_name in {
@@ -361,6 +373,9 @@ def get_sex(mouse_name: str) -> str:
         "JB032",
         "JB033",
         "JB035",
+        "J032",
+        "J035",
+        "J038",
     }:
         return "female"
     raise ValueError(f"Unknown sex for mouse: {mouse_name}")
@@ -460,7 +475,6 @@ def array_bin_mean(arr: np.ndarray, bin_size: int = 2, axis: int = 1) -> np.ndar
 
 
 def remove_consecutive_ones(matrix: np.ndarray) -> np.ndarray:
-
     def driver(row: np.ndarray) -> np.ndarray:
         # Create a mask to identify the first occurrence of 1 in consecutive sequences
         mask = np.diff(row, prepend=0) == 1
@@ -520,7 +534,6 @@ def remove_diagonal(A: np.ndarray) -> np.ndarray:
 
 
 def cross_correlation_pandas(matrix: np.ndarray) -> np.ndarray:
-
     df = pd.DataFrame(matrix)
     corr = df.corr(method="pearson")
     return corr.to_numpy()
@@ -591,13 +604,13 @@ def above_threshold_for_n_consecutive_samples(
     return mask
 
 
-def split_continuous_chunks(arr: np.ndarray) -> List[np.ndarray]:
+def split_continuous_chunks(arr: np.ndarray) -> list[np.ndarray]:
     """Split an array into continuous chunks"""
     split_indices = np.where(np.diff(arr) != 1)[0] + 1
     return np.split(arr, split_indices)
 
 
-def check_trial_file_sorting(trial_files: List[Path]) -> None:
+def check_trial_file_sorting(trial_files: list[Path]) -> None:
     """Check that trials are sorted by trial number"""
     for trial, next_trial in zip(trial_files[:-1], trial_files[1:], strict=True):
         this_number = int(trial.stem.split("trial")[-1])
@@ -660,7 +673,6 @@ def mixed_effects(
     independent_var: str,
     group_name: str,
 ) -> pd.Series:
-
     df[independent_var] = df[independent_var].astype("category")
 
     md = mixedlm(
@@ -686,6 +698,149 @@ def interpolate_nans_vector(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
-def save_figure(path: Path):
+def save_figure(path: Path) -> None:
     plt.rcParams["pdf.fonttype"] = 42
     plt.savefig(path, bbox_inches="tight", transparent=True)
+
+
+def compute_motion_energy(video: np.ndarray) -> np.ndarray:
+    """
+    Efficient per-frame motion energy for video shaped (frames, height, width).
+
+    Returns one value per frame transition.
+    """
+    if video.ndim != 3:
+        raise ValueError("Expected video with shape (frames, height, width)")
+
+    # Use float32 to avoid uint8 wraparound and reduce memory vs float64.
+    v = video.astype(np.float32, copy=False)
+
+    # Allocate exactly one difference array: shape (frames - 1, height, width)
+    diff = np.empty_like(v[:-1], dtype=np.float32)
+
+    # diff[t] = v[t+1] - v[t]
+    np.subtract(v[1:], v[:-1], out=diff)
+
+    # Square in-place to avoid another large temporary.
+    np.multiply(diff, diff, out=diff)
+
+    return diff.sum(axis=(1, 2))
+
+
+def motion_energy_in_chunks(mp4_path: Path, chunk_size: int) -> np.ndarray:
+    """
+    Processes a video file in chunks and compute motion energy for the entire video
+
+    Parameters:
+        mp4_path (Path): Path to the .mp4 file.
+        chunk_size (int): Number of frames to process per chunk.
+
+    Returns:
+        numpy.ndarray: The diffed vector for the entire video.
+    """
+
+    cap = cv2.VideoCapture(str(mp4_path))
+    motion_energy = []
+
+    previous_chunk_last_frame = None  # To store the last frame of the previous chunk
+
+    while True:
+        gc.collect()
+        frames = []
+        for _ in range(chunk_size):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(
+                frame[:, :, 0]
+            )  # Video is grayscale but three channels are loaded
+
+        if not frames:  # Break the loop if no frames were read
+            break
+
+        frames_array = np.array(frames)
+
+        # If there was a previous chunk, include the last frame for continuity in diff computation
+        if previous_chunk_last_frame is not None:
+            frames_array = np.vstack(
+                [previous_chunk_last_frame[np.newaxis, ...], frames_array]
+            )
+
+        # Compute the diffed vector
+        motion_energy_chunk = compute_motion_energy(frames_array)
+        motion_energy.extend(motion_energy_chunk)
+
+        # Store the last frame of this chunk for continuity in the next iteration
+        previous_chunk_last_frame = frames_array[-1]
+
+    cap.release()
+
+    return np.array(motion_energy)
+
+
+def is_ordered_subset(a: np.ndarray, b: np.ndarray) -> bool:
+    """Is a contained within b in order"""
+    n = len(a)
+
+    if n == 0:
+        return True
+
+    if n > len(b):
+        return False
+
+    return any(np.array_equal(a, b[i : i + n]) for i in range(len(b) - n + 1))
+
+
+def detect_events(
+    vector: np.ndarray,
+    lower_threshold: float,
+    upper_threshold: float,
+) -> list[Tuple[int, int]]:
+    in_event = False
+    upper_exceeded = False
+    start_event = 0
+
+    events = []
+
+    for idx, value in enumerate(vector):
+        if value > lower_threshold and not in_event:
+            start_event = idx
+            in_event = True
+
+        # If you bounce on the lower threshold
+        if value < lower_threshold and in_event and not upper_exceeded:
+            in_event = False
+
+        if value > upper_threshold:
+            upper_exceeded = True
+
+        if value < lower_threshold and in_event and upper_exceeded:
+            events.append((start_event, idx))
+            in_event = False
+            upper_exceeded = False
+
+    return events
+
+
+def subset_frames_mp4(mp4_path: Path, frames: list[int], outfile: Path) -> None:
+    """Subset the frames in 'frames' from an MP4 video and save to a new file."""
+    cap = cv2.VideoCapture(mp4_path)
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    out = cv2.VideoWriter(
+        outfile,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (w, h),
+    )
+
+    for i in frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        _, frame = cap.read()
+        out.write(frame)
+
+    cap.release()
+    out.release()

@@ -1,32 +1,23 @@
-from datetime import datetime, timedelta
 import json
-from pathlib import Path
 import re
 import sys
 import time
-import traceback
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Tuple
-import matplotlib.pyplot as plt
 
-from nptdms import TdmsFile
-from ScanImageTiffReader import ScanImageTiffReader
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from nptdms import TdmsFile
+from ScanImageTiffReader import ScanImageTiffReader
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.imaging_utils import (
-    extract_TTL_chunks,
-    get_sampling_rate,
-    get_imaging_crashed,
-    get_daq_crashed,
-    load_imaging_data,
-    trial_is_imaged,
-)
-
+import logging
 
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -36,20 +27,26 @@ from viral.constants import (
     TEMP_CACHE_PATH,
     TIFF_UMBRELLA,
 )
+from viral.correct_2p_sessions import apply_session_correction
 from viral.gsheets_importer import gsheet2df
-from viral.models import Cached2pSession, TrialInfo, WheelFreeze, SessionImagingInfo
+from viral.imaging_utils import (
+    extract_TTL_chunks,
+    get_daq_crashed,
+    get_imaging_crashed,
+    get_sampling_rate,
+    trial_is_imaged,
+)
+from viral.models import Cached2pSession, SessionImagingInfo, TrialInfo, WheelFreeze
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
     find_chunk,
     get_tiff_paths_in_directory,
+    is_ordered_subset,
     time_list_to_datetime,
     uk_to_utc,
 )
-
-from viral.correct_2p_sessions import apply_session_correction
-
-import logging
+from viral.wheel_freeze_movement import get_wheel_freeze_movement
 
 logging.basicConfig(
     filename="2p_cacher_log.log",
@@ -195,6 +192,7 @@ def extract_frozen_wheel_chunks(
     sampling_rate: int,
     frame_rate: int = 30,
     check_first_chunk: bool = True,
+    recorded_movement_during_freezes: bool = False,
 ) -> tuple[tuple[int, int], tuple[int, int]] | tuple[None, tuple[int, int]]:
     """Extract start and end frame index for pre-training and post-training imaging chunks.
     Args:
@@ -257,18 +255,21 @@ def extract_frozen_wheel_chunks(
         <= 20 * 60 * sampling_rate
     ), "Last chunk length does not match expected length"
 
-    if check_first_chunk:
+    # Need to disable this check with the most recent verion as
+    # we are now recording movement on the bpod during the wheel freezes
+    if check_first_chunk and not recorded_movement_during_freezes:
         assert not np.any(
             (behaviour_times >= first_chunk_times[0])
             & (behaviour_times <= first_chunk_times[-1])
         ), "Behavioural pulses detected in pre-training period!"
 
-    assert not np.any(
-        (behaviour_times >= last_chunk_times[0])
-        & (behaviour_times <= last_chunk_times[-1])
-    ), "Behavioural pulses detected in post-training period!"
+    if not recorded_movement_during_freezes:
+        assert not np.any(
+            (behaviour_times >= last_chunk_times[0])
+            & (behaviour_times <= last_chunk_times[-1])
+        ), "Behavioural pulses detected in post-training period!"
 
-    return (first_chunk, last_chunk)
+    return first_chunk, last_chunk
 
 
 def manual_wheel_freezes(
@@ -285,7 +286,9 @@ def manual_wheel_freezes(
     return None
 
 
-def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
+def get_wheel_freeze(
+    session_sync: SessionImagingInfo, recorded_movement_during_freezes: bool
+) -> WheelFreeze:
     """Get wheel freeze object."""
     # TODO: if this occurs more often, find a more elegant fix
     # manually set wheel freeze objects for crashed recordings
@@ -306,6 +309,7 @@ def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
         behaviour_times=session_sync.behaviour_times,
         sampling_rate=session_sync.sampling_rate,
         check_first_chunk=session_sync.offset_after_pre_epoch == 0,
+        recorded_movement_during_freezes=recorded_movement_during_freezes,
     )
     if session_sync.offset_after_pre_epoch > 0:
         return WheelFreeze(
@@ -405,8 +409,8 @@ def get_session_sync(
     if "JB011" in str(tdms_path) and "2024-10-22" in str(tdms_path):
         behaviour_chunk_lens = np.delete(behaviour_chunk_lens, 52)
 
-    assert np.array_equal(
-        behaviour_chunk_lens, num_spacers_per_trial
+    assert is_ordered_subset(
+        num_spacers_per_trial, behaviour_chunk_lens
     ), "Spacers recorded in txt file do not match sync"
 
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
@@ -478,7 +482,7 @@ def get_valid_frame_times(
     from a completed grab).
     The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
     The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
-    frame is relaibly correct
+    frame is reliably correct
     Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
@@ -493,7 +497,6 @@ def get_valid_frame_times(
     for stack_len_tiff, chunk_len_daq in zip(
         stack_lengths_tiffs, chunk_lengths_daq, strict=True
     ):
-
         assert (
             chunk_len_daq - stack_len_tiff
             in {
@@ -526,7 +529,6 @@ def get_valid_frame_times(
 def get_tiff_metadata(
     tiff_paths: List[Path], use_cache: bool = True
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
     mouse_name = tiff_paths[0].parent.name
     date = tiff_paths[0].parent.parent.name
 
@@ -554,8 +556,7 @@ def get_tiff_metadata(
     epochs = []
     all_tiff_timestamps = []
     for tiff in tiffs:
-        stack_length, epoch, tiff_timestamps = extract_metadata(tiff)
-        stack_lengths.append(stack_length)
+        _, epoch, tiff_timestamps = extract_metadata(tiff)
         epochs.append(epoch)
         all_tiff_timestamps.extend(tiff_timestamps)
         check_no_dropped_frames(tiff_timestamps)
@@ -642,7 +643,6 @@ def check_timestamps(
     chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
 
     for frame in range(first_frame_trial, last_frame_trial):
-
         # The time in the tiff. Not sure if this is the end or the start of the tiff
         frame_datetime = chunk_start + timedelta(seconds=all_tiff_timestamps[frame])
         frame_daq_time = daq_start_time + timedelta(
@@ -669,6 +669,7 @@ def process_session(
     date: str,
     session_type: str,
     wheel_blocked: bool,
+    row: pd.Series,
 ) -> None:
     print(f"Off we go for {mouse_name} {date} {session_type}")
     imaging_crashed = get_imaging_crashed(mouse_name, date)
@@ -688,15 +689,30 @@ def process_session(
         imaging_crashed=imaging_crashed,
     )
 
+    recorded_movement_during_freezes = "Session Number pre-freeze" in row
+
     manual = manual_wheel_freezes(mouse_name, date, session_sync)
     wheel_freeze = (
         manual
         if manual is not None
-        else get_wheel_freeze(session_sync) if wheel_blocked else None
+        else (
+            get_wheel_freeze(session_sync, recorded_movement_during_freezes)
+            if wheel_blocked
+            else None
+        )
     )
-
+    if wheel_blocked and wheel_freeze is not None:
+        # This saves files so didn't return anything
+        # I should probably store these variables in some kind of object, but we'll just use the saved files for now
+        get_wheel_freeze_movement(
+            session_sync=session_sync,
+            wheel_freeze=wheel_freeze,
+            row=row,
+            mouse_name=mouse_name,
+            date=date,
+        )
+        print("Saved wheel freeze movement data")
     trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze, daq_crashed)
-
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
             Cached2pSession(
@@ -727,71 +743,69 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB036"]:
+    for mouse_name in ["J034"]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
+            # TODO: Turn this try catch back on to match through sessions
+            # try:
+            print(f"The type is {row['Type']}")
+            date = row["Date"]
+            session_type = row["Type"].lower()
             try:
-                print(f"The type is {row['Type']}")
-                date = row["Date"]
-                session_type = row["Type"].lower()
-                try:
-                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-                except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
-                    print("Wheel blocked set to None")
-                    wheel_blocked = None
-                if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
-                    print(f"Skipping {mouse_name} {date} as already exists")
-                    continue
+                wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+            except KeyError as e:
+                print(f"No column 'Wheel blocked?' found: {e}")
+                print("Wheel blocked set to None")
+                wheel_blocked = None
+            if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
+                print(f"Skipping {mouse_name} {date} as already exists")
+                continue
 
-                if "learning" not in session_type:
-                    print(f"Skipping {mouse_name} {date} {session_type}")
-                    continue
-                try:
-                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
-                except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
-                    print("Wheel blocked set to None")
-                    wheel_blocked = None
-                if not row["Sync file"]:
-                    print(
-                        f"Skipping {mouse_name} {date} {session_type} as no sync file"
-                    )
-                    continue
-                session_numbers = parse_session_number(row["Session Number"])
-                trials = []
-                for session_number in session_numbers:
-                    session_path = (
-                        BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
-                    )
-                    trials.extend(load_data(session_path))
-                logger.info("\n")
-                logger.info(f"Processing {mouse_name} {date} {session_type}")
-                process_session(
-                    trials=trials,
-                    tiff_directory=TIFF_UMBRELLA / date / mouse_name,
-                    tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
-                    mouse_name=mouse_name,
-                    session_type=session_type,
-                    date=date,
-                    wheel_blocked=wheel_blocked,
+            if "learning" not in session_type:
+                print(f"Skipping {mouse_name} {date} {session_type}")
+                continue
+            try:
+                wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+            except KeyError as e:
+                print(f"No column 'Wheel blocked?' found: {e}")
+                print("Wheel blocked set to None")
+                wheel_blocked = None
+            if not row["Sync file"]:
+                print(f"Skipping {mouse_name} {date} {session_type} as no sync file")
+                continue
+            session_numbers = parse_session_number(row["Session Number"])
+            trials = []
+            for session_number in session_numbers:
+                session_path = (
+                    BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
                 )
-                logger.info(
-                    f"Completed processing for {mouse_name} {date} {session_type}"
-                )
-            except Exception as e:
-                tb = traceback.extract_tb(e.__traceback__)
-                last_trace = tb[
-                    -1
-                ]  # Get the last traceback entry (where the exception occurred)
-                filename = last_trace.filename
-                line_number = last_trace.lineno
-                msg = f"Error processing {mouse_name} {date} {session_type} in {filename} on line {line_number}: {e}"
-                logger.debug(msg)
-                print(msg)
-                full_tb = traceback.format_exc()  # Get full traceback as a string
-                logger.debug(full_tb)
-                print(full_tb)
+                trials.extend(load_data(session_path))
+            logger.info("\n")
+            logger.info(f"Processing {mouse_name} {date} {session_type}")
+            process_session(
+                trials=trials,
+                tiff_directory=TIFF_UMBRELLA / date / mouse_name,
+                tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                mouse_name=mouse_name,
+                session_type=session_type,
+                date=date,
+                wheel_blocked=wheel_blocked,
+                row=row,
+            )
+            logger.info(f"Completed processing for {mouse_name} {date} {session_type}")
+            # except Exception as e:
+            #     tb = traceback.extract_tb(e.__traceback__)
+            #     last_trace = tb[
+            #         -1
+            #     ]  # Get the last traceback entry (where the exception occurred)
+            #     filename = last_trace.filename
+            #     line_number = last_trace.lineno
+            #     msg = f"Error processing {mouse_name} {date} {session_type} in {filename} on line {line_number}: {e}"
+            #     logger.debug(msg)
+            #     print(msg)
+            #     full_tb = traceback.format_exc()  # Get full traceback as a string
+            #     logger.debug(full_tb)
+            #     print(full_tb)
 
 
 if __name__ == "__main__":

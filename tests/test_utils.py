@@ -14,6 +14,7 @@ from viral.utils import (
     get_speed_positions,
     corr_vs_distance,
     has_n_consecutive_trues,
+    is_ordered_subset,
     remove_consecutive_ones,
     round_up_to_base,
     shuffle_rows,
@@ -695,3 +696,28 @@ def test_round_up_to_base() -> None:
     assert round_up_to_base(0, base=5) == 0
     assert round_up_to_base(-3, base=5) == 0
     assert round_up_to_base(-7, base=5) == -5
+
+
+def test_is_ordered_subset() -> None:
+    a = np.array([3, 5, 6])
+    b = np.array([1, 2, 3, 5, 6])
+
+    assert is_ordered_subset(a, b)
+
+    b = np.array([1, 2, 3, 4, 5, 6])
+    assert not is_ordered_subset(a, b)
+
+    a = np.array([6, 5, 4])
+    b = np.array([4, 5, 6])
+    assert not is_ordered_subset(a, b)
+
+    a = np.array([4, 5, 6])
+    b = np.array([4, 5, 6])
+    assert is_ordered_subset(a, b)
+
+    a = np.random.randint(1, 10000, 50)
+    b = np.random.randint(1, 10000, 100)
+    assert not is_ordered_subset(a, b)
+
+    a = b[50:100]
+    assert is_ordered_subset(a, b)

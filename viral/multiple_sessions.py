@@ -860,30 +860,38 @@ if __name__ == "__main__":
     config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
     for mouse_name in {
-        "JB011",
-        "JB012",
-        "JB013",
-        "JB014",
-        "JB015",
-        "JB016",
-        "JB017",
-        "JB018",
-        "JB019",
-        "JB020",
-        "JB021",
-        "JB022",
-        "JB023",
-        "JB024",
-        "JB025",
-        "JB026",
-        "JB027",
-        "JB030",
-        "JB031",
-        "JB032",
-        "JB033",
-        "JB034",
-        "JB035",
-        "JB036",
+        # "JB011",
+        # "JB012",
+        # "JB013",
+        # "JB014",
+        # "JB015",
+        # "JB016",
+        # "JB017",
+        # "JB018",
+        # "JB019",
+        # "JB020",
+        # "JB021",
+        # "JB022",
+        # "JB023",
+        # "JB024",
+        # "JB025",
+        # "JB026",
+        # "JB027",
+        # "JB030",
+        # "JB031",
+        # "JB032",
+        # "JB033",
+        # "JB034",
+        # "JB035",
+        # "JB036",
+        # "J030",
+        # "J031",
+        # "J032",
+        # "J035"
+        # "J034"
+        "J036"
+        # "J037"
+        # "J038"
     }:
 
         print(f"\nProcessing {mouse_name}...")
@@ -902,11 +910,12 @@ if __name__ == "__main__":
                 print(f"mouse_name {mouse_name} cached now")
 
     # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
+    # plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
 
     # plot_mouse_performance(mice[0], config=config)
-    plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    plot_mouse_performance(mice[0], config=config)
+    # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
+    for mouse in mice:
+        plot_mouse_performance(mouse, config=config)
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # ## Probably not interesting as related to speed
     # plot_trial_time_summaries(mice, "learning")
