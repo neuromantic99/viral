@@ -4,6 +4,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+import traceback
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
@@ -451,7 +452,7 @@ def get_session_sync(
             valid_frame_times, np.ones(shape=sum([14200, 13000]))
         )
 
-    # Put me back
+    # Put me back in
     # check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
@@ -469,6 +470,8 @@ def get_session_sync(
         sampling_rate=sampling_rate,
         offset_after_pre_epoch=offset_after_pre_epoch,
     )
+
+/Volumes/MarcBusche/Josef/viral_caches/temp_caches/motion_energy/videos
 
 
 def get_valid_frame_times(
@@ -744,69 +747,78 @@ def main() -> None:
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["J034"]:
+    for mouse_name in [
+        "J034",
+        "J035",
+        "J037",
+        "J038",
+    ]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             # TODO: Turn this try catch back on to match through sessions
-            # try:
-            print(f"The type is {row['Type']}")
-            date = row["Date"]
-            session_type = row["Type"].lower()
             try:
-                wheel_blocked = row["Wheel blocked?"].lower() == "yes"
-            except KeyError as e:
-                print(f"No column 'Wheel blocked?' found: {e}")
-                print("Wheel blocked set to None")
-                wheel_blocked = None
-            if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
-                print(f"Skipping {mouse_name} {date} as already exists")
-                continue
+                print(f"The type is {row['Type']}")
+                date = row["Date"]
+                session_type = row["Type"].lower()
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
+                if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
+                    print(f"Skipping {mouse_name} {date} as already exists")
+                    continue
 
-            if "learning" not in session_type:
-                print(f"Skipping {mouse_name} {date} {session_type}")
-                continue
-            try:
-                wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
-            except KeyError as e:
-                print(f"No column 'Wheel blocked?' found: {e}")
-                print("Wheel blocked set to None")
-                wheel_blocked = None
-            if not row["Sync file"]:
-                print(f"Skipping {mouse_name} {date} {session_type} as no sync file")
-                continue
-            session_numbers = parse_session_number(row["Session Number"])
-            trials = []
-            for session_number in session_numbers:
-                session_path = (
-                    BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
+                if "learning" not in session_type:
+                    print(f"Skipping {mouse_name} {date} {session_type}")
+                    continue
+                try:
+                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+                except KeyError as e:
+                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print("Wheel blocked set to None")
+                    wheel_blocked = None
+                if not row["Sync file"]:
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} as no sync file"
+                    )
+                    continue
+                session_numbers = parse_session_number(row["Session Number"])
+                trials = []
+                for session_number in session_numbers:
+                    session_path = (
+                        BEHAVIOUR_DATA_PATH / mouse_name / row["Date"] / session_number
+                    )
+                    trials.extend(load_data(session_path))
+                logger.info("\n")
+                logger.info(f"Processing {mouse_name} {date} {session_type}")
+                process_session(
+                    trials=trials,
+                    tiff_directory=TIFF_UMBRELLA / date / mouse_name,
+                    tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                    mouse_name=mouse_name,
+                    session_type=session_type,
+                    date=date,
+                    wheel_blocked=wheel_blocked,
+                    row=row,
                 )
-                trials.extend(load_data(session_path))
-            logger.info("\n")
-            logger.info(f"Processing {mouse_name} {date} {session_type}")
-            process_session(
-                trials=trials,
-                tiff_directory=TIFF_UMBRELLA / date / mouse_name,
-                tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
-                mouse_name=mouse_name,
-                session_type=session_type,
-                date=date,
-                wheel_blocked=wheel_blocked,
-                row=row,
-            )
-            logger.info(f"Completed processing for {mouse_name} {date} {session_type}")
-            # except Exception as e:
-            #     tb = traceback.extract_tb(e.__traceback__)
-            #     last_trace = tb[
-            #         -1
-            #     ]  # Get the last traceback entry (where the exception occurred)
-            #     filename = last_trace.filename
-            #     line_number = last_trace.lineno
-            #     msg = f"Error processing {mouse_name} {date} {session_type} in {filename} on line {line_number}: {e}"
-            #     logger.debug(msg)
-            #     print(msg)
-            #     full_tb = traceback.format_exc()  # Get full traceback as a string
-            #     logger.debug(full_tb)
-            #     print(full_tb)
+                logger.info(
+                    f"Completed processing for {mouse_name} {date} {session_type}"
+                )
+            except Exception as e:
+                tb = traceback.extract_tb(e.__traceback__)
+                last_trace = tb[
+                    -1
+                ]  # Get the last traceback entry (where the exception occurred)
+                filename = last_trace.filename
+                line_number = last_trace.lineno
+                msg = f"Error processing {mouse_name} {date} {session_type} in {filename} on line {line_number}: {e}"
+                logger.debug(msg)
+                print(msg)
+                full_tb = traceback.format_exc()  # Get full traceback as a string
+                logger.debug(full_tb)
+                print(full_tb)
 
 
 if __name__ == "__main__":
