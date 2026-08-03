@@ -471,8 +471,6 @@ def get_session_sync(
         offset_after_pre_epoch=offset_after_pre_epoch,
     )
 
-/Volumes/MarcBusche/Josef/viral_caches/temp_caches/motion_energy/videos
-
 
 def get_valid_frame_times(
     stack_lengths_tiffs: np.ndarray,
