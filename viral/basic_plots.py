@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 
-
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent.parent))
 
@@ -35,6 +34,7 @@ from viral.imaging_utils import (
     activity_trial_position,
     get_online_position_and_frames,
     get_resting_position_and_frames,
+    load_imaging_data,
     subtract_neuropil,
     trial_is_imaged,
 )
@@ -56,7 +56,6 @@ from viral.utils import (
     upper_triangle_no_diagonal,
 )
 from viral.multiple_sessions import load_cache, parse_session_number
-
 
 plt.rcParams["pdf.fonttype"] = 42
 
@@ -519,8 +518,8 @@ def save_correlations(genotype: str) -> None:
             if date is None:
                 continue
 
-            spks_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
-            spks_all = np.load(spks_path / "oasis_spikes.npy")
+            _, spks_all, _ = load_imaging_data(mouse=mouse_name, date=date)
+
             session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
             session = Cached2pSession.model_validate_json(session_path.read_text())
 

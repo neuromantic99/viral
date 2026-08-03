@@ -31,6 +31,7 @@ from viral.models import (
 
 from viral.utils import get_session_type, get_genotype, mixed_effects, shaded_line_plot
 from viral.imaging_utils import (
+    load_imaging_data,
     split_fluoresence_online_freeze,
     trial_is_imaged,
 )
@@ -365,14 +366,8 @@ def load_and_prepare_session_for_bayesian_decoding(
         print(f"Skipping {date} for mouse {mouse_name} as there was no wheel block")
         return
 
-    spks = np.load(
-        TIFF_UMBRELLA
-        / session.date
-        / session.mouse_name
-        / "suite2p"
-        / "plane0"
-        / "oasis_spikes.npy"
-    )
+    _, spks, _ = load_imaging_data(mouse=mouse_name, date=date)
+
     trials = [trial for trial in session.trials if trial_is_imaged(trial)]
 
     if bayesian_config.epoch == "online":

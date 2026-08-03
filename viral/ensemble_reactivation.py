@@ -14,7 +14,6 @@ from opt_einsum import contract
 import seaborn as sns
 from tqdm import tqdm
 
-
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
@@ -48,6 +47,7 @@ from viral.utils import (
 )
 from viral.imaging_utils import (
     compute_speed_grosmark,
+    load_imaging_data,
     split_fluoresence_online_freeze,
     trial_is_imaged,
 )
@@ -856,14 +856,7 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
     else:
         print("No cached data found, processing data")
 
-        spks = np.load(
-            TIFF_UMBRELLA
-            / session.date
-            / session.mouse_name
-            / "suite2p"
-            / "plane0"
-            / "oasis_spikes.npy"
-        )
+        _, spks, _ = load_imaging_data(mouse=mouse, date=date)
 
         t1 = time.time()
         pcs_mask, _, _ = get_place_cells(
