@@ -128,11 +128,14 @@ def get_motion_energy_video(
     date: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     use_cache = True
-    if use_cache:
+    pre_cache_path = TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_pre.npy"
+    post_cache_path = (
+        TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_post.npy"
+    )
+
+    if use_cache and pre_cache_path.exists() and post_cache_path.exists():
         print("Using cached motion energy")
-        return np.load(
-            TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_pre.npy"
-        ), np.load(TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_post.npy")
+        return np.load(pre_cache_path), np.load(post_cache_path)
 
     pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
     chunk_size = 500

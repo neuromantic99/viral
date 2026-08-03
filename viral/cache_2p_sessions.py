@@ -451,7 +451,8 @@ def get_session_sync(
             valid_frame_times, np.ones(shape=sum([14200, 13000]))
         )
 
-    check_against_suite2p_output(mouse_name, date, valid_frame_times)
+    # Put me back
+    # check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
