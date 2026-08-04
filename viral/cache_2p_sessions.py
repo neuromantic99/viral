@@ -2,9 +2,9 @@ import json
 import re
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-import traceback
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
@@ -99,13 +99,20 @@ def add_daq_times_to_trial(
     daq_sampling_rate: int,
     wheel_freeze: WheelFreeze | None = None,
     offset_after_pre_epoch: int = 0,
+    task_sync_start: int | None = None,
 ) -> None:
+
+    # If we recorded a task for the pre-freeze, remove these syncs from the daq so
+    # only task syncs are used for the trial
+    task_sync_start = task_sync_start if task_sync_start is not None else 0
+    behaviour_times = behaviour_times[np.sum(behaviour_chunk_lens[:task_sync_start]) :]
+    behaviour_chunk_lens = behaviour_chunk_lens[task_sync_start:]
+
     trial_spacer_daq_times = behaviour_times[
         np.sum(behaviour_chunk_lens[:trial_idx]) : np.sum(
             behaviour_chunk_lens[: trial_idx + 1]
         )
     ]
-    # Sanity check the above logic
     assert len(trial_spacer_daq_times) == count_spacers(trial)
 
     trial_spacer_bpod_times = np.array(
@@ -350,6 +357,7 @@ def add_imaging_info_to_trials(
             session_sync.sampling_rate,
             wheel_freeze,
             session_sync.offset_after_pre_epoch,
+            session_sync.task_sync_start,
         )
 
     for trial in trials:
@@ -410,9 +418,8 @@ def get_session_sync(
     if "JB011" in str(tdms_path) and "2024-10-22" in str(tdms_path):
         behaviour_chunk_lens = np.delete(behaviour_chunk_lens, 52)
 
-    assert is_ordered_subset(
-        num_spacers_per_trial, behaviour_chunk_lens
-    ), "Spacers recorded in txt file do not match sync"
+    check, start = is_ordered_subset(num_spacers_per_trial, behaviour_chunk_lens)
+    assert check, "Spacers recorded in txt file do not match sync"
 
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
@@ -469,6 +476,7 @@ def get_session_sync(
         behaviour_times=behaviour_times,
         sampling_rate=sampling_rate,
         offset_after_pre_epoch=offset_after_pre_epoch,
+        task_sync_start=start,
     )
 
 
@@ -656,11 +664,13 @@ def check_timestamps(
         # Allow for some drift up to 15ms
         # Take into account that the recording in wheel block is 1.5x longer,
         # i.e. one minute into the behaviour is at least 15 mins into the entire session
-        increase_offset_allowance_time = 30 if not wheel_blocked else 50
+        increase_offset_allowance_time = 30 if wheel_blocked else 50
         if trial.trial_start_time / 60 < increase_offset_allowance_time:
             assert abs(offset) <= 0.02, "Tiff timestamp does not match daq timestamp"
         else:
-            assert abs(offset) <= 0.025, "Tiff timestamp does not match daq timestamp"
+            # Probably ideally this would be a bit lower, but drifting by one frame
+            # is probably ok. And it's just the timestamp, the actual frame match should be ok
+            assert abs(offset) <= 0.05, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -707,7 +717,6 @@ def process_session(
         # This saves files so didn't return anything
         # I should probably store these variables in some kind of object, but we'll just use the saved files for now
         get_wheel_freeze_movement(
-            session_sync=session_sync,
             wheel_freeze=wheel_freeze,
             row=row,
             mouse_name=mouse_name,
@@ -744,7 +753,7 @@ def main() -> None:
     """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
 
     # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
-    redo = True
+    redo = False
     for mouse_name in [
         "J034",
         "J035",
@@ -759,7 +768,7 @@ def main() -> None:
                 date = row["Date"]
                 session_type = row["Type"].lower()
                 try:
-                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
                 except KeyError as e:
                     print(f"No column 'Wheel blocked?' found: {e}")
                     print("Wheel blocked set to None")

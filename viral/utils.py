@@ -778,17 +778,21 @@ def motion_energy_in_chunks(mp4_path: Path, chunk_size: int) -> np.ndarray:
     return np.array(motion_energy)
 
 
-def is_ordered_subset(a: np.ndarray, b: np.ndarray) -> bool:
+def is_ordered_subset(a: np.ndarray, b: np.ndarray) -> Tuple[bool, int | None]:
     """Is a contained within b in order"""
     n = len(a)
 
-    if n == 0:
-        return True
-
     if n > len(b):
-        return False
+        return False, None
 
-    return any(np.array_equal(a, b[i : i + n]) for i in range(len(b) - n + 1))
+    start = np.where([np.array_equal(a, b[i : i + n]) for i in range(len(b) - n + 1)])[
+        0
+    ]
+    if len(start) == 1:
+        return True, start[0]
+    if len(start) > 1:
+        raise ValueError("a is contained in b more than once")
+    return False, None
 
 
 def detect_events(

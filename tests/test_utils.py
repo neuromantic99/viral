@@ -702,22 +702,34 @@ def test_is_ordered_subset() -> None:
     a = np.array([3, 5, 6])
     b = np.array([1, 2, 3, 5, 6])
 
-    assert is_ordered_subset(a, b)
+    check, start = is_ordered_subset(a, b)
+    assert check
+    assert start == 2
 
     b = np.array([1, 2, 3, 4, 5, 6])
-    assert not is_ordered_subset(a, b)
+    check, start = is_ordered_subset(a, b)
+    assert not check
+    assert start is None
 
     a = np.array([6, 5, 4])
     b = np.array([4, 5, 6])
-    assert not is_ordered_subset(a, b)
+    check, start = is_ordered_subset(a, b)
+    assert not check
+    assert start is None
 
     a = np.array([4, 5, 6])
     b = np.array([4, 5, 6])
-    assert is_ordered_subset(a, b)
+    check, start = is_ordered_subset(a, b)
+    assert check
+    assert start == 0
 
     a = np.random.randint(1, 10000, 50)
     b = np.random.randint(1, 10000, 100)
-    assert not is_ordered_subset(a, b)
+    check, start = is_ordered_subset(a, b)
+    assert not check
+    assert start is None
 
     a = b[50:100]
-    assert is_ordered_subset(a, b)
+    check, start = is_ordered_subset(a, b)
+    assert check
+    assert start == 50

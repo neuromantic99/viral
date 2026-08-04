@@ -180,6 +180,9 @@ class SessionImagingInfo:
     behaviour_times: np.ndarray
     sampling_rate: int
     offset_after_pre_epoch: int
+    # Only relevant after we started recording movements in the sync periods
+    # In these sessions we need to keep track of the first sync for the actual task
+    task_sync_start: int | None = None
 
 
 @dataclass
