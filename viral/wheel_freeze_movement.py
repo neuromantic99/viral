@@ -11,9 +11,17 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 
 
+from viral.multiple_sessions import parse_session_number
+from viral.single_session import load_data
 from viral.gsheets_importer import gsheet2df
-from viral.constants import CACHE_PATH, SPREADSHEET_ID, TEMP_CACHE_PATH, TIFF_UMBRELLA
-from viral.models import Cached2pSession, SessionImagingInfo, WheelFreeze
+from viral.constants import (
+    BEHAVIOUR_DATA_PATH,
+    CACHE_PATH,
+    SPREADSHEET_ID,
+    TEMP_CACHE_PATH,
+    TIFF_UMBRELLA,
+)
+from viral.models import Cached2pSession, SessionImagingInfo, TrialInfo, WheelFreeze
 from viral.run_oasis import moving_average
 from viral.utils import detect_events, motion_energy_in_chunks, subset_frames_mp4
 
@@ -45,11 +53,12 @@ def merge_close_events(events: np.ndarray, min_distance: int) -> np.ndarray:
     return np.array(merged_events)
 
 
-def get_wheel_freeze_movement(
+def get_wheel_freeze_movement_camera(
     wheel_freeze: WheelFreeze,
     row: pd.Series,
     mouse_name: str,
     date: str,
+    save_mp4s: bool = False,
 ) -> None:
     """Main driver function for processing on the videos"""
     print("Processing wheel freeze movement for", mouse_name, date)
@@ -82,7 +91,9 @@ def get_wheel_freeze_movement(
         [pre_freeze_path, post_freeze_path],
     ):
         frames_in_events = []
-        frames_outside_events = set(range(len(motion_energy_pre)))
+        frames_outside_events = set(
+            range(len(motion_energy_pre if name == "pre" else len(motion_energy_post)))
+        )
         for start, end in event_boundaries:
             frames_in_events.extend(list(range(start, end + 1)))
             frames_outside_events -= set(range(start, end + 1))
@@ -102,25 +113,26 @@ def get_wheel_freeze_movement(
             list(frames_outside_events),
         )
 
-        subset_frames_mp4(
-            video_path,
-            frames_in_events,
-            Path(
-                TEMP_CACHE_PATH
-                / "motion_energy"
-                / f"{mouse_name}_{date}_{name}_in_events.mp4"
-            ),
-        )
+        if save_mp4s:
+            subset_frames_mp4(
+                video_path,
+                frames_in_events,
+                Path(
+                    TEMP_CACHE_PATH
+                    / "motion_energy"
+                    / f"{mouse_name}_{date}_{name}_in_events.mp4"
+                ),
+            )
 
-        subset_frames_mp4(
-            video_path,
-            frames_outside_events,
-            Path(
-                TEMP_CACHE_PATH
-                / "motion_energy"
-                / f"{mouse_name}_{date}_{name}_outside_events.mp4"
-            ),
-        )
+            subset_frames_mp4(
+                video_path,
+                frames_outside_events,
+                Path(
+                    TEMP_CACHE_PATH
+                    / "motion_energy"
+                    / f"{mouse_name}_{date}_{name}_outside_events.mp4"
+                ),
+            )
     print(f"Finished processing wheel freeze movement for {mouse_name} on {date}")
 
 
@@ -213,6 +225,31 @@ def compare_to_suite2p_motion(motion_energy_pre: np.ndarray) -> None:
     ax2.set_ylabel("Motion Energy (video)", color="red")
 
 
+def load_freeze_trials(
+    mouse_name: str, date: str, row: pd.Series
+) -> tuple[list[TrialInfo] | None, list[TrialInfo] | None]:
+
+    try:
+        session_number_pre = parse_session_number(row["Session Number pre-freeze"])[0]
+        session_number_post = parse_session_number(row["Session Number post-freeze"])[0]
+    except KeyError as e:
+        print(
+            f"Missing freeze session numbers for {mouse_name} on {date}. Error is: {e}"
+        )
+        return None, None
+
+    return load_data(
+        BEHAVIOUR_DATA_PATH / mouse_name / date / session_number_pre
+    ), load_data(BEHAVIOUR_DATA_PATH / mouse_name / date / session_number_post)
+
+
+# To use when computing freeze wheel speeds
+# all_positions = np.array([], dtype="float")
+# previous_rotary_end = 0
+# for trial in trials:
+#     position = np.array(trial.rotary_encoder_position)
+#     all_positions = np.concatenate((all_positions, position + previous_rotary_end))
+#     previous_rotary_end += position[-1]
 def plot_motion_energy_results(mouse_name: str, date: str) -> None:
 
     motion_energy_pre = np.load(
@@ -221,13 +258,14 @@ def plot_motion_energy_results(mouse_name: str, date: str) -> None:
     motion_energy_pre = motion_energy_pre[1:]
     events_pre = process_motion_energy(motion_energy_pre, plot=True)
 
-    motion_energy_post = np.load(
-        TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_post.npy"
-    )
-    events_post = process_motion_energy(motion_energy_post, plot=True)
+    # motion_energy_post = np.load(
+    #     TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_post.npy"
+    # )
+    # events_post = process_motion_energy(motion_energy_post, plot=True)
 
 
-if __name__ == "__main__":
+def mp4_saver() -> None:
+    """Utilty to save motion energy videos without going through cache2psessions"""
     mouse_name = "J034"
     date = "2026-06-11"
 
@@ -237,9 +275,13 @@ if __name__ == "__main__":
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     row = metadata[metadata["Date"] == date].iloc[0]
 
-    get_wheel_freeze_movement(
+    get_wheel_freeze_movement_camera(
         wheel_freeze=session.wheel_freeze,
         row=row,
         mouse_name=mouse_name,
         date=date,
     )
+
+
+if __name__ == "__main__":
+    pass

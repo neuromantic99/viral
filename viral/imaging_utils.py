@@ -72,7 +72,7 @@ def get_ITI_start_frame(trial: TrialInfo) -> int:
 
 def get_sampling_rate(frame_clock: np.ndarray) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
-    two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
+    two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 120 minutes.
     """
     if 30 < len(frame_clock) / 1000 / 60 < 120:
         return 1000
@@ -91,7 +91,12 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
         state
         for state in trial.states_info
         if state.name
-        in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
+        in {
+            "trigger_panda",
+            "trigger_panda_post_reward",
+            "trigger_panda_ITI",
+            "store_encoder_position",
+        }
     ]
     start_times_bpod = [state.start_time for state in trigger_panda_states]
     length_trial_bpod = start_times_bpod[-1] - start_times_bpod[0]
