@@ -92,7 +92,7 @@ def get_wheel_freeze_movement_camera(
     ):
         frames_in_events = []
         frames_outside_events = set(
-            range(len(motion_energy_pre if name == "pre" else len(motion_energy_post)))
+            range(len(motion_energy_pre) if name == "pre" else len(motion_energy_post))
         )
         for start, end in event_boundaries:
             frames_in_events.extend(list(range(start, end + 1)))
@@ -258,6 +258,10 @@ def plot_motion_energy_results(mouse_name: str, date: str) -> None:
     motion_energy_pre = motion_energy_pre[1:]
     events_pre = process_motion_energy(motion_energy_pre, plot=True)
 
+    session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
+    session = Cached2pSession.model_validate_json(session_path.read_text())
+    1 / 0
+
     # motion_energy_post = np.load(
     #     TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_post.npy"
     # )
@@ -284,4 +288,4 @@ def mp4_saver() -> None:
 
 
 if __name__ == "__main__":
-    pass
+    plot_motion_energy_results("J034", "2026-06-11")
