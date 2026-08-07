@@ -1,11 +1,19 @@
 from pathlib import Path
 import sys
+from typing_extensions import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.ndimage import gaussian_filter1d
-from scipy.stats import zscore
+
+from scipy.ndimage import uniform_filter1d
+from scipy.stats import median_abs_deviation
+from scipy.ndimage import (
+    uniform_filter1d,
+    binary_propagation,
+    binary_closing,
+    binary_opening,
+)
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -21,53 +29,96 @@ from viral.constants import (
     TEMP_CACHE_PATH,
     TIFF_UMBRELLA,
 )
-from viral.models import Cached2pSession, SessionImagingInfo, TrialInfo, WheelFreeze
+from viral.models import Cached2pSession, TrialInfo, WheelFreeze
 from viral.run_oasis import moving_average
-from viral.utils import detect_events, motion_energy_in_chunks, subset_frames_mp4
+from viral.utils import (
+    motion_energy_in_chunks,
+    subset_frames_mp4,
+)
 
 
-def process_motion_energy(motion_energy: np.ndarray, plot: bool = False) -> np.ndarray:
-    zscored = zscore(motion_energy)
-    smoothed = gaussian_filter1d(zscored, sigma=10)
-    events = np.array(detect_events(smoothed, lower_threshold=0.0, upper_threshold=0.5))
-    events = merge_close_events(events, min_distance=30)
-
-    if plot:
-        plt.plot(smoothed)
-        for start, end in events:
-            plt.axvspan(start, end, color="red", alpha=0.3)
-    return events
-
-
-def merge_close_events(events: np.ndarray, min_distance: int) -> np.ndarray:
-    merged_events = [events[0]]
-    did_merge = False
-    for event in events[1:]:
-        if event[0] - merged_events[-1][1] < min_distance:
-            merged_events[-1][1] = max(merged_events[-1][1], event[1])
-            did_merge = True
-        else:
-            merged_events.append(event)
-    if did_merge:
-        return merge_close_events(np.array(merged_events), min_distance)
-    return np.array(merged_events)
-
-
-def get_wheel_freeze_movement_camera(
+def get_wheel_freeze_movement(
     wheel_freeze: WheelFreeze,
     row: pd.Series,
     mouse_name: str,
     date: str,
+    trials_pre_freeze: list[TrialInfo] | None = None,
+    trials_post_freeze: list[TrialInfo] | None = None,
+) -> tuple[np.ndarray, np.ndarray, Literal["camera", "rotary_encoder", "suite2p"]]:
+    """
+    We have three options for freeze movement, the camera, the rotary encoder and the suite2p motion correction.
+    I have looked at all three, the camera is the best because it captures both paw movement and grooming.
+    The rotary encode is decent, does miss grooming but is pretty well correlated with the camera.
+    The suite2p motion is ok it is correlated and will probably do but is a much more noisy signal.
+
+    I tried combining metrics but camera alone was better, so the other two are treated as fallbacks
+    """
+
+    save_mp4s = False
+
+    # Try the camera
+    pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
+    if pre_freeze_path is not None and post_freeze_path is not None:
+        movement_pre, movement_post = get_wheel_freeze_movement_camera(
+            wheel_freeze=wheel_freeze,
+            pre_freeze_path=pre_freeze_path,
+            post_freeze_path=post_freeze_path,
+            mouse_name=mouse_name,
+            date=date,
+            save_mp4s=save_mp4s,
+        )
+        return movement_pre, movement_post, "camera"
+
+    # Try the rotary encoder
+    # TODO: one might be present and the other not, in which case we should still return the one that is present
+    if trials_post_freeze is not None and trials_pre_freeze is not None:
+        return (
+            get_wheel_freeze_movement_encoder(trials_pre_freeze),
+            get_wheel_freeze_movement_encoder(trials_post_freeze),
+            "rotary_encoder",
+        )
+
+    # Fallback to suite2p
+    return (
+        np.array([]),
+        np.array([]),
+        "rotary_encoder",
+    )  # TODO: implement rotary encoder movement extraction
+
+
+def get_wheel_freeze_movement_suite2p(
+    mouse_name: str, date: str, wheel_freeze: WheelFreeze
+) -> tuple[np.ndarray, np.ndarray]:
+
+    s2p_path = Path(f"/Volumes/MarcBusche/Josef/2P/{date}/{mouse_name}/suite2p/plane0")
+    ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
+    # 10x as it just makes everything a bit easier to deal with
+    motion_artifact_suite2p = np.abs(np.diff(ops["xoff"])) * 10
+
+    _, motion_artifact_suite2p = camera_movement(
+        motion_artifact_suite2p, fs=30, plot=True, hi=1.5, lo=0.5, smooth_s=0.5, min_s=1
+    )
+
+    return (
+        motion_artifact_suite2p[
+            wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame
+        ],
+        motion_artifact_suite2p[
+            wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame
+        ],
+    )
+
+
+def get_wheel_freeze_movement_camera(
+    wheel_freeze: WheelFreeze,
+    pre_freeze_path: Path,
+    post_freeze_path: Path,
+    mouse_name: str,
+    date: str,
     save_mp4s: bool = False,
-) -> None:
+) -> tuple[np.ndarray, np.ndarray]:
     """Main driver function for processing on the videos"""
     print("Processing wheel freeze movement for", mouse_name, date)
-    # This gets the motion energy and saves it. Good as it takes a long time and probably won't need changing
-    pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
-    if pre_freeze_path is None or post_freeze_path is None:
-        # TODO: I think there are rare occurances where one exists but one doesn't.
-        print(f"Missing pre or post freeze path for {mouse_name} on {date}")
-        return
 
     motion_energy_pre, motion_energy_post = get_motion_energy_video(
         wheel_freeze=wheel_freeze,
@@ -81,64 +132,41 @@ def get_wheel_freeze_movement_camera(
         # Screen flashes white at the start for some reason
         motion_energy_pre = motion_energy_pre[1:]
 
-    # Not sure this will work for all mice. May need adjusting
-    event_boundaries_pre = process_motion_energy(motion_energy_pre)
-    event_boundaries_post = process_motion_energy(motion_energy_post)
-
-    for name, event_boundaries, video_path in zip(
-        ["pre", "post"],
-        [event_boundaries_pre, event_boundaries_post],
-        [pre_freeze_path, post_freeze_path],
-    ):
-        frames_in_events = []
-        frames_outside_events = set(
-            range(len(motion_energy_pre) if name == "pre" else len(motion_energy_post))
-        )
-        for start, end in event_boundaries:
-            frames_in_events.extend(list(range(start, end + 1)))
-            frames_outside_events -= set(range(start, end + 1))
-        frames_outside_events = list(frames_outside_events)
-
-        np.save(
-            CACHE_PATH.parent
-            / "wheel_freeze_motion_events"
-            / f"{mouse_name}_{date}_{name}_in_events.npy",
-            frames_in_events,
-        )
-
-        np.save(
-            CACHE_PATH.parent
-            / "wheel_freeze_motion_events"
-            / f"{mouse_name}_{date}_{name}_outside_events.npy",
-            list(frames_outside_events),
-        )
-
-        if save_mp4s:
+    movement_pre, _ = camera_movement(motion_energy_pre, fs=30, plot=True)
+    movement_post, _ = camera_movement(motion_energy_post, fs=30, plot=True)
+    if save_mp4s:
+        for name, original_video_path in zip(
+            ["pre", "post"], [pre_freeze_path, post_freeze_path]
+        ):
             subset_frames_mp4(
-                video_path,
-                frames_in_events,
-                Path(
-                    TEMP_CACHE_PATH
-                    / "motion_energy"
-                    / f"{mouse_name}_{date}_{name}_in_events.mp4"
-                ),
+                original_video_path,
+                np.where(movement_pre)[0],
+                TEMP_CACHE_PATH
+                / "motion_energy"
+                / "videos"
+                / f"{mouse_name}_{date}_{name}_movement.mp4",
             )
 
             subset_frames_mp4(
-                video_path,
-                frames_outside_events,
-                Path(
-                    TEMP_CACHE_PATH
-                    / "motion_energy"
-                    / f"{mouse_name}_{date}_{name}_outside_events.mp4"
-                ),
+                original_video_path,
+                np.where(~movement_pre)[0],
+                TEMP_CACHE_PATH
+                / "motion_energy"
+                / "videos"
+                / f"{mouse_name}_{date}_{name}_no_movement.mp4",
             )
-    print(f"Finished processing wheel freeze movement for {mouse_name} on {date}")
+
+    return movement_pre, movement_post
 
 
 def extract_freeze_paths(
     row: pd.Series, date: str, mouse_name: str
 ) -> tuple[Path | None, Path | None]:
+
+    if "Pupil pre-freeze" not in row or "Pupil post-freeze" not in row:
+        print(f"Missing pre or post freeze path for {mouse_name} on {date}")
+        return None, None
+
     pre_freeze_path = TIFF_UMBRELLA / date / mouse_name / row["Pupil pre-freeze"]
     if not pre_freeze_path.exists() or not row["Pupil pre-freeze"]:
         pre_freeze_path = None
@@ -238,54 +266,206 @@ def load_freeze_trials(
         )
         return None, None
 
-    return load_data(
-        BEHAVIOUR_DATA_PATH / mouse_name / date / session_number_pre
-    ), load_data(BEHAVIOUR_DATA_PATH / mouse_name / date / session_number_post)
+    try:
+        pre = load_data(BEHAVIOUR_DATA_PATH / mouse_name / date / session_number_pre)
+    except FileNotFoundError as e:
+        print(
+            f"Missing pre-freeze session data for {mouse_name} on {date}. Error is: {e}",
+            "This happens either because the session didn't save or because the file path is wrong. Check the path",
+        )
+        pre = None
+    try:
+        post = load_data(BEHAVIOUR_DATA_PATH / mouse_name / date / session_number_post)
+    except FileNotFoundError as e:
+        print(
+            f"Missing post-freeze session data for {mouse_name} on {date}. Error is: {e}",
+            "This happens either because the session didn't save or because the file path is wrong. Check the path",
+        )
+        post = None
+    return pre, post
 
 
-# To use when computing freeze wheel speeds
-# all_positions = np.array([], dtype="float")
-# previous_rotary_end = 0
-# for trial in trials:
-#     position = np.array(trial.rotary_encoder_position)
-#     all_positions = np.concatenate((all_positions, position + previous_rotary_end))
-#     previous_rotary_end += position[-1]
-def plot_motion_energy_results(mouse_name: str, date: str) -> None:
+def encoder_to_frames(
+    all_positions: np.ndarray, frame_positions: np.ndarray, n_frames: int
+) -> np.ndarray:
+    """Upsample a slow/irregular rotary-encoder trace onto the camera clock.
 
-    motion_energy_pre = np.load(
-        TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_pre.npy"
-    )
-    motion_energy_pre = motion_energy_pre[1:]
-    events_pre = process_motion_energy(motion_energy_pre, plot=True)
+    all_positions   : encoder position at each encoder sample (counts, radians,
+                      metres -- anything cumulative and monotonic-ish).
+    frame_positions : index of the camera frame matching each encoder sample.
+                      Duplicates are allowed; the last sample of a frame wins.
 
-    session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
-    session = Cached2pSession.model_validate_json(session_path.read_text())
-    1 / 0
+    Returns position per camera frame, length n_frames.
+    """
+    pos = np.asarray(all_positions, float)
+    frame = np.asarray(frame_positions)
+    if pos.shape != frame.shape or pos.ndim != 1:
+        raise ValueError(
+            "all_positions and frame_positions must be 1-D and equal length"
+        )
 
-    # motion_energy_post = np.load(
-    #     TEMP_CACHE_PATH / "motion_energy" / f"{mouse_name}_{date}_post.npy"
-    # )
-    # events_post = process_motion_energy(motion_energy_post, plot=True)
+    # Sort by frame, keeping original order within a frame,
+    # then take the last sample of each frame
+    order = np.lexsort((np.arange(frame.size), frame))
+    frame, pos = frame[order], pos[order]
+    keep = np.r_[np.diff(frame) > 0, True]
+    frame, pos = frame[keep], pos[keep]
+    return np.interp(np.arange(n_frames), frame, pos)
 
 
-def mp4_saver() -> None:
-    """Utilty to save motion energy videos without going through cache2psessions"""
+def test_movement_extraction() -> None:
+    """
+    Test function to examine different freeze movement methods.
+    Ideally use a mouse with camera encoder and suite2p,
+    save the results of all of them and compare them to each other
+    """
+
     mouse_name = "J034"
     date = "2026-06-11"
 
     session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
     session = Cached2pSession.model_validate_json(session_path.read_text())
-
     metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
     row = metadata[metadata["Date"] == date].iloc[0]
 
-    get_wheel_freeze_movement_camera(
+    pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
+
+    save_pre = lambda movement_pre, name: subset_frames_mp4(
+        pre_freeze_path,
+        np.where(movement_pre)[0],
+        Path("/Users/jamesrowland/Code/viral/freeze_videos")
+        / f"{mouse_name}_{date}_{name}_pre_movement.mp4",
+    )
+
+    save_post = lambda movement_post, name: subset_frames_mp4(
+        post_freeze_path,
+        np.where(movement_post)[0],
+        Path("/Users/jamesrowland/Code/viral/freeze_videos")
+        / f"{mouse_name}_{date}_{name}_post_movement.mp4",
+    )
+
+    movement_pre, movement_post = get_wheel_freeze_movement_camera(
         wheel_freeze=session.wheel_freeze,
-        row=row,
+        pre_freeze_path=pre_freeze_path,
+        post_freeze_path=post_freeze_path,
         mouse_name=mouse_name,
         date=date,
+        save_mp4s=False,
     )
+    save_pre(movement_pre, "camera")
+    save_post(movement_post, "camera")
+
+
+def get_wheel_freeze_movement_encoder(
+    trials: list[TrialInfo],
+) -> np.ndarray:
+    all_positions = np.array([], dtype="float")
+    previous_rotary_end = 0
+    frame_positions = np.array([], dtype="float")
+
+    for trial in trials:
+        trial_position = np.array(trial.rotary_encoder_position)
+        closest_frame = np.array(
+            [
+                state.closest_frame_start
+                for state in trial.states_info
+                if state.name == "store_encoder_position"
+            ]
+        )
+
+        assert trial_position.shape == closest_frame.shape
+        # Not imaged
+        if np.min(closest_frame) == np.max(closest_frame):
+            continue
+
+        all_positions = np.concatenate(
+            (all_positions, trial_position + previous_rotary_end)
+        )
+        frame_positions = np.concatenate((frame_positions, closest_frame))
+        previous_rotary_end += trial_position[-1]
+
+    # Could cause issues as this length may be variable. Could also
+    #  set to 27000 but would then silently extrapolate if length is lessa
+    encoder = encoder_to_frames(
+        all_positions, frame_positions, np.max(frame_positions) + 1
+    )
+
+    return np.gradient(encoder, 1 / 30) != 0
+
+
+def camera_movement(
+    motion_energy: np.ndarray,
+    fs: float,
+    smooth_s: float = 0.25,
+    hi: float = 2.0,
+    lo: float = 1.0,
+    min_s: float = 0.2,
+    plot: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Classify movement from video motion energy.
+
+    Four steps: remove slow drift, smooth, rescale to the resting noise floor,
+    threshold with hysteresis.
+
+    motion_energy : 1-D array, one value per frame.
+    fs            : frame rate (Hz).
+    drift_s       : window for the rolling baseline that removes lighting and
+                    settling drift. THE parameter that matters -- see below.
+    smooth_s      : boxcar width, seconds.
+    hi, lo        : threshold in MADs above the resting baseline. A sample is
+                    movement if the trace exceeds `hi`, and neighbouring samples
+                    stay movement while it remains above `lo`.
+    min_s         : shortest allowed bout, and shortest allowed gap.
+
+    Returns (moving, z): a boolean mask and the normalised trace it was
+    thresholded from, so you can plot the trace and re-threshold without
+    recomputing.
+
+    """
+    x = np.abs(np.asarray(motion_energy, dtype=np.float64))
+    if x.ndim != 1:
+        raise ValueError("motion_energy must be 1-D")
+
+    x = uniform_filter1d(x, max(1, int(smooth_s * fs)))
+
+    # Scale by the MAD, which the resting state dominates. Guard against a
+    # degenerate estimate: smoothing leaves floating-point dust, so a "zero" MAD
+    # comes back as ~1e-15 and would blow the trace up by 15 orders of magnitude.
+    ref = float(np.percentile(x, 99))
+    s = float(median_abs_deviation(x, scale="normal"))
+    if s <= 1e-6 * ref:
+        s = ref if ref > 0 else 1.0
+    z = (x - np.median(x)) / s
+
+    k = np.ones(max(1, int(min_s * fs)), dtype=bool)
+    seeded = binary_propagation(z > hi, mask=z > lo)  # grow from hi down to lo
+    moving = binary_opening(binary_closing(seeded, k), k)  # drop short gaps/bouts
+
+    if plot:
+
+        t = np.arange(z.size) / fs
+        fig, ax = plt.subplots(figsize=(14, 4))
+        ax.fill_between(
+            t,
+            0,
+            1,
+            where=moving.tolist(),
+            transform=ax.get_xaxis_transform(),
+            color="0.85",
+            lw=0,
+            zorder=0,
+            label="movement",
+        )
+        ax.plot(t, z, lw=0.6, color="tab:orange")
+        ax.axhline(hi, color="tab:red", ls=":", lw=0.8, label=f"hi={hi}")
+        ax.axhline(lo, color="tab:red", ls="--", lw=0.5, label=f"lo={lo}")
+        ax.set_xlabel("time (s)")
+        ax.set_ylabel("motion energy (MADs above rest)")
+        ax.legend(loc="upper right", fontsize=8)
+        fig.tight_layout()
+
+    return moving, z
 
 
 if __name__ == "__main__":
-    plot_motion_energy_results("J034", "2026-06-11")
+    plot_motion_energy_results("J037", "2026-07-16")

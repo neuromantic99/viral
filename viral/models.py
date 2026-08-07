@@ -110,6 +110,11 @@ class WheelFreeze(BaseModel):
     pre_training_end_frame: int
     post_training_start_frame: int
     post_training_end_frame: int
+    trials_pre_freeze: List[TrialInfo] | None = None
+    trials_post_freeze: List[TrialInfo] | None = None
+    movement_pre_freeze: List[float] | None = None
+    movement_post_freeze: List[float] | None = None
+    freeze_movement_type: Literal["camera", "rotary_encoder", "suite2p"] | None = None
 
 
 class Cached2pSession(BaseModel):
@@ -118,8 +123,6 @@ class Cached2pSession(BaseModel):
     date: str
     session_type: str
     wheel_freeze: WheelFreeze | None = None
-    trials_pre_freeze: List[TrialInfo] | None = None
-    trials_post_freeze: List[TrialInfo] | None = None
 
 
 class Mouse2pSessions(BaseModel):

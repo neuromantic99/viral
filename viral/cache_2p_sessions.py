@@ -49,7 +49,7 @@ from viral.utils import (
     uk_to_utc,
 )
 from viral.wheel_freeze_movement import (
-    get_wheel_freeze_movement_camera,
+    get_wheel_freeze_movement,
     load_freeze_trials,
 )
 
@@ -165,16 +165,18 @@ def add_daq_times_to_trial(
                 + offset_after_pre_epoch
             )
 
-        assert_against_wheel_freeze_indices(
-            wheel_freeze, is_freeze_session, state.closest_frame_start
-        )
-
-        assert_against_wheel_freeze_indices(
-            wheel_freeze, is_freeze_session, state.closest_frame_end
-        )
-
         if state.name == "spacer_high_00":
             trial.trial_start_closest_frame = state.closest_frame_start
+
+    if trial_is_imaged(trial):
+        for state in trial.states_info:
+            assert_against_wheel_freeze_indices(
+                wheel_freeze, is_freeze_session, state.closest_frame_start
+            )
+
+            assert_against_wheel_freeze_indices(
+                wheel_freeze, is_freeze_session, state.closest_frame_end
+            )
 
     last_state = trial.states_info[-1]
     trial.trial_end_closest_frame = last_state.closest_frame_end
@@ -188,9 +190,11 @@ def add_daq_times_to_trial(
                 int(np.argmin(np.abs(valid_frame_times - event.start_time_daq)))
                 + offset_after_pre_epoch
             )
-        assert_against_wheel_freeze_indices(
-            wheel_freeze, is_freeze_session, event.closest_frame
-        )
+
+        if trial_is_imaged(trial):
+            assert_against_wheel_freeze_indices(
+                wheel_freeze, is_freeze_session, event.closest_frame
+            )
 
 
 def assert_against_wheel_freeze_indices(
@@ -486,8 +490,7 @@ def get_session_sync(
             valid_frame_times, np.ones(shape=sum([14200, 13000]))
         )
 
-    # Put me back in
-    # check_against_suite2p_output(mouse_name, date, valid_frame_times)
+    check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
@@ -741,16 +744,6 @@ def process_session(
         )
     )
 
-    if wheel_blocked and wheel_freeze is not None:
-        # This saves files so didn't return anything
-        # I should probably store these variables in some kind of object, but we'll just use the saved files for now
-        get_wheel_freeze_movement_camera(
-            wheel_freeze=wheel_freeze,
-            row=row,
-            mouse_name=mouse_name,
-            date=date,
-        )
-        print("Saved wheel freeze movement data")
     trials = add_imaging_info_to_trials(
         trials=trials,
         session_sync=session_sync,
@@ -768,6 +761,18 @@ def process_session(
         wheel_freeze=wheel_freeze,
     )
 
+    if wheel_blocked and wheel_freeze is not None:
+        movement_pre_freeze, movement_post_freeze, freeze_movement_type = (
+            get_wheel_freeze_movement(
+                wheel_freeze=wheel_freeze,
+                row=row,
+                mouse_name=mouse_name,
+                date=date,
+                trials_pre_freeze=trials_pre_freeze,
+                trials_post_freeze=trials_post_freeze,
+            )
+        )
+
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
             Cached2pSession(
@@ -775,9 +780,20 @@ def process_session(
                 date=date,
                 trials=trials,
                 session_type=session_type,
-                wheel_freeze=wheel_freeze,
-                trials_pre_freeze=trials_pre_freeze,
-                trials_post_freeze=trials_post_freeze,
+                # Could it be more obvious that we changed the datastructure after the code was written?
+                wheel_freeze=(
+                    wheel_freeze.model_copy(
+                        update={
+                            "trials_pre_freeze": trials_pre_freeze,
+                            "trials_post_freeze": trials_post_freeze,
+                            "movement_pre_freeze": movement_pre_freeze.tolist(),
+                            "movement_post_freeze": movement_post_freeze.tolist(),
+                            "freeze_movement_type": freeze_movement_type,
+                        }
+                    )
+                    if wheel_freeze is not None
+                    else None
+                ),
             ).model_dump(),
             f,
         )
@@ -812,7 +828,9 @@ def load_synced_freeze_sessions(
             check, start = is_ordered_subset(
                 num_spacers_per_trial[:30], session_sync.behaviour_chunk_lens
             )
-            assert check, "Spacers recorded in txt file do not match sync"
+            assert (
+                check and start is not None
+            ), "Spacers recorded in txt file do not match sync"
             num_trials_in_daq = len(session_sync.behaviour_chunk_lens) - start
             trials = trials[:num_trials_in_daq]
             print(f"Post-freeze trials truncated to {num_trials_in_daq}")

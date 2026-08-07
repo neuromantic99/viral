@@ -4,7 +4,7 @@ import warnings
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Literal, Tuple, TypeVar
+from typing import Any, Dict, Iterable, Literal, Tuple, TypeVar
 from zoneinfo import ZoneInfo
 
 import cv2
@@ -813,8 +813,14 @@ def detect_events(
     return events
 
 
-def subset_frames_mp4(mp4_path: Path, frames: list[int], outfile: Path) -> None:
-    """Subset the frames in 'frames' from an MP4 video and save to a new file."""
+def subset_frames_mp4(mp4_path: Path, frames: Iterable[int], outfile: Path) -> None:
+    """Subset the frames in 'frames' from an MP4 video and save to a new file.
+
+    Decodes the video in a single sequential forward pass rather than seeking
+    to each frame individually - cv2.CAP_PROP_POS_FRAMES has to decode forward
+    from the nearest preceding keyframe on every call, so seeking per frame
+    ends up re-decoding large stretches of the video once per requested frame.
+    """
     cap = cv2.VideoCapture(mp4_path)
 
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -828,10 +834,17 @@ def subset_frames_mp4(mp4_path: Path, frames: list[int], outfile: Path) -> None:
         (w, h),
     )
 
-    for i in frames:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-        _, frame = cap.read()
-        out.write(frame)
+    target_frames = sorted(set(frames))
+    target_idx = 0
+    frame_idx = 0
+    while target_idx < len(target_frames):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_idx == target_frames[target_idx]:
+            out.write(frame)
+            target_idx += 1
+        frame_idx += 1
 
     cap.release()
     out.release()
