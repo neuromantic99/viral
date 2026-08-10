@@ -79,31 +79,36 @@ def get_wheel_freeze_movement(
         )
 
     # Fallback to suite2p
-    return (
-        np.array([]),
-        np.array([]),
-        "rotary_encoder",
-    )  # TODO: implement rotary encoder movement extraction
+    movement_pre, movement_post = get_wheel_freeze_movement_suite2p(
+        mouse_name, date, wheel_freeze
+    )
+    return movement_pre, movement_post, "suite2p"
 
 
 def get_wheel_freeze_movement_suite2p(
     mouse_name: str, date: str, wheel_freeze: WheelFreeze
 ) -> tuple[np.ndarray, np.ndarray]:
 
-    s2p_path = Path(f"/Volumes/MarcBusche/Josef/2P/{date}/{mouse_name}/suite2p/plane0")
+    s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
     ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
     # 10x as it just makes everything a bit easier to deal with
     motion_artifact_suite2p = np.abs(np.diff(ops["xoff"])) * 10
 
-    _, motion_artifact_suite2p = camera_movement(
-        motion_artifact_suite2p, fs=30, plot=True, hi=1.5, lo=0.5, smooth_s=0.5, min_s=1
+    movement, _ = camera_movement(
+        motion_artifact_suite2p,
+        fs=30,
+        hi=1,
+        lo=0.5,
+        smooth_s=2,
+        min_s=1,
+        plot=True,
     )
 
     return (
-        motion_artifact_suite2p[
+        movement[
             wheel_freeze.pre_training_start_frame : wheel_freeze.pre_training_end_frame
         ],
-        motion_artifact_suite2p[
+        movement[
             wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame
         ],
     )
@@ -132,8 +137,8 @@ def get_wheel_freeze_movement_camera(
         # Screen flashes white at the start for some reason
         motion_energy_pre = motion_energy_pre[1:]
 
-    movement_pre, _ = camera_movement(motion_energy_pre, fs=30, plot=True)
-    movement_post, _ = camera_movement(motion_energy_post, fs=30, plot=True)
+    movement_pre, _ = camera_movement(motion_energy_pre, fs=30, plot=False)
+    movement_post, _ = camera_movement(motion_energy_post, fs=30, plot=False)
     if save_mp4s:
         for name, original_video_path in zip(
             ["pre", "post"], [pre_freeze_path, post_freeze_path]
@@ -330,21 +335,21 @@ def test_movement_extraction() -> None:
 
     pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
 
-    save_pre = lambda movement_pre, name: subset_frames_mp4(
+    save_pre = lambda movement_pre, name, is_moving: subset_frames_mp4(
         pre_freeze_path,
-        np.where(movement_pre)[0],
+        np.where(movement_pre)[0] if is_moving else np.where(~movement_pre)[0],
         Path("/Users/jamesrowland/Code/viral/freeze_videos")
-        / f"{mouse_name}_{date}_{name}_pre_movement.mp4",
+        / f"{mouse_name}_{date}_{name}_pre_{'moving' if is_moving else 'non-moving'}.mp4",
     )
 
-    save_post = lambda movement_post, name: subset_frames_mp4(
+    save_post = lambda movement_post, name, is_moving: subset_frames_mp4(
         post_freeze_path,
-        np.where(movement_post)[0],
+        np.where(movement_post)[0] if is_moving else np.where(~movement_post)[0],
         Path("/Users/jamesrowland/Code/viral/freeze_videos")
-        / f"{mouse_name}_{date}_{name}_post_movement.mp4",
+        / f"{mouse_name}_{date}_{name}_post_{'moving' if is_moving else 'non-moving'}.mp4",
     )
 
-    movement_pre, movement_post = get_wheel_freeze_movement_camera(
+    movement_pre_camera, movement_post_camera = get_wheel_freeze_movement_camera(
         wheel_freeze=session.wheel_freeze,
         pre_freeze_path=pre_freeze_path,
         post_freeze_path=post_freeze_path,
@@ -352,8 +357,32 @@ def test_movement_extraction() -> None:
         date=date,
         save_mp4s=False,
     )
-    save_pre(movement_pre, "camera")
-    save_post(movement_post, "camera")
+
+    # Make sure the movement comes from the camera
+    assert (movement_pre_camera == session.wheel_freeze.movement_pre_freeze).all()
+    assert (movement_post_camera == session.wheel_freeze.movement_post_freeze).all()
+
+    movement_pre_encoder = get_wheel_freeze_movement_encoder(
+        session.wheel_freeze.trials_pre_freeze
+    )
+
+    movement_post_encoder = get_wheel_freeze_movement_encoder(
+        session.wheel_freeze.trials_post_freeze
+    )
+
+    movement_pre_suite2p, movement_post_suite2p = get_wheel_freeze_movement_suite2p(
+        mouse_name, date, session.wheel_freeze
+    )
+
+    for is_moving in [True, False]:
+        save_pre(movement_pre_camera, "camera", is_moving=is_moving)
+        save_post(movement_post_camera, "camera", is_moving=is_moving)
+
+        save_pre(movement_pre_encoder, "encoder", is_moving=is_moving)
+        save_post(movement_post_encoder, "encoder", is_moving=is_moving)
+
+        save_pre(movement_pre_suite2p, "suite2p", is_moving=is_moving)
+        save_post(movement_post_suite2p, "suite2p", is_moving=is_moving)
 
 
 def get_wheel_freeze_movement_encoder(
@@ -442,8 +471,7 @@ def camera_movement(
     moving = binary_opening(binary_closing(seeded, k), k)  # drop short gaps/bouts
 
     if plot:
-
-        t = np.arange(z.size) / fs
+        t = np.arange(z.size)
         fig, ax = plt.subplots(figsize=(14, 4))
         ax.fill_between(
             t,
@@ -459,7 +487,7 @@ def camera_movement(
         ax.plot(t, z, lw=0.6, color="tab:orange")
         ax.axhline(hi, color="tab:red", ls=":", lw=0.8, label=f"hi={hi}")
         ax.axhline(lo, color="tab:red", ls="--", lw=0.5, label=f"lo={lo}")
-        ax.set_xlabel("time (s)")
+        ax.set_xlabel("Frame")
         ax.set_ylabel("motion energy (MADs above rest)")
         ax.legend(loc="upper right", fontsize=8)
         fig.tight_layout()
@@ -468,4 +496,4 @@ def camera_movement(
 
 
 if __name__ == "__main__":
-    plot_motion_energy_results("J037", "2026-07-16")
+    test_movement_extraction()
