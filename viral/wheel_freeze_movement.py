@@ -291,7 +291,7 @@ def load_freeze_trials(
 
 
 def encoder_to_frames(
-    all_positions: np.ndarray, frame_positions: np.ndarray, n_frames: int
+    all_positions: np.ndarray, frame_positions: np.ndarray
 ) -> np.ndarray:
     """Upsample a slow/irregular rotary-encoder trace onto the camera clock.
 
@@ -315,7 +315,9 @@ def encoder_to_frames(
     frame, pos = frame[order], pos[order]
     keep = np.r_[np.diff(frame) > 0, True]
     frame, pos = frame[keep], pos[keep]
-    return np.interp(np.arange(n_frames), frame, pos)
+    return np.interp(
+        np.arange(np.min(frame_positions), np.max(frame_positions)), frame, pos
+    )
 
 
 def test_movement_extraction() -> None:
@@ -324,9 +326,8 @@ def test_movement_extraction() -> None:
     Ideally use a mouse with camera encoder and suite2p,
     save the results of all of them and compare them to each other
     """
-
     mouse_name = "J034"
-    date = "2026-06-11"
+    date = "2026-06-10"
 
     session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
     session = Cached2pSession.model_validate_json(session_path.read_text())
@@ -413,11 +414,7 @@ def get_wheel_freeze_movement_encoder(
         frame_positions = np.concatenate((frame_positions, closest_frame))
         previous_rotary_end += trial_position[-1]
 
-    # Could cause issues as this length may be variable. Could also
-    #  set to 27000 but would then silently extrapolate if length is lessa
-    encoder = encoder_to_frames(
-        all_positions, frame_positions, np.max(frame_positions) + 1
-    )
+    encoder = encoder_to_frames(all_positions, frame_positions)
 
     return np.gradient(encoder, 1 / 30) != 0
 
