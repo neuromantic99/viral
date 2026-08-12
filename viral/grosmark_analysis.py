@@ -16,7 +16,13 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import CACHE_PATH, HERE, SERVER_PATH, grosmark_config
+from viral.constants import (
+    CACHE_PATH,
+    HERE,
+    SERVER_PATH,
+    TIFF_UMBRELLA,
+    grosmark_config,
+)
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
@@ -24,7 +30,6 @@ from viral.imaging_utils import (
     activity_trial_position,
     split_fluoresence_online_freeze,
 )
-
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 
 from viral.utils import (
@@ -51,6 +56,8 @@ def grosmark_place_field(
     rewarded: bool | None,
     config: GrosmarkConfig,
     plot: bool = True,
+    cache_file_additional_info: str | None = None,
+    use_cache: bool = True,
 ) -> None:
     """
     Grosmark et al. place field analysis.
@@ -71,7 +78,13 @@ def grosmark_place_field(
         assert spks_raw.shape == spks.shape
 
     pcs, smoothed_matrix, _ = get_place_cells(
-        session=session, spks=spks, rewarded=rewarded, config=config, plot=plot
+        session=session,
+        spks=spks,
+        rewarded=rewarded,
+        config=config,
+        plot=plot,
+        cache_file_additional_info=cache_file_additional_info,
+        use_cache=use_cache,
     )
 
     spks = spks[pcs, :]
@@ -603,42 +616,59 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-if __name__ == "__main__":
+def batch_runner() -> None:
 
-    # mouse = "JB031"
-    # date = "2025-03-28"
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    data_type = "denoised"
+    use_cache = False
 
-    mouse = "JB027"
-    date = "2025-02-26"
+    for cache_file in cache_files:
+        print("Processing", cache_file)
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
+        if mouse not in ["J034", "J035", "J037", "J038"]:
+            continue
+        s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+        cached_session = Cached2pSession.model_validate_json(cache_file.read_text())
 
-    with open(
-        SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
-    ) as f:
-        session = Cached2pSession.model_validate_json(f.read())
+        with open(
+            SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
+        ) as f:
+            session = Cached2pSession.model_validate_json(f.read())
 
-    print(f"Total number of trials: {len(session.trials)}")
-    print(
-        f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
-    )
-
-    dff, spks, denoised = load_imaging_data(mouse, date)
-
-    print("Got dff")
-
-    assert (
-        max(
-            trial.states_info[-1].closest_frame_start
-            for trial in session.trials
-            if trial.states_info[-1].closest_frame_start is not None
+        print(f"Total number of trials: {len(session.trials)}")
+        print(
+            f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
         )
-        < dff.shape[1]
-    ), "Tiff is too short"
 
-    is_unsupervised = session_is_unsupervised(session)
+        dff, spks, denoised = load_imaging_data(mouse, date)
 
-    grosmark_place_field(
-        session,
-        spks,
-        rewarded=None if is_unsupervised else False,
-        config=grosmark_config,
-    )
+        print("Got dff")
+
+        assert (
+            max(
+                trial.states_info[-1].closest_frame_start
+                for trial in session.trials
+                if trial.states_info[-1].closest_frame_start is not None
+            )
+            < dff.shape[1]
+        ), "Tiff is too short"
+
+        is_unsupervised = session_is_unsupervised(session)
+
+        for rewarded in [None, True, False]:
+            try:
+                grosmark_place_field(
+                    session,
+                    spks if data_type == "spks" else denoised,
+                    rewarded=None if is_unsupervised else rewarded,
+                    config=grosmark_config,
+                    cache_file_additional_info=data_type,
+                    use_cache=use_cache,
+                )
+            except Exception as e:
+                print(f"Error processing {mouse} {date} rewarded={rewarded}: {e}")
+
+            if is_unsupervised:
+                break
