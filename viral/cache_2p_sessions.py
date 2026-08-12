@@ -869,7 +869,7 @@ def check_against_suite2p_output(
 
 
 def main() -> None:
-    redo = True
+    redo = False
     # Toggle whether the try catch throws or not without commenting it
     debug = False
     for mouse_name in [
@@ -890,9 +890,16 @@ def main() -> None:
                     print(f"No column 'Wheel blocked?' found: {e}")
                     print("Wheel blocked set to None")
                     wheel_blocked = None
-                if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
-                    print(f"Skipping {mouse_name} {date} as already exists")
-                    continue
+
+                session = Cached2pSession.model_validate_json(
+                    (CACHE_PATH / f"{mouse_name}_{date}.json").read_text()
+                )
+                if session.wheel_freeze.freeze_movement_type == "rotary_encoder":
+                    pass
+                else:
+                    if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
 
                 if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")

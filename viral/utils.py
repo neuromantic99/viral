@@ -23,6 +23,7 @@ from viral.models import (
     MouseSummary,
     SpeedPosition,
     TrialInfo,
+    WheelFreeze,
 )
 
 
@@ -848,3 +849,29 @@ def subset_frames_mp4(mp4_path: Path, frames: Iterable[int], outfile: Path) -> N
 
     cap.release()
     out.release()
+
+
+def get_movement_bool(wheel_freeze: WheelFreeze) -> tuple[np.ndarray, np.ndarray]:
+    """Returns boolean arrays indicating whether the mouse was moving during the pre and post epochs."""
+    movement_pre = np.array(wheel_freeze.movement_pre_freeze)
+    movement_post = np.array(wheel_freeze.movement_post_freeze)
+    acceptable = {27000, 26999, 26998}
+    assert (
+        movement_pre.shape[0] in acceptable
+    ), f"Unexpected pre-freeze movement length: {movement_pre.shape[0]}"
+    assert (
+        movement_post.shape[0] in acceptable
+    ), f"Unexpected post-freeze movement length: {movement_post.shape[0]}"
+    # If required, extend out to 27000, repeating the last value
+    movement_pre = np.pad(
+        movement_pre,
+        (0, 27000 - movement_pre.shape[0]),
+        mode="edge",
+    )
+    movement_post = np.pad(
+        movement_post,
+        (0, 27000 - movement_post.shape[0]),
+        mode="edge",
+    )
+
+    return movement_pre.astype(bool), movement_post.astype(bool)
