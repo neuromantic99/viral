@@ -149,7 +149,7 @@ def get_place_cells(
     sigma_cm = 7.5  # Desired smoothing in cm
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
-    n_shuffles = 500
+    n_shuffles = 2000
     if n_shuffles < 2000:
         warnings.warn(
             "n_shuffles is less than 2000. This may not be enough to get a good estimate of the place cell distribution."
@@ -593,13 +593,21 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-if __name__ == "__main__":
+def batch_runner() -> None:
 
-    # mouse = "JB031"
-    # date = "2025-03-28"
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    data_type = "denoised"
+    use_cache = False
 
-    mouse = "JB027"
-    date = "2025-02-26"
+    for cache_file in cache_files:
+        print("Processing", cache_file)
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
+        if mouse not in ["J034", "J035", "J037", "J038"]:
+            continue
+        s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
+        cached_session = Cached2pSession.model_validate_json(cache_file.read_text())
 
         with open(
             SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
