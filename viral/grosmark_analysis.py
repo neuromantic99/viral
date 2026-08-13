@@ -19,6 +19,7 @@ sys.path.append(str(HERE.parent.parent))
 from viral.constants import (
     CACHE_PATH,
     HERE,
+    LOCAL_DFF_PATH,
     SERVER_PATH,
     TIFF_UMBRELLA,
     grosmark_config,
@@ -120,7 +121,6 @@ def get_place_cells(
     config: GrosmarkConfig,
     rewarded: bool | None,
     use_cache: bool = True,
-    bin_occupancy_divide: bool = False,
     plot: bool = True,
     cache_file_additional_info: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -166,8 +166,7 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
-                threshold_speed=False if bin_occupancy_divide else True,
-                bin_occupancy_divide=bin_occupancy_divide,
+                threshold_speed=True,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
@@ -185,7 +184,7 @@ def get_place_cells(
             / "viral_caches"
             / "place_cells"
             / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{"IGNORE!"}.npy"
         )
     else:
         # e.g. train-test split
@@ -194,7 +193,7 @@ def get_place_cells(
             / "viral_caches"
             / "place_cells"
             / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{"IGNORE!"}.npy"
         )
 
     if use_cache and get_cache_path("place_threshold").exists():
@@ -223,8 +222,7 @@ def get_place_cells(
                             max_position=config.end,
                             verbose=False,
                             do_shuffle=True,
-                            threshold_speed=False if bin_occupancy_divide else True,
-                            bin_occupancy_divide=bin_occupancy_divide,
+                            threshold_speed=True,
                         )
                         for trial in session.trials
                         if trial_is_imaged(trial)
@@ -596,18 +594,25 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
 def batch_runner() -> None:
 
     cache_files = list(CACHE_PATH.glob("*.json"))
-    data_type = "denoised"
+    data_type = "spks"
     use_cache = False
 
+    cache_files = [
+        cache_file
+        for cache_file in cache_files
+        if cache_file.stem.split("_")[0] in ["J034", "J035", "J037", "J038"]
+    ]
+
+    cache_files = sorted(
+        cache_files, key=lambda x: (x.stem.split("_")[0], x.stem.split("_")[1])
+    )
+
     for cache_file in cache_files:
-        print("Processing", cache_file)
         file_parts = cache_file.stem.split("_")
         date = file_parts[1]
         mouse = file_parts[0]
-        if mouse not in ["J034", "J035", "J037", "J038"]:
-            continue
-        s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
-        cached_session = Cached2pSession.model_validate_json(cache_file.read_text())
+
+        print("Processing", cache_file)
 
         with open(
             SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
@@ -619,15 +624,15 @@ def batch_runner() -> None:
             f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
         )
 
-    if (HERE / f"{mouse}_{date}_dff.npy").exists():
-        dff = np.load(HERE / f"{mouse}_{date}_dff.npy")
-        spks = np.load(HERE / f"{mouse}_{date}_spks.npy")
-        denoised = np.load(HERE / f"{mouse}_{date}_denoised.npy")
-    else:
-        dff, spks, denoised = load_imaging_data(mouse, date)
-        np.save(HERE / f"{mouse}_{date}_dff.npy", dff)
-        np.save(HERE / f"{mouse}_{date}_spks.npy", spks)
-        np.save(HERE / f"{mouse}_{date}_denoised.npy", denoised)
+        if (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
+            dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy")
+            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy")
+            denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy")
+        else:
+            dff, spks, denoised = load_imaging_data(mouse, date)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy", dff)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy", spks)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy", denoised)
 
         assert (
             max(
@@ -647,7 +652,9 @@ def batch_runner() -> None:
                     spks if data_type == "spks" else denoised,
                     rewarded=None if is_unsupervised else rewarded,
                     config=grosmark_config,
-                    cache_file_additional_info=data_type,
+                    cache_file_additional_info=(
+                        data_type if data_type == "denoised" else None
+                    ),
                     use_cache=use_cache,
                 )
             except Exception as e:
@@ -655,3 +662,7 @@ def batch_runner() -> None:
 
             if is_unsupervised:
                 break
+
+
+if __name__ == "__main__":
+    batch_runner()

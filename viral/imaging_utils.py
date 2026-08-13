@@ -42,7 +42,7 @@ def load_imaging_data(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
-    if not s2p_path.exists():
+    if not s2p_path.exists() or not (s2p_path / "F.npy").exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     assert (
@@ -274,7 +274,6 @@ def activity_trial_position(
     verbose: bool = False,
     do_shuffle: bool = False,
     threshold_speed: bool = True,
-    bin_occupancy_divide: bool = False,
 ) -> np.ndarray:
     """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
     trial: TrialInfo
@@ -301,10 +300,6 @@ def activity_trial_position(
             ]
         )
         dff_bin = flu[:, frame_idx_bin]
-        if bin_occupancy_divide:
-            dff_bin = (
-                dff_bin / len(frame_idx_bin) if len(frame_idx_bin) > 0 else dff_bin
-            )
 
         if verbose:
             print(f"bin_start: {bin_start}")

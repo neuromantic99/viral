@@ -173,7 +173,6 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
             rewarded=rewarded,
             config=config,
             plot=False,
-            bin_occupancy_divide=True,
         )
 
 
