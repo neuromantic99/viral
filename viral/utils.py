@@ -490,6 +490,30 @@ def shuffle_rows(matrix: np.ndarray) -> np.ndarray:
     return shuffled_matrix
 
 
+def circularly_permute_rows(matrix: np.ndarray) -> np.ndarray:
+    """
+    Circularly shifts each row of the given matrix by an independent random offset.
+
+    Unlike shuffle_rows, this preserves the temporal autocorrelation within each row,
+    which is what makes it the appropriate null for place field detection (Grosmark
+    et al. shuffle by "per-lap randomized circular permutation" of Ssp).
+
+    Parameters:
+    matrix (numpy.ndarray): A 2D NumPy array of shape (n_rows, n_samples).
+
+    Returns:
+    numpy.ndarray: A new matrix with each row circularly shifted.
+    """
+    n_rows, n_samples = matrix.shape
+    if n_samples < 2:
+        return matrix.copy()
+
+    # Exclude a shift of 0, which would leave the row unshuffled
+    shifts = np.random.randint(1, n_samples, size=n_rows)
+    idx = (np.arange(n_samples)[None, :] - shifts[:, None]) % n_samples
+    return matrix[np.arange(n_rows)[:, None], idx]
+
+
 def has_n_consecutive_trues(matrix: np.ndarray, n: int = 5) -> np.ndarray:
     matrix = np.array(matrix, dtype=bool)  # Ensure it's a boolean NumPy array
     kernel = np.ones(n, dtype=int)  # Kernel to check consecutive 5 Trues
@@ -515,6 +539,38 @@ def find_n_consecutive_trues_center(matrix: np.ndarray, n: int = 5) -> np.ndarra
 
     matrix = np.asarray(matrix, dtype=bool)
     return np.apply_along_axis(find_center, axis=1, arr=matrix)
+
+
+def find_n_consecutive_trues_extent(matrix: np.ndarray, n: int = 5) -> np.ndarray:
+    """For each row, returns a boolean mask of the full contiguous run of Trues
+    containing the first window of n consecutive Trues.
+
+    Used to delineate a place field: the field is the whole supra-threshold region,
+    not just the n bins that made it qualify, and not a fixed-width window around it.
+
+    Returns a boolean array of the same shape as the input.
+    """
+
+    def find_extent(row: np.ndarray) -> np.ndarray:
+        conv_result = np.convolve(row, np.ones(n, dtype=int), mode="valid") == n
+        if not np.any(conv_result):
+            raise ValueError(
+                "You should only pass PCs run through has_n_consecutive_trues to this function"
+            )
+        # The first window of n consecutive Trues necessarily starts at the start of
+        # its contiguous run: if row[start - 1] were also True then the window at
+        # start - 1 would have qualified first.
+        start = int(np.argmax(conv_result))
+        end = start + n  # exclusive; extend forwards to the end of the run
+        while end < len(row) and row[end]:
+            end += 1
+
+        mask = np.zeros(len(row), dtype=bool)
+        mask[start:end] = True
+        return mask
+
+    matrix = np.asarray(matrix, dtype=bool)
+    return np.apply_along_axis(find_extent, axis=1, arr=matrix)
 
 
 def remove_diagonal(A: np.ndarray) -> np.ndarray:

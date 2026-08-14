@@ -37,7 +37,7 @@ from viral.utils import (
     compute_linear_slope,
     cross_correlation_pandas,
     degrees_to_cm,
-    find_n_consecutive_trues_center,
+    find_n_consecutive_trues_extent,
     get_movement_bool,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
@@ -149,7 +149,7 @@ def get_place_cells(
     sigma_cm = 7.5  # Desired smoothing in cm
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
-    n_shuffles = 2000
+    n_shuffles = 500
     if n_shuffles < 2000:
         warnings.warn(
             "n_shuffles is less than 2000. This may not be enough to get a good estimate of the place cell distribution."
@@ -341,16 +341,32 @@ def offline_correlations(
     offline_spks_post = offline_spks_post[:, ~movement_post]
 
     pre_corrs_real = get_offline_correlation_matrix(
-        offline=offline_spks_pre, wheel_freeze=True, do_shuffle=False, plot=True
+        offline=offline_spks_pre,
+        wheel_freeze=True,
+        do_shuffle=False,
+        plot=True,
+        name="pre",
     )
     pre_corrs_shuffled = get_offline_correlation_matrix(
-        offline=offline_spks_pre, wheel_freeze=True, do_shuffle=True, plot=False
+        offline=offline_spks_pre,
+        wheel_freeze=True,
+        do_shuffle=True,
+        plot=False,
+        name="pre shuffled",
     )
     post_corrs_real = get_offline_correlation_matrix(
-        offline=offline_spks_post, wheel_freeze=True, do_shuffle=False, plot=True
+        offline=offline_spks_post,
+        wheel_freeze=True,
+        do_shuffle=False,
+        plot=True,
+        name="post",
     )
     post_corrs_shuffled = get_offline_correlation_matrix(
-        offline=offline_spks_post, wheel_freeze=True, do_shuffle=True, plot=False
+        offline=offline_spks_post,
+        wheel_freeze=True,
+        do_shuffle=True,
+        plot=False,
+        name="post shuffled",
     )
     plt.figure()
     plt.xlabel("Distance between peaks")
@@ -381,6 +397,7 @@ def get_offline_correlation_matrix(
     wheel_freeze: bool,
     do_shuffle: bool = False,
     plot: bool = True,
+    name: str | None = None,
 ) -> np.ndarray:
     """Reproducing Grosmark et al. figure 4. c/d."""
     if not wheel_freeze:
@@ -405,7 +422,8 @@ def get_offline_correlation_matrix(
 
     if plot:
         plt.figure()
-        plt.title("shuffled" if do_shuffle else "real")
+        if name:
+            plt.title(name)
         if do_shuffle:
             np.random.shuffle(corrs)
         plt.imshow(
@@ -450,10 +468,9 @@ def correlations_vs_peak_distance(
 
     x = []
     y = []
-    bin_starts = np.arange(0, 100, 5)
 
-    bin_width = bin_starts[1] - bin_starts[0]
-    for bin_start in bin_starts:
+    bin_width = 20
+    for bin_start in np.arange(200):
         in_bin = np.logical_and(
             peak_distances >= bin_start, peak_distances < bin_start + bin_width
         )
@@ -497,7 +514,7 @@ def plot_place_cell_heatmap(
         aspect="auto",
         cmap="bwr",
         vmin=-1,
-        vmax=2,
+        vmax=2.5,
     )
 
     plt.xlabel("Corridor position (cm)")
@@ -523,24 +540,21 @@ def filter_additional_check(
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
     """
 
-    centers = find_n_consecutive_trues_center(
+    # The place field is the whole contiguous supra-threshold region, not just the
+    # n_consecutive_trues bins that made it qualify
+    place_fields = find_n_consecutive_trues_extent(
         smoothed_matrix > place_threshold, n_consecutive_trues
     )
 
     n_trials, n_cells, n_bins = all_trials.shape
+    assert place_fields.shape == (n_cells, n_bins)
 
-    valid_pcs = np.array([False] * n_cells)
+    # "in at least 3 or 15% of laps (whichever was greater for each session)"
+    min_laps = max(3, math.ceil(0.15 * n_trials))
+
+    valid_pcs = np.zeros(n_cells, dtype=bool)
     for cell in range(n_cells):
-        center = centers[cell]
-        assert center + math.ceil(n_consecutive_trues / 2) <= n_bins
-        assert center - math.floor(n_consecutive_trues / 2) >= 0
-
-        cell_place_field = np.array([False] * n_bins)
-        cell_place_field[
-            center
-            - math.floor(n_consecutive_trues) : center
-            + math.ceil(n_consecutive_trues)
-        ] = True
+        cell_place_field = place_fields[cell, :]
         cell_out_of_place_field = np.logical_not(cell_place_field)
 
         cell_place_activity = all_trials[:, cell, cell_place_field]
@@ -552,10 +566,9 @@ def filter_additional_check(
             ):
                 count += 1
 
-        if count / n_trials > 0.15:
-            valid_pcs[cell] = True
+        valid_pcs[cell] = count >= min_laps
 
-    return np.array(valid_pcs)
+    return valid_pcs
 
 
 def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
@@ -595,7 +608,7 @@ def batch_runner() -> None:
 
     cache_files = list(CACHE_PATH.glob("*.json"))
     data_type = "spks"
-    use_cache = False
+    use_cache = True
 
     cache_files = [
         cache_file
@@ -610,6 +623,7 @@ def batch_runner() -> None:
     for cache_file in cache_files:
         file_parts = cache_file.stem.split("_")
         date = file_parts[1]
+
         mouse = file_parts[0]
 
         print("Processing", cache_file)
@@ -645,7 +659,7 @@ def batch_runner() -> None:
 
         is_unsupervised = session_is_unsupervised(session)
 
-        for rewarded in [None, True, False]:
+        for rewarded in [True, None, False]:
             try:
                 grosmark_place_field(
                     session,
@@ -660,6 +674,7 @@ def batch_runner() -> None:
             except Exception as e:
                 print(f"Error processing {mouse} {date} rewarded={rewarded}: {e}")
 
+            # Don't run unsupervised three times
             if is_unsupervised:
                 break
 

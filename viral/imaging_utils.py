@@ -8,10 +8,10 @@ from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
     below_threshold_for_n_consecutive_samples,
+    circularly_permute_rows,
     degrees_to_cm,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
-    shuffle_rows,
     threshold_detect,
 )
 from deprecated import deprecated
@@ -284,7 +284,26 @@ def activity_trial_position(
     start: in cm
     max_position: in cm
     verbose: if True, print the binning information
-    do_shuffle: if True, shuffle the rows of the dff matrix
+    do_shuffle: if True, circularly rotate each cell's firing-rate-by-position vector
+        for this lap by an independent random offset. This is the null used by
+        Grosmark et al. for place field detection: "2,000 shuffled smoothed firing
+        rate by position vectors were computed for each cell following the per-lap
+        randomized circular permutation of estimated activity vector, Ssp".
+
+        Note the rotation is in POSITION, not in time. On Grosmark's circular belt the
+        two are equivalent, because the animal runs at a roughly constant speed and
+        position maps onto time monotonically. On a linear corridor they are not: our
+        animals run at ~6 cm/s at the start of the corridor and ~24 cm/s in the middle,
+        so occupancy varies fourfold across bins. Rotating in time makes the null
+        variance at a bin scale as 1/occupancy, which produces an artificially low
+        threshold at the well-sampled ends of the track and a flood of spurious place
+        fields there. Rotating the binned rate map keeps each bin's sampling noise
+        attached to that bin, and only randomises where the field sits.
+
+        A plain permutation (the previous behaviour) is wrong in the other direction:
+        it destroys the spatial autocorrelation that survives the 7.5 cm smoothing, and
+        builds each bin's null from the spread of the whole lap, which for a tuned cell
+        already contains that cell's own field amplitude.
     """
     assert trial_is_imaged(trial), "Trial does not have imaging data"
     position, frame_position = get_online_position_and_frames(
@@ -311,7 +330,7 @@ def activity_trial_position(
     dff_position = np.array(dff_position_list).T
 
     if do_shuffle:
-        return shuffle_rows(dff_position)
+        return circularly_permute_rows(dff_position)
 
     return dff_position
 

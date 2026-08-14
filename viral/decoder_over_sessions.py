@@ -153,7 +153,7 @@ def parse_mouse_session_errors(
 
 
 if __name__ == "__main__":
-    all_results = run_all_mice(rewarded=None)
+    # all_results = run_all_mice(rewarded=None)
     with open(HERE / "decoding_results.pkl", "rb") as f:
         all_results = pickle.load(f)
 
@@ -163,6 +163,8 @@ if __name__ == "__main__":
     y = []
 
     for mouse in mice:
+        if get_genotype(mouse) != "NLGF":
+            continue
         mouse_results = {k: v for k, v in all_results.items() if k.startswith(mouse)}
         n_trials_completed, error = parse_mouse_session_errors(mouse_results, mouse)
         x.extend(n_trials_completed)
