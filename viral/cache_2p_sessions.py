@@ -873,10 +873,9 @@ def main() -> None:
     # Toggle whether the try catch throws or not without commenting it
     debug = False
     for mouse_name in [
-        "J034",
-        "J035",
-        "J037",
-        "J038",
+        "J030",
+        "J031",
+        "J032",
     ]:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
@@ -891,15 +890,9 @@ def main() -> None:
                     print("Wheel blocked set to None")
                     wheel_blocked = None
 
-                session = Cached2pSession.model_validate_json(
-                    (CACHE_PATH / f"{mouse_name}_{date}.json").read_text()
-                )
-                if session.wheel_freeze.freeze_movement_type == "rotary_encoder":
-                    pass
-                else:
-                    if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
-                        print(f"Skipping {mouse_name} {date} as already exists")
-                        continue
+                if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
+                    print(f"Skipping {mouse_name} {date} as already exists")
+                    continue
 
                 if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")
