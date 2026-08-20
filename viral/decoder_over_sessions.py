@@ -13,8 +13,16 @@ import pickle
 from viral.gsheets_importer import gsheet2df
 
 from viral.bayesian_decoder import cross_validate_same_day, decode_main
-from viral.constants import CACHE_PATH, LOCAL_DFF_PATH, SPREADSHEET_ID
+from viral.multiple_sessions import parse_session_number
+from viral.constants import (
+    BEHAVIOUR_DATA_PATH,
+    CACHE_PATH,
+    LOCAL_DFF_PATH,
+    SPREADSHEET_ID,
+)
 from viral.models import Cached2pSession, TrialInfo
+from viral.single_session import load_data
+
 from viral.utils import get_genotype, get_wheel_circumference_from_rig
 from viral.imaging_utils import (
     activity_trial_position,
@@ -58,8 +66,13 @@ def frames_and_positions(
 def decode_single_session(
     session: Cached2pSession, spks: np.ndarray, rewarded: bool | None
 ) -> dict:
+    trials = [
+        trial
+        for trial in session.trials
+        if rewarded is None or trial.texture_rewarded == rewarded
+    ]
 
-    all_positions, all_frame_positions, lap_id = frames_and_positions(session.trials)
+    all_positions, all_frame_positions, lap_id = frames_and_positions(trials)
 
     res = decode_main(
         all_frame_positions=all_frame_positions,
@@ -72,11 +85,13 @@ def decode_single_session(
 
 def run_all_mice(rewarded: bool | None) -> dict[str, dict]:
 
-    use_local_dff = False
+    use_local_dff = True
     cache_files = list(CACHE_PATH.glob("*.json"))
 
-    if (HERE / "decoding_results.pkl").exists():
-        with open(HERE / "decoding_results.pkl", "rb") as f:
+    results_file = HERE / f"decoding_results_rewarded_{rewarded}.pkl"
+
+    if results_file.exists():
+        with open(results_file, "rb") as f:
             all_results = pickle.load(f)
     else:
         all_results = {}
@@ -85,6 +100,9 @@ def run_all_mice(rewarded: bool | None) -> dict[str, dict]:
         file_parts = cache_file.stem.split("_")
         date = file_parts[1]
         mouse = file_parts[0]
+
+        if get_genotype(mouse) not in {"WT", "NLGF"}:
+            continue
 
         key = f"{mouse}_{date}"
         if key in all_results:
@@ -119,7 +137,7 @@ def run_all_mice(rewarded: bool | None) -> dict[str, dict]:
             continue
 
         all_results[key] = result
-        with open(HERE / "decoding_results.pkl", "wb") as f:
+        with open(results_file, "wb") as f:
             pickle.dump(all_results, f)
 
     return all_results
@@ -127,48 +145,103 @@ def run_all_mice(rewarded: bool | None) -> dict[str, dict]:
 
 def parse_mouse_session_errors(
     mouse_results: dict, mouse: str
-) -> tuple[list[int], list[float]]:
+) -> tuple[list[int], list[float], list[int]]:
     metadata = gsheet2df(SPREADSHEET_ID, mouse, 1)
-    dates = sorted([k.split("_")[1] for k in mouse_results.keys()])
 
-    running_trial_count = 0
-    n_trials_completed = []
+    n_trials_in_session = []
     error = []
+    decoded_session_idxs = []
 
-    for date in dates:
-        session_name = metadata[metadata["Date"] == date].iloc[0]["Type"].lower()
+    learning_day_idx = 0
+
+    for _, row in metadata.iterrows():
+        date = row["Date"]
+        session_name = row["Type"].lower()
         if not session_name.startswith("learning day"):
             continue
-        session = Cached2pSession.model_validate_json(
-            (CACHE_PATH / f"{mouse}_{date}.json").read_text()
-        )
-        running_trial_count += len(session.trials)
+        session_number = parse_session_number(row["Session Number"])[0]
+        session_path = BEHAVIOUR_DATA_PATH / mouse / row["Date"] / session_number
+        n_trials_in_session.append(len(load_data(session_path)))
+
+        try:
+            session = Cached2pSession.model_validate_json(
+                (CACHE_PATH / f"{mouse}_{date}.json").read_text()
+            )
+        except FileNotFoundError:
+            print(f"Cache file not found for {mouse} on {date}. Skipping.")
+            continue
         if len(session.trials) < 25:
             print(f"Skipping {mouse} on {date} due to insufficient trials.")
             continue
-        result = mouse_results[f"{mouse}_{date}"]["mean_error"]
-        n_trials_completed.append(running_trial_count)
+        try:
+            result = mouse_results[f"{mouse}_{date}"]["mean_error"]
+        except KeyError:
+            print(f"Decoder result not found for {mouse} on {date}. Skipping.")
+            continue
         error.append(result)
-    return n_trials_completed, error
+        decoded_session_idxs.append(learning_day_idx)
+        learning_day_idx += 1
+
+    return n_trials_in_session, error, decoded_session_idxs
 
 
-if __name__ == "__main__":
-    # all_results = run_all_mice(rewarded=None)
-    with open(HERE / "decoding_results.pkl", "rb") as f:
+def parse_decoder_results(rewarded: bool) -> None:
+    with open(HERE / f"decoding_results_rewarded_{rewarded}.pkl", "rb") as f:
         all_results = pickle.load(f)
 
     mice = set([key.split("_")[0] for key in all_results.keys()])
 
-    x = []
-    y = []
+    save_file = HERE / f"decoder_parsed_rewarded_{rewarded}.pkl"
+    if (save_file).exists():
+        with open(save_file, "rb") as f:
+            decoder_parsed = pickle.load(f)
+    else:
+        decoder_parsed = {}
 
     for mouse in mice:
-        if get_genotype(mouse) != "NLGF":
-            continue
         mouse_results = {k: v for k, v in all_results.items() if k.startswith(mouse)}
-        n_trials_completed, error = parse_mouse_session_errors(mouse_results, mouse)
-        x.extend(n_trials_completed)
-        y.extend(error)
+        n_trials_in_session, error, decoded_session_idxs = parse_mouse_session_errors(
+            mouse_results, mouse
+        )
+        decoder_parsed[mouse] = {
+            "n_trials_in_session": n_trials_in_session,
+            "error": error,
+            "decoded_session_idxs": decoded_session_idxs,
+        }
+        with open(save_file, "wb") as f:
+            pickle.dump(decoder_parsed, f)
 
-    plt.plot(x, y, "o")
+
+def fit_decoded(decoded_parsed: dict[str, dict]) -> None:
+
+    plt.figure()
+    for genotype in {"WT", "NLGF"}:
+
+        for mouse, result in decoded_parsed.items():
+            if get_genotype(mouse) != genotype:
+                continue
+            cum = np.cumsum(result["n_trials_in_session"])
+            x = np.array(cum)[result["decoded_session_idxs"]]
+
+            # x = np.array(result["decoded_session_idxs"])
+            y = np.array(result["error"])
+            plt.scatter(
+                x, y, label=mouse, color="blue" if genotype == "WT" else "orange"
+            )
+
+    plt.ylim(0, 60)
+
+
+if __name__ == "__main__":
+    # rewarded = False
+    # for rewarded in [True, False]:
+    #     # all_results = run_all_mice(rewarded=rewarded)
+    # parse_decoder_results(rewarded=rewarded)
+
+    for rewarded in [True, False]:
+        with open(HERE / f"decoder_parsed_rewarded_{rewarded}.pkl", "rb") as f:
+            decoder_parsed = pickle.load(f)
+
+        fit_decoded(decoder_parsed)
+        plt.title(f"rewarded={rewarded}")
     plt.show()
