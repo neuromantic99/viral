@@ -599,13 +599,9 @@ def batch_runner() -> None:
 
     cache_files = list(CACHE_PATH.glob("*.json"))
     data_type = "spks"
-    use_cache = True
+    use_cache = False
+    use_local_dff = False
 
-    cache_files = [
-        cache_file
-        for cache_file in cache_files
-        if cache_file.stem.split("_")[0] in ["J034", "J035", "J037", "J038"]
-    ]
 
     cache_files = sorted(
         cache_files, key=lambda x: (x.stem.split("_")[0], x.stem.split("_")[1])
@@ -628,15 +624,16 @@ def batch_runner() -> None:
             f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
         )
 
-        if (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
+        if use_local_dff and (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
             dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy")
             spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy")
             denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy")
         else:
             dff, spks, denoised = load_imaging_data(mouse, date)
-            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy", dff)
-            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy", spks)
-            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy", denoised)
+            if use_local_dff:
+                np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy", dff)
+                np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy", spks)
+                np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy", denoised)
 
         assert (
             max(
