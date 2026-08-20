@@ -21,9 +21,10 @@ from viral.constants import (
     HERE,
     LOCAL_DFF_PATH,
     SERVER_PATH,
-    TIFF_UMBRELLA,
+    SPREADSHEET_ID,
     grosmark_config,
 )
+from viral.gsheets_importer import gsheet2df
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
@@ -38,11 +39,10 @@ from viral.utils import (
     cross_correlation_pandas,
     degrees_to_cm,
     find_n_consecutive_trues_extent,
+    get_genotype,
     get_movement_bool,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
-    interpolate_nans_vector,
-    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -60,7 +60,7 @@ def grosmark_place_field(
     plot: bool = True,
     cache_file_additional_info: str | None = None,
     use_cache: bool = True,
-) -> None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Grosmark et al. place field analysis.
     1. get place cell mask
@@ -107,7 +107,7 @@ def grosmark_place_field(
     if plot:
         plot_circular_distance_matrix(smoothed_matrix)
 
-    offline_correlations(
+    return offline_correlations(
         offline_spks_pre=offline_spks_pre,
         offline_spks_post=offline_spks_post,
         peak_position_cm=peak_position_cm,
@@ -324,7 +324,7 @@ def offline_correlations(
     offline_spks_post: np.ndarray,
     peak_position_cm: np.ndarray,
     wheel_freeze: WheelFreeze,
-) -> None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Correlates offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
     that can be found in the commit history (e.g. d2e7852f54282a52722767e52cca1ab71e56851b) if you need them
 
@@ -371,25 +371,26 @@ def offline_correlations(
     plt.figure()
     plt.xlabel("Distance between peaks")
     plt.ylabel("Average pearson correlation")
-    r_pre, p_pre = correlations_vs_peak_distance(
+    x_pre, y_pre = correlations_vs_peak_distance(
         pre_corrs_real,
         peak_position_cm=peak_position_cm,
         colour="blue",
         label="pre-epoch",
         plot=True,
     )
-    r_post, p_post = correlations_vs_peak_distance(
+    x_post, y_post = correlations_vs_peak_distance(
         post_corrs_real,
         peak_position_cm=peak_position_cm,
         colour="red",
         label="post-epoch",
         plot=True,
     )
-    plt.legend()
-    plt.title(
-        f"pre: r={r_pre:.2f}, p={p_pre:.2f}\npost: r={r_post:.2f}, p={p_post:.2f}"
+    return (
+        x_pre,
+        y_pre,
+        x_post,
+        y_post,
     )
-    # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
 
 
 def get_offline_correlation_matrix(
@@ -441,7 +442,7 @@ def correlations_vs_peak_distance(
     colour: str | None = None,
     label: str | None = None,
     plot: bool = False,
-) -> tuple[float, tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
         distance between their place field peaks.
     Args:
@@ -470,7 +471,7 @@ def correlations_vs_peak_distance(
     y = []
 
     bin_width = 20
-    for bin_start in np.arange(200):
+    for bin_start in np.arange(120):
         in_bin = np.logical_and(
             peak_distances >= bin_start, peak_distances < bin_start + bin_width
         )
@@ -482,17 +483,7 @@ def correlations_vs_peak_distance(
         plt.plot(np.array(x), y, color=colour, label=label)
         plt.legend()
 
-    # Need to put this back if grosmarking
-    # r, p = pearsonr(x, y)
-    # return r, p
-    x = np.array(x)
-    y = np.array(y)
-
-    y = interpolate_nans_vector(y)
-
-    m = compute_linear_slope((x / 60), y / y[0])
-
-    return m, (np.array(x), np.array(y))
+    return np.array(x), np.array(y)
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
@@ -623,7 +614,6 @@ def batch_runner() -> None:
     for cache_file in cache_files:
         file_parts = cache_file.stem.split("_")
         date = file_parts[1]
-
         mouse = file_parts[0]
 
         print("Processing", cache_file)
@@ -673,11 +663,104 @@ def batch_runner() -> None:
                 )
             except Exception as e:
                 print(f"Error processing {mouse} {date} rewarded={rewarded}: {e}")
-
             # Don't run unsupervised three times
             if is_unsupervised:
                 break
 
 
+def offline_correlation_across_sessions() -> None:
+
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    mice = set([cache_file.stem.split("_")[0] for cache_file in cache_files])
+    data_type = "spks"
+
+    x_pre_all = []
+    y_pre_all = []
+    x_post_all = []
+    y_post_all = []
+
+    for mouse in mice:
+
+        if mouse == "JB031":
+            continue
+
+        genotype = get_genotype(mouse)
+        if genotype not in {"WT", "Neuronal-BACE1-KO"}:
+            continue
+        print(f"Processing mouse {mouse} with genotype {genotype}")
+        metadata = gsheet2df(SPREADSHEET_ID, mouse, 1)
+        session_types = metadata["Type"].values
+        learning_days = [
+            (idx, session_type)
+            for idx, session_type in enumerate(session_types)
+            if session_type.lower().startswith("learning day")
+        ]
+        expert_day = learning_days[-1]
+        print(learning_days, expert_day)
+        expert_date = metadata["Date"].values[expert_day[0]]
+
+        try:
+            with open(
+                SERVER_PATH
+                / "viral_caches"
+                / "cached_2p"
+                / f"{mouse}_{expert_date}.json",
+                "r",
+            ) as f:
+                session = Cached2pSession.model_validate_json(f.read())
+        except:
+            print(f"Skipping {mouse} {expert_date} because session file not found")
+            continue
+
+        if session.wheel_freeze is None:
+            print(f"Skipping {mouse} {expert_date} because wheel_freeze is None")
+            continue
+
+        if (LOCAL_DFF_PATH / f"{mouse}_{expert_date}_dff.npy").exists():
+            dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_dff.npy")
+            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_spks.npy")
+            denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_denoised.npy")
+        else:
+            dff, spks, denoised = load_imaging_data(mouse, expert_date)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_dff.npy", dff)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_spks.npy", spks)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_denoised.npy", denoised)
+
+        (
+            x_pre,
+            y_pre,
+            x_post,
+            y_post,
+        ) = grosmark_place_field(
+            session,
+            spks if data_type == "spks" else denoised,
+            rewarded=True,
+            config=grosmark_config,
+            cache_file_additional_info=(data_type if data_type == "denoised" else None),
+            use_cache=True,
+            plot=False,
+        )
+
+        x_pre_all.append(x_pre)
+        y_pre_all.append(y_pre)
+        x_post_all.append(x_post)
+        y_post_all.append(y_post)
+
+    np.save("x_pre_all.npy", x_pre_all)
+    np.save("y_pre_all.npy", y_pre_all)
+    np.save("x_post_all.npy", x_post_all)
+    np.save("y_post_all.npy", y_post_all)
+    1 / 0
+
+
 if __name__ == "__main__":
-    batch_runner()
+    offline_correlation_across_sessions()
+    x_pre_all = np.load("x_pre_all.npy", allow_pickle=True)
+    y_pre_all = np.load("y_pre_all.npy", allow_pickle=True)
+    x_post_all = np.load("x_post_all.npy", allow_pickle=True)
+    y_post_all = np.load("y_post_all.npy", allow_pickle=True)
+
+    shaded_line_plot(y_pre_all, np.arange(120), "red", "pre")
+    shaded_line_plot(y_post_all, np.arange(120), "green", "post")
+
+    1 / 0
