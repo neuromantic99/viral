@@ -175,6 +175,31 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     )
 
 
+@register_correction("J031", "2026-05-12")
+def j030_2026_05_12(c: SessionCorrection) -> SessionCorrection:
+    """Focus without a grab"""
+    # stack_lengths_tiffs
+    # array([27000, 36211, 80411, 27000])
+    # chunk_lengths_daq
+    # array([27000, 36213, 254, 80413, 27000])
+
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, 2)
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: 27000 + 36213],
+            c.frame_times_daq[sum([27000, 36213, 254]) :],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
 @register_correction("JB035", "2025-07-04")
 def jb035_2025_07_04(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
