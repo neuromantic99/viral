@@ -490,6 +490,26 @@ def shuffle_rows(matrix: np.ndarray) -> np.ndarray:
     return shuffled_matrix
 
 
+def permute_row_order(matrix: np.ndarray) -> np.ndarray:
+    """
+    Permutes the order of the rows of a matrix, keeping each row intact.
+
+    This is the null for the ICA ensemble weight matrix w, of shape
+    (n_place_cells, n_components). Grosmark et al.: "ICA components were shuffled
+    by randomly permuting the weight matrix w across PCs and recalculating the
+    reactivation strength." Permuting across PCs means reassigning which cell owns
+    which weight profile, which decouples the ensemble templates from the identity
+    of the cells that actually co-fire offline, while preserving the per-component
+    weight distribution and the cross-component structure of each cell's weights.
+
+    Do NOT use shuffle_rows for this: that shuffles the elements *within* each row,
+    i.e. it permutes each cell's weights across components. With a single
+    significant component that is a no-op, and with a handful it barely perturbs
+    the data at all, so the resulting "null" sits on top of the observed values.
+    """
+    return matrix[np.random.permutation(matrix.shape[0]), :]
+
+
 def circularly_permute_rows(matrix: np.ndarray) -> np.ndarray:
     """
     Circularly shifts each row of the given matrix by an independent random offset.

@@ -10,6 +10,7 @@ from viral.utils import (
     below_threshold_for_n_consecutive_samples,
     circularly_permute_rows,
     degrees_to_cm,
+    get_movement_bool,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     threshold_detect,
@@ -489,6 +490,36 @@ def split_fluoresence_online_freeze(
             wheel_freeze.post_training_start_frame : wheel_freeze.post_training_end_frame,
         ],
     )
+
+
+def restrict_to_immobility(
+    offline_pre: np.ndarray, offline_post: np.ndarray, wheel_freeze: WheelFreeze
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop the frames in which the mouse was moving from the pre and post freeze epochs.
+
+    Grosmark et al. restrict all offline analyses to immobility ("Offline immobility
+    epochs were defined as those in which the animal's velocity [...] was below 3 cm/s
+    for at least 3 consecutive seconds"). Without this, grooming and fidgeting during
+    the frozen-wheel blocks end up inside the reactivation estimate, which both
+    confounds the pre versus post contrast (mice do not settle equally in the two
+    blocks) and confounds any group comparison in which the groups differ in how much
+    they move while frozen.
+
+    Takes the two offline epochs as returned by split_fluoresence_online_freeze.
+    """
+    movement_pre, movement_post = get_movement_bool(wheel_freeze=wheel_freeze)
+
+    for name, offline, movement in (
+        ("pre", offline_pre, movement_pre),
+        ("post", offline_post, movement_post),
+    ):
+        assert offline.shape[1] == movement.shape[0], (
+            f"{name}-freeze epoch is {offline.shape[1]} frames but its movement vector "
+            f"is {movement.shape[0]} frames. get_movement_bool pads to 27000, so a "
+            f"WheelFreeze whose epoch is not 27000 frames long will not line up."
+        )
+
+    return offline_pre[:, ~movement_pre], offline_post[:, ~movement_post]
 
 
 def get_imaging_crashed(mouse_name: str, date: str) -> bool:

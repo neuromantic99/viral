@@ -11,6 +11,7 @@ from scipy.linalg import fractional_matrix_power, subspace_angles
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import wilcoxon, zscore, rankdata
 from opt_einsum import contract
+import pandas as pd
 import seaborn as sns
 from tqdm import tqdm
 
@@ -18,11 +19,19 @@ HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.constants import CACHE_PATH, SERVER_PATH, TIFF_UMBRELLA, grosmark_config
+from viral.gsheets_importer import gsheet2df
+from viral.constants import (
+    CACHE_PATH,
+    SERVER_PATH,
+    SPREADSHEET_ID,
+    TIFF_UMBRELLA,
+    grosmark_config,
+)
 from viral.models import (
     Cached2pSession,
     EnsembleSessionResult,
     GrosmarkConfig,
+    ReactivationSummary,
     SortedPlaceCells,
     TrialInfo,
     SSPVectorData,
@@ -37,17 +46,20 @@ from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
+    get_genotype,
     get_wheel_circumference_from_rig,
+    permute_row_order,
     shaded_line_plot,
     shuffle_rows,
     split_continuous_chunks,
+    threshold_detect,
     threshold_detect_continuous,
     threshold_detect_edges,
-    trial_is_imaged,
 )
 from viral.imaging_utils import (
     compute_speed_grosmark,
     load_imaging_data,
+    restrict_to_immobility,
     split_fluoresence_online_freeze,
     trial_is_imaged,
 )
@@ -243,9 +255,28 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
 
 
 def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
-    """Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z."""
+    """Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z.
+
+    Smooth first, then z-score. The order matters: convolution removes variance by a
+    factor set by the cell's temporal autocorrelation, so z-scoring first leaves Z
+    with a per-cell variance well below 1 that depends on how clustered in time that
+    cell's events are. Measured on matched spike counts, isolated events retain 0.06
+    of the variance while events in bursts of eight retain 0.44 - a sevenfold spread.
+    Reactivation strength goes as Z squared, so cells or groups that differ in
+    burstiness score differently for reasons unrelated to assembly structure, which
+    matters here because burstiness is exactly the kind of thing that differs between
+    genotypes. Smoothing first and normalising after removes that: Z has unit variance
+    per cell regardless. Firing rate alone does not drive this - for temporally
+    independent events the factor is constant across rates.
+
+    This also matches the online path, where get_ssp_vectors applies the 1-s kernel
+    and compute_ICA_components z-scores afterwards.
+
+    Silent cells smooth to all-zero and z-score to NaN, so they are zeroed out.
+    """
     sigma = 150 / 1000 * 30  # 150 ms kernel
-    return np.apply_along_axis(gaussian_filter1d, axis=1, arr=reactivation, sigma=sigma)
+    smoothed = gaussian_filter1d(reactivation, sigma=sigma, axis=1)
+    return np.nan_to_num(zscore(smoothed, axis=1))
 
 
 def offline_reactivation(
@@ -264,18 +295,12 @@ def offline_reactivation(
     Rbi = ZiT * Pb * Zb
     """
 
-    reactivation = zscore(reactivation, axis=1)
-    # Remove nans from silent neurons
-    reactivation = np.nan_to_num(reactivation)
-
     if do_shuffle:
         # """ICA components were shuffled by randomly permuting the weight matrix w across
         # PCs and recalculating the reactivation strength."""
-        # Confusing, should we shuffle rows or columns (i.e. PCs or components)?
-        # ensemble_matrix = ensemble_matrix[
-        #     :, np.random.permutation(ensemble_matrix.shape[1])
-        # ]
-        ensemble_matrix = shuffle_rows(ensemble_matrix)
+        # Across PCs means across the rows of w, which are the cells. See
+        # permute_row_order for why shuffle_rows is the wrong function here.
+        ensemble_matrix = permute_row_order(ensemble_matrix)
 
     offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
 
@@ -319,6 +344,135 @@ def offline_reactivation(
     )
 
     return reactivation_strength
+
+
+class RunningMoments:
+    """Welford accumulator for the mean and s.d. of the shuffled null.
+
+    Holding all 500 shuffles to take a percentile costs
+    n_shuffles x n_components x n_frames floats, which is well over a gigabyte for a
+    normal session. We only need the first two moments, so accumulate them instead.
+    """
+
+    def __init__(self, shape: Tuple[int, ...]) -> None:
+        self.n = 0
+        self.mean = np.zeros(shape)
+        self._m2 = np.zeros(shape)
+
+    def update(self, x: np.ndarray) -> None:
+        assert x.shape == self.mean.shape
+        self.n += 1
+        delta = x - self.mean
+        self.mean += delta / self.n
+        self._m2 += delta * (x - self.mean)
+
+    @property
+    def std(self) -> np.ndarray:
+        assert self.n > 1, "Need at least two shuffles for a standard deviation"
+        return np.sqrt(self._m2 / (self.n - 1))
+
+
+def reactivation_zscore(
+    reactivation_strength: np.ndarray,
+    shuffle_mean: np.ndarray,
+    shuffle_std: np.ndarray,
+) -> np.ndarray:
+    """Express reactivation strength as a z against its own shuffled null.
+
+    R = Z.T @ w @ w.T @ Z scales with the squared norm of the ICA weight vector, and
+    sklearn does not return unit-norm components, so raw R is in arbitrary per-session
+    units. Within a session the pre versus post contrast still cancels that, but no
+    comparison across sessions or genotypes does. Dividing through by the null removes
+    the scale entirely.
+
+    The null is evaluated per component AND per timepoint, so it is matched to the
+    instantaneous population activity: the shuffles reuse the real Z_i and only
+    reassign which cell owns which ensemble weight. The z therefore asks whether the
+    co-activation pattern matches the run ensemble beyond what the overall level of
+    activity at that moment would produce, which also removes any global excitability
+    difference between groups.
+    """
+    assert reactivation_strength.shape == shuffle_mean.shape == shuffle_std.shape
+
+    # A component that is dead flat across every shuffle carries no information;
+    # keep it finite rather than propagating infinities into the event detection.
+    safe_std = np.where(shuffle_std > 0, shuffle_std, np.nan)
+    return np.nan_to_num((reactivation_strength - shuffle_mean) / safe_std, nan=0.0)
+
+
+def detect_reactivation_events(
+    reactivation_z: np.ndarray,
+    peak_z: float = 3.0,
+    edge_z: float = 1.0,
+    min_frames: int = 2,
+) -> List[List[Tuple[int, int]]]:
+    """Find reactivation events per component as excursions of the shuffle-referenced z.
+
+    An event is a stretch above edge_z that reaches at least peak_z somewhere inside
+    it. Thresholds are additive on a z, not multiplicative on a raw value: the old
+    "greater than 1.5 times the shuffled threshold" rule inverts wherever that
+    threshold is negative, which R frequently is once the projection diagonal is
+    zeroed.
+
+    Excursions are returned once each. above_threshold_events maps every peak back to
+    its surrounding excursion, so a doubly-peaked event was previously counted twice,
+    inflating counts as a function of how peaky the trace is, which differs between
+    epochs and between groups.
+    """
+    assert peak_z > edge_z, "Peak threshold must be above the edge threshold"
+
+    events_per_component = []
+    for component in reactivation_z:
+        deduplicated = sorted(
+            set(
+                above_threshold_events(
+                    component, upper_threshold=peak_z, lower_threshold=edge_z
+                )
+            )
+        )
+        events_per_component.append(
+            [(on, off) for on, off in deduplicated if off - on >= min_frames]
+        )
+
+    return events_per_component
+
+
+def summarise_reactivation(
+    reactivation_z: np.ndarray,
+    peak_z: float = 3.0,
+    edge_z: float = 1.0,
+    fs: int = 30,
+) -> ReactivationSummary:
+    """Reduce one offline epoch to a per-component event rate and event amplitude.
+
+    Rate is the primary measure and amplitude the secondary one; see
+    ReactivationSummary for why they are not collapsed into a single number.
+    """
+    events_per_component = detect_reactivation_events(
+        reactivation_z, peak_z=peak_z, edge_z=edge_z
+    )
+
+    immobility_seconds = reactivation_z.shape[1] / fs
+
+    n_events = np.array([len(events) for events in events_per_component])
+
+    mean_peak_z = np.array(
+        [
+            (
+                np.mean([np.max(component[on:off]) for on, off in events])
+                if events
+                else np.nan
+            )
+            for component, events in zip(reactivation_z, events_per_component)
+        ]
+    )
+
+    return ReactivationSummary(
+        event_rate_hz=n_events / immobility_seconds,
+        mean_peak_z=mean_peak_z,
+        n_events=n_events,
+        immobility_seconds=immobility_seconds,
+    )
 
 
 def compute_pcc_scores(
@@ -454,22 +608,22 @@ def classify_and_sort_place_cells(
 
 
 def plot_ensemble_reactivation_preactivation(
-    reactivation_strength: np.ndarray,
-    reactivation_strength_shuffled: np.ndarray,
-    preactivation_strength: np.ndarray,
-    preactivation_strength_shuffled: np.ndarray,
+    reactivation_z: np.ndarray,
+    preactivation_z: np.ndarray,
     top_ensembles: np.ndarray,
     smooth: bool = False,
+    peak_z: float = 3.0,
 ) -> None:
     """
     Producing Fig. 4j, panel II. Plotting reactivation time courses for specified ensembles.
+
+    Takes the shuffle-referenced z, so the null sits at zero and there is no separate
+    shuffled trace to plot: peak_z is drawn as a reference line instead.
     """
     colours = ["red", "blue", "green", "yellow"]
     matrices = {
-        "post": reactivation_strength,
-        "post_shuffled": reactivation_strength_shuffled,
-        "pre": preactivation_strength,
-        "pre_shuffled": preactivation_strength_shuffled,
+        "post": reactivation_z,
+        "pre": preactivation_z,
     }
 
     processed_matrices = {}
@@ -486,22 +640,19 @@ def plot_ensemble_reactivation_preactivation(
     for name, matrix in processed_matrices.items():
         plt.figure(figsize=(14, 4))
         for i, idx in enumerate(top_ensembles):
-            # Sometimes the shuffled don't have enough components
-            if matrix.shape[0] <= idx and "shuffled" in name:
-                continue
             plt.plot(
                 matrix[idx, :],
                 color=colours[i],
                 label=f"ensemble {i}",
             )
-        # plt.ylim(-1.5, 7)
+        plt.axhline(0, color="black", linestyle="dotted", label="shuffled null")
+        plt.axhline(peak_z, color="grey", linestyle="--", label=f"z = {peak_z}")
         plt.xlabel("Time (frames)")
-        # plt.ylabel("Reactivation strength (zscored)")
-        plt.ylabel("Reactivation strength")
+        plt.ylabel("Reactivation strength (z vs shuffled null)")
         plt.title(name)
+        plt.legend()
         plt.tight_layout()
         plt.savefig(f"plots/{name}.svg", dpi=300)
-        # plt.show()
 
 
 def plot_cell_weights(
@@ -667,7 +818,7 @@ def get_ssp_vectors(
     mode: Literal["above", "below", "all"] = "above",
     speed_threshold: float = 5,
     n_consecutive_samples: int = 3 * 30,
-    min_chunk_length: int | None = 2 * 30,
+    min_chunk_length: int | None = None,
 ) -> SSPVectorData:
     """Get sparsified binary spike estimate vector (Ssp) vector as in Grosmark et al.
     The actual binarisation and sparsification step is run in run_oasis.
@@ -679,12 +830,52 @@ def get_ssp_vectors(
 
     'PC run running-bout spike estimate vectors, Ssp, were convolved with a 1-s Gaussian kernel
         corresponding to behavioral timescales.'
+
+    Smoothing is applied ONCE across the whole continuous recording, and the running
+    bouts are selected out of the result. The bouts are a selection, not a real
+    discontinuity in the data, so there is no reason to filter each one in isolation.
+    Doing that fed each bout to a kernel wider than itself: with sigma of 1 s and
+    scipy's default reflect padding, a 4.5 s corridor traversal had 89% of its samples
+    within 2 sigma of an edge.
+
+    The damage is to the variance, and it is position-locked. Reflecting a bout back
+    onto itself means the smoothed value near an edge averages fewer independent
+    samples, so its variance is inflated. On uniform synthetic activity, per-chunk
+    smoothing gave bout edges 2.05x the variance of the bout centre; continuous
+    smoothing gives 1.09x, which is flat to within noise. Because bouts are
+    trial-locked, that inflation lands at the same corridor position on every trial,
+    and ICA works on the covariance matrix, so a trial-aligned modulation of how much
+    each timepoint contributes to it is exactly the kind of structure it will return as
+    an ensemble.
+
+    min_chunk_length defaults to 4 * sigma, the kernel's support. With continuous
+    smoothing a bout shorter than that has no interior: every sample in it draws
+    substantially on the surrounding non-running activity that the kernel pulled in.
+    Pass 0 to keep every bout that met the speed criterion.
+
+    Note that at the default this discards bouts under 4 s, and a fast traversal of the
+    180 cm corridor may not spend 4 s above 5 cm/s. That biases what is kept towards
+    slower trials, so if running speed differs by genotype it becomes a confound - check
+    the retained-frame diagnostic below against speed before trusting a group
+    comparison. Setting min_chunk_length to n_consecutive_samples instead keeps the
+    inclusion rule identical to the stated 3-second running-bout definition.
     """
+    if min_chunk_length is None:
+        min_chunk_length = 4 * sigma
+
+    # Smooth the continuous recording once, then select. See the docstring.
+    smoothed_place_cells = gaussian_filter1d(place_cells, sigma=sigma, axis=1)
+
     ssp_vectors = []
     position_vectors = []
     trial_start_indices = []
     chunk_start_indices = []
     current_idx = 0
+
+    n_chunks_kept = 0
+    n_chunks_dropped = 0
+    n_frames_kept = 0
+    n_frames_dropped = 0
 
     for trial in trials:
         trial_chunk_start_indices = []
@@ -735,7 +926,9 @@ def get_ssp_vectors(
         trial_has_chunks = False
         # Don't smooth across non-continuous chunks
         for chunk in split_continuous_chunks(frames_keep):
-            if min_chunk_length is not None and len(chunk) < min_chunk_length:
+            if len(chunk) < min_chunk_length:
+                n_chunks_dropped += 1
+                n_frames_dropped += len(chunk)
                 continue
 
             if np.any(np.array(chunk) < 0) or np.any(
@@ -745,11 +938,11 @@ def get_ssp_vectors(
                     "Ssp chunk contains invalid frame indices for place_cells"
                 )
 
-            segment = gaussian_filter1d(
-                input=place_cells[:, chunk],
-                sigma=sigma,
-                axis=1,
-            )
+            n_chunks_kept += 1
+            n_frames_kept += len(chunk)
+
+            # Already smoothed across the continuous recording, so just select
+            segment = smoothed_place_cells[:, chunk]
 
             # add the smoothed segment of neural activity to the ssp_vectors
             ssp_vectors.append(segment)
@@ -775,6 +968,19 @@ def get_ssp_vectors(
             trial_start_indices.append(trial_start_idx)
             # append the list of start indices of the chunks within the trial to the nested list
             chunk_start_indices.append((trial_chunk_start_indices))
+
+    # Running bouts are assumed to be runs of consecutive frame indices. If the VR
+    # update loop and the imaging clock drift apart the bouts fragment, and every
+    # fragment under min_chunk_length is silently discarded, so report what survived.
+    total_chunks = n_chunks_kept + n_chunks_dropped
+    total_frames = n_frames_kept + n_frames_dropped
+    if total_frames:
+        print(
+            f"Ssp bouts: kept {n_chunks_kept}/{total_chunks} chunks, "
+            f"{n_frames_kept}/{total_frames} running frames "
+            f"({n_frames_kept / total_frames:.1%}) at min_chunk_length="
+            f"{min_chunk_length} ({min_chunk_length / 30:.1f} s)"
+        )
 
     if len(ssp_vectors) == 0:
         print("No frames matched the criteria, returning empty ssp vector")
@@ -808,16 +1014,7 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
     print(f"Processing mouse {mouse}, date {date}")
 
     verbose = True
-    use_cache = False
-
-    assert (
-        TIFF_UMBRELLA
-        / date
-        / mouse
-        / "suite2p"
-        / "plane0"
-        / "full_grosmark_oasis_preprocessed.npy"
-    ).exists(), f"Correct oasis not run for {mouse} on {date}"
+    use_cache = True
 
     with open(CACHE_PATH / f"{mouse}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
@@ -844,9 +1041,11 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
             pcs_mask,
             ensemble_matrix,
             reactivation_strength,
-            reactivation_strength_shuffled,
+            reactivation_shuffle_mean,
+            reactivation_shuffle_std,
             preactivation_strength,
-            preactivation_strength_shuffled,
+            preactivation_shuffle_mean,
+            preactivation_shuffle_std,
             reactivation,
             preactivation,
             pcc_scores,
@@ -872,6 +1071,19 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
 
         preactivation, _, reactivation = split_fluoresence_online_freeze(
             flu=place_cells, wheel_freeze=session.wheel_freeze
+        )
+
+        n_pre_all, n_post_all = preactivation.shape[1], reactivation.shape[1]
+        preactivation, reactivation = restrict_to_immobility(
+            offline_pre=preactivation,
+            offline_post=reactivation,
+            wheel_freeze=session.wheel_freeze,
+        )
+        print(
+            f"Immobility frames kept: pre {preactivation.shape[1]}/{n_pre_all} "
+            f"({preactivation.shape[1] / n_pre_all:.1%}), "
+            f"post {reactivation.shape[1]}/{n_post_all} "
+            f"({reactivation.shape[1] / n_post_all:.1%})"
         )
 
         trials = [
@@ -906,7 +1118,7 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
         )
 
         def compute_shuffled_strength(_: Any) -> Tuple[np.ndarray, np.ndarray]:
-            ensemble_matrix_shuffled = shuffle_rows(ensemble_matrix)
+            ensemble_matrix_shuffled = permute_row_order(ensemble_matrix)
             return (
                 offline_reactivation(
                     reactivation=reactivation,
@@ -919,34 +1131,30 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
             )
 
         n_shuffles = 500
-        reactivation_strength_shuffled = []
-        preactivation_strength_shuffled = []
+
+        # Accumulate the first two moments of the null rather than storing every
+        # shuffle: we need a mean and s.d. per (component, timepoint) to z-score
+        # against, and holding all 500 costs over a gigabyte on a normal session.
+        reactivation_null = RunningMoments(reactivation_strength.shape)
+        preactivation_null = RunningMoments(preactivation_strength.shape)
 
         do_concurrent = False
         if do_concurrent:
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(
-                    tqdm(
-                        executor.map(compute_shuffled_strength, range(n_shuffles)),
-                        total=n_shuffles,
-                    )
-                )
-                for reac, preac in results:
-                    reactivation_strength_shuffled.append(reac)
-                    preactivation_strength_shuffled.append(preac)
-
+                results = executor.map(compute_shuffled_strength, range(n_shuffles))
+                for reac, preac in tqdm(results, total=n_shuffles):
+                    reactivation_null.update(reac)
+                    preactivation_null.update(preac)
         else:
             for _ in tqdm(range(n_shuffles)):
                 reac, preac = compute_shuffled_strength(None)
-                reactivation_strength_shuffled.append(reac)
-                preactivation_strength_shuffled.append(preac)
+                reactivation_null.update(reac)
+                preactivation_null.update(preac)
 
-        reactivation_strength_shuffled = np.percentile(
-            np.array(reactivation_strength_shuffled), 95, axis=0
-        )
-        preactivation_strength_shuffled = np.percentile(
-            np.array(preactivation_strength_shuffled), 95, axis=0
-        )
+        reactivation_shuffle_mean = reactivation_null.mean
+        reactivation_shuffle_std = reactivation_null.std
+        preactivation_shuffle_mean = preactivation_null.mean
+        preactivation_shuffle_std = preactivation_null.std
 
         print(f"Time to get reactivation strength(s): {time.time() - t2}")
         t3 = time.time()
@@ -962,9 +1170,11 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
             pcs_mask=pcs_mask,
             ensemble_matrix=ensemble_matrix,
             reactivation_strength=reactivation_strength,
-            reactivation_strength_shuffled=reactivation_strength_shuffled,
+            reactivation_shuffle_mean=reactivation_shuffle_mean,
+            reactivation_shuffle_std=reactivation_shuffle_std,
             preactivation_strength=preactivation_strength,
-            preactivation_strength_shuffled=preactivation_strength_shuffled,
+            preactivation_shuffle_mean=preactivation_shuffle_mean,
+            preactivation_shuffle_std=preactivation_shuffle_std,
             reactivation=reactivation,
             preactivation=preactivation,
             pcc_scores=pcc_scores,
@@ -980,6 +1190,29 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
             f"# significant components (Marcenko-Pastur), shuffled data: {num_shuffled_components if not use_cache else 'not computed'}"
         )
 
+    reactivation_z = reactivation_zscore(
+        reactivation_strength=reactivation_strength,
+        shuffle_mean=reactivation_shuffle_mean,
+        shuffle_std=reactivation_shuffle_std,
+    )
+    preactivation_z = reactivation_zscore(
+        reactivation_strength=preactivation_strength,
+        shuffle_mean=preactivation_shuffle_mean,
+        shuffle_std=preactivation_shuffle_std,
+    )
+
+    post_summary = summarise_reactivation(reactivation_z)
+    pre_summary = summarise_reactivation(preactivation_z)
+
+    print(
+        f"Event rate (Hz of immobility): pre {np.mean(pre_summary.event_rate_hz):.4f} "
+        f"post {np.mean(post_summary.event_rate_hz):.4f}\n"
+        f"Mean peak z per event:         pre {np.nanmean(pre_summary.mean_peak_z):.3f} "
+        f"post {np.nanmean(post_summary.mean_peak_z):.3f}\n"
+        f"Immobility (s):                pre {pre_summary.immobility_seconds:.0f} "
+        f"post {post_summary.immobility_seconds:.0f}"
+    )
+
     top_ensembles = sort_ensembles_by_reactivation_strength(
         reactivation_strength=reactivation_strength, n_top=2
     )
@@ -988,10 +1221,8 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
     )
     plot_pcc_scores(pcc_scores=pcc_scores)
     plot_ensemble_reactivation_preactivation(
-        reactivation_strength=reactivation_strength,
-        reactivation_strength_shuffled=reactivation_strength_shuffled,
-        preactivation_strength=preactivation_strength,
-        preactivation_strength_shuffled=preactivation_strength_shuffled,
+        reactivation_z=reactivation_z,
+        preactivation_z=preactivation_z,
         top_ensembles=top_ensembles,
         smooth=True,
     )
@@ -1011,6 +1242,7 @@ def main(mouse: str, date: str, rewarded: bool | None, plot: bool = True) -> Non
         reactivation=reactivation,
         smooth=True,
     )
+    1 / 0
 
 
 def get_reactivation_strength_sum(
@@ -1182,9 +1414,11 @@ def load_data_from_cache(cache_file: Path) -> tuple:
         cache["pcs_mask"],
         cache["ensemble_matrix"],
         cache["reactivation_strength"],
-        cache["reactivation_strength_shuffled"],
+        cache["reactivation_shuffle_mean"],
+        cache["reactivation_shuffle_std"],
         cache["preactivation_strength"],
-        cache["preactivation_strength_shuffled"],
+        cache["preactivation_shuffle_mean"],
+        cache["preactivation_shuffle_std"],
         cache["reactivation"],
         cache["preactivation"],
         cache["pcc_scores"],
@@ -1241,145 +1475,150 @@ def test_subspace(W1: np.ndarray, W2: np.ndarray) -> None:
     assert np.max(np.degrees(angles)) < 1e-9
 
 
-def multiple_sessions() -> None:
-    """Run ensemble reactivation on multiple cached sessions"""
+def multiple_sessions(
+    rewarded: bool | None = None,
+) -> pd.DataFrame:
+    """Summarise ICA ensemble reactivation across cached sessions.
 
-    all_mice: List[EnsembleSessionResult] = []
+    Returns one row per (session, component) with the paired pre and post measures,
+    which is the shape the mixed model in dec.py wants: component nested in session
+    nested in mouse, with the genotype contrast tested by exact permutation over mice.
+    Do not collapse to one number per session first - with ~9 mice against 172
+    sessions, the nesting is where the power is.
+    """
+    records = []
 
-    baseline_multiplier = 1.5
-    for mouse in SESSIONS_KEEP.keys():
-        if mouse not in {"JB035"}:
-            continue
+    cache_files = list(CACHE_PATH.glob("*.json"))
 
-        date = SESSIONS_KEEP[mouse]["learned"]
-        print(mouse, date)
+    mice = set(f.stem.split("_")[0] for f in cache_files)
+    # So you don't have to build this for each sessions
+    metadata_dict = {mouse: gsheet2df(SPREADSHEET_ID, mouse, 1) for mouse in mice}
+
+    for cache_file in cache_files:
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
+        metadata = metadata_dict[mouse]
+        stage = metadata.loc[metadata["Date"] == date, "Type"].values[0]
+
         cache_file = (
             SERVER_PATH
             / "viral_caches"
             / "ensemble_caches"
-            / f"{mouse}suite2p_{date}_ensemble_reactivation.npz"
+            / f"{mouse}suite2p_{date}_ensemble_reactivation_{grosmark_config}_rewarded_{rewarded}.npz"
         )
-        data = np.load(cache_file, allow_pickle=True)
+        # if not cache_file.exists():
+        main(mouse=mouse, date=date, rewarded=rewarded, plot=False)
+        continue
+
+        print(mouse, date)
         (
-            reactivation_strength,
-            reactivation_strength_shuffled,
-            preactivation_strength,
-            preactivation_strength_shuffled,
+            pcs_mask,
             ensemble_matrix,
-        ) = (
-            data["reactivation_strength"],
-            data["reactivation_strength_shuffled"],
-            data["preactivation_strength"],
-            data["preactivation_strength_shuffled"],
-            data["ensemble_matrix"],
-        )
-
-        if ensemble_matrix.shape[1] < 5:
-            print(
-                f"Skipping {mouse} {date} as there are only {ensemble_matrix.shape[1]} components"
-            )
-            continue
-
-        significant_reactivation = (
-            reactivation_strength > reactivation_strength_shuffled * baseline_multiplier
-        )
-        significant_preactivation = (
-            preactivation_strength
-            > preactivation_strength_shuffled * baseline_multiplier
-        )
-
-        only_significant_reactivation = reactivation_strength.copy()
-        only_significant_preactivation = preactivation_strength.copy()
-
-        only_significant_reactivation[~significant_reactivation] = np.nan
-        only_significant_preactivation[~significant_preactivation] = np.nan
-
-        reactivation_n, preactivation_n = get_three_sd_events(
-            reactivation_strength=reactivation_strength,
-            preactivation_strength=preactivation_strength,
-        )
-        plt.figure()
-        sns.boxplot(reactivation_n - preactivation_n)
-        plt.title(
-            wilcoxon(reactivation_n, preactivation_n, alternative="greater").pvalue
-        )
-
-        plot_example(
-            baseline_multiplier,
             reactivation_strength,
-            reactivation_strength_shuffled,
+            reactivation_shuffle_mean,
+            reactivation_shuffle_std,
             preactivation_strength,
-            preactivation_strength_shuffled,
-        )
+            preactivation_shuffle_mean,
+            preactivation_shuffle_std,
+            _,
+            _,
+            _,
+        ) = load_data_from_cache(cache_file)
 
-        reactivation_number_of_events = get_reactivation_number_of_events(
-            reactivation_strength=reactivation_strength,
-            preactivation_strength=preactivation_strength,
-            reactivation_strength_baseline=reactivation_strength_shuffled
-            * baseline_multiplier,
-            preactivation_strength_baseline=preactivation_strength_shuffled
-            * baseline_multiplier,
-            plot=False,
-        )
-
-        reactivation_strength_sum_over_threshold = get_reactivation_strength_sum(
-            reactivation_strength=only_significant_reactivation,
-            preactivation_strength=only_significant_preactivation,
-        )
-
-        reactivation_triggered_response = get_reactivation_triggered_averages(
-            reactivation_strength=reactivation_strength,
-            reactivation_strength_baseline=reactivation_strength_shuffled
-            * baseline_multiplier,
-            preactivation_strength=preactivation_strength,
-            preactivation_strength_baseline=preactivation_strength_shuffled
-            * baseline_multiplier,
-        )
-
-        all_mice.append(
-            EnsembleSessionResult(
-                reactivation_triggered_response=reactivation_triggered_response,
-                number_of_events=reactivation_number_of_events,
-                sum_values_over_threshold=reactivation_strength_sum_over_threshold,
-                three_sd_events=None,
+        post = summarise_reactivation(
+            reactivation_zscore(
+                reactivation_strength=reactivation_strength,
+                shuffle_mean=reactivation_shuffle_mean,
+                shuffle_std=reactivation_shuffle_std,
             )
         )
-    all_mice_ensemble_results_plots(all_mice=all_mice)
+        pre = summarise_reactivation(
+            reactivation_zscore(
+                reactivation_strength=preactivation_strength,
+                shuffle_mean=preactivation_shuffle_mean,
+                shuffle_std=preactivation_shuffle_std,
+            )
+        )
+
+        # Every significant component contributes. Picking the top few by post-epoch
+        # strength and then comparing post to pre would be circular.
+        for component in range(ensemble_matrix.shape[1]):
+            records.append(
+                {
+                    "mouse": mouse,
+                    "genotype": get_genotype(mouse),
+                    "date": date,
+                    "stage": stage,
+                    "component": component,
+                    "n_components": ensemble_matrix.shape[1],
+                    "n_place_cells": int(np.sum(pcs_mask)),
+                    "event_rate_hz_pre": pre.event_rate_hz[component],
+                    "event_rate_hz_post": post.event_rate_hz[component],
+                    "mean_peak_z_pre": pre.mean_peak_z[component],
+                    "mean_peak_z_post": post.mean_peak_z[component],
+                    "immobility_seconds_pre": pre.immobility_seconds,
+                    "immobility_seconds_post": post.immobility_seconds,
+                }
+            )
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        print("No sessions found")
+        return df
+
+    df["delta_event_rate_hz"] = df["event_rate_hz_post"] - df["event_rate_hz_pre"]
+    df["delta_mean_peak_z"] = df["mean_peak_z_post"] - df["mean_peak_z_pre"]
+    return df
 
 
-def plot_example(
-    baseline_multiplier: float,
-    reactivation_strength: np.ndarray,
-    reactivation_strength_shuffled: np.ndarray,
-    preactivation_strength: np.ndarray,
-    preactivation_strength_shuffled: np.ndarray,
-) -> None:
-    plt.figure()
-    plt.plot(
-        np.arange(preactivation_strength.shape[1]) / 30,
-        preactivation_strength[0, :] * baseline_multiplier,
-        ".",
+def plot_reactivation_summary(df: pd.DataFrame) -> None:
+    """Paired pre versus post for the two measures, split by genotype.
+
+    Also plots retained immobility, which is a covariate and a candidate confound:
+    if the groups differ in how much they move while the wheel is frozen they are not
+    contributing comparable amounts of offline data.
+    """
+    panels = [
+        ("delta_event_rate_hz", "Event rate (Hz of immobility)\npost - pre"),
+        ("delta_mean_peak_z", "Mean peak z per event\npost - pre"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    for ax, (column, label) in zip(axes, panels):
+        sns.boxplot(
+            data=df, x="genotype", y=column, hue="genotype", showfliers=False, ax=ax
+        )
+        sns.stripplot(
+            data=df, x="genotype", y=column, color="black", alpha=0.3, size=3, ax=ax
+        )
+        ax.axhline(0, color="black", linestyle="dotted")
+        ax.set_ylabel(label)
+
+        for genotype, group in df.groupby("genotype"):
+            values = group[column].dropna()
+            if len(values) > 1:
+                p = wilcoxon(values, alternative="greater").pvalue
+                print(f"{column} {genotype}: n={len(values)} p={p:.2e}")
+
+    immobility = df.melt(
+        id_vars=["genotype"],
+        value_vars=["immobility_seconds_pre", "immobility_seconds_post"],
+        var_name="epoch",
+        value_name="immobility_seconds",
     )
-
-    plt.plot(
-        np.arange(preactivation_strength_shuffled.shape[1]) / 30,
-        preactivation_strength_shuffled[0, :] * baseline_multiplier,
-        linestyle="dotted",
+    sns.boxplot(
+        data=immobility,
+        x="genotype",
+        y="immobility_seconds",
+        hue="epoch",
+        showfliers=False,
+        ax=axes[2],
     )
-    plt.title("Preactivation example")
+    axes[2].set_ylabel("Retained immobility (s)")
 
-    plt.figure()
-    plt.plot(
-        np.arange(reactivation_strength.shape[1]) / 30,
-        reactivation_strength[0, :],
-    )
-
-    plt.plot(
-        np.arange(reactivation_strength_shuffled.shape[1]) / 30,
-        reactivation_strength_shuffled[0, :] * baseline_multiplier,
-        linestyle="dotted",
-    )
-    plt.title("reactivation example")
+    plt.tight_layout()
 
 
 def above_threshold_events(
@@ -1412,20 +1651,31 @@ def get_three_sd_events(
     Reactivation events were identified when the reactivation strength exceeds
         three standard deviations above the mean.
     The onset and offset of these events were delimited by 25% of this threshold.
+
+    The threshold is taken from the PRE epoch and applied unchanged to both epochs.
+    Thresholding each epoch by its own mean and s.d. makes the measure
+    self-normalising: if the post epoch genuinely reactivates more strongly its s.d.
+    is larger, its threshold rises with it, and the event count barely moves. That
+    cancels most of the effect the pre versus post contrast is meant to detect. The
+    pre-freeze block is the natural reference because it precedes the task and so
+    cannot contain task-driven reactivation.
+
+    Thresholds stay per-component, since ICA components have arbitrary relative scale.
     """
 
-    reactivation_threshold = np.mean(reactivation_strength, axis=1) + 3 * np.std(
-        reactivation_strength, axis=1
-    )
-    preactivation_threshold = np.mean(preactivation_strength, axis=1) + 3 * np.std(
+    threshold = np.mean(preactivation_strength, axis=1) + 3 * np.std(
         preactivation_strength, axis=1
     )
+
+    assert (
+        reactivation_strength.shape[0] == preactivation_strength.shape[0]
+    ), "Pre and post must be scored on the same set of components"
 
     reactivation_thresholds = [
         above_threshold_events(
             reactivation_strength[i, :],
-            upper_threshold=reactivation_threshold[i],
-            lower_threshold=reactivation_threshold[i] * 0.25,
+            upper_threshold=threshold[i],
+            lower_threshold=threshold[i] * 0.25,
         )
         for i in range(reactivation_strength.shape[0])
     ]
@@ -1433,8 +1683,8 @@ def get_three_sd_events(
     preactivation_thresholds = [
         above_threshold_events(
             preactivation_strength[i, :],
-            upper_threshold=preactivation_threshold[i],
-            lower_threshold=preactivation_threshold[i] * 0.25,
+            upper_threshold=threshold[i],
+            lower_threshold=threshold[i] * 0.25,
         )
         for i in range(preactivation_strength.shape[0])
     ]
@@ -1444,7 +1694,7 @@ def get_three_sd_events(
         for component, events in zip(preactivation_strength, preactivation_thresholds)
     ]
     plt.plot(
-        np.mean(preactivation_response, axis=0), color="blue", label="preactivation"
+        np.nanmean(preactivation_response, axis=0), color="blue", label="preactivation"
     )
 
     reactivation_response = [
@@ -1452,7 +1702,7 @@ def get_three_sd_events(
         for component, events in zip(reactivation_strength, reactivation_thresholds)
     ]
     plt.plot(
-        np.mean(reactivation_response, axis=0), color="orange", label="reactivation"
+        np.nanmean(reactivation_response, axis=0), color="orange", label="reactivation"
     )
     plt.legend()
 
@@ -1464,13 +1714,28 @@ def get_three_sd_events(
 def get_onset_triggered_response(
     component: np.ndarray, events: List[Tuple[int, int]]
 ) -> np.ndarray:
+    """Mean reactivation strength in a +/- 1 s window around each event onset.
+
+    This must be a mean, not a sum. Summing makes the trace scale with the number of
+    detected events, so an epoch with more events looks like it has larger events,
+    which conflates reactivation rate with reactivation amplitude - exactly the two
+    things this measure is supposed to separate.
+
+    Returns all-NaN if no event has a full window, so that components with no events
+    do not silently contribute zeros to the across-component average.
+    """
+    window = 30
 
     responses = []
     for onset, _ in events:
-        if onset - 30 < 0 or onset + 30 > len(component):
+        if onset - window < 0 or onset + window > len(component):
             continue
-        responses.append(component[onset - 30 : onset + 30])
-    return np.sum(responses, axis=0)
+        responses.append(component[onset - window : onset + window])
+
+    if not responses:
+        return np.full(window * 2, np.nan)
+
+    return np.mean(responses, axis=0)
 
 
 def all_mice_ensemble_results_plots(
@@ -1643,18 +1908,49 @@ def all_mouse_plots(
 
 
 if __name__ == "__main__":
-    # This is the file that's saved by the full grosmark oasis preprocessing as a flag
-    # valid_sessions = list(TIFF_UMBRELLA.rglob("full_grosmark_oasis_preprocessed.npy"))
+    # multiple_sessions(rewarded=None)
+    mouse = "J034"
+    date = "2026-06-18"
+    rewarded = None
 
-    # for session_idx in range(len(valid_sessions)):
-    #     session_path = valid_sessions[session_idx]
-    #     mouse = session_path.parts[-4]
-    #     date = session_path.parts[-5]
+    main(mouse, date, rewarded=rewarded, plot=True)
+    pass
 
-    #     # Bad imaging, replace eventually with column
-    #     # in spreadsheet, or filter by number of place cells
-    #     if mouse in {"JB033", "JB032"}:
-    #         continue
+    cache_file = (
+        SERVER_PATH
+        / "viral_caches"
+        / "ensemble_caches"
+        / f"{mouse}suite2p_{date}_ensemble_reactivation_{grosmark_config}_rewarded_{rewarded}.npz"
+    )
 
-    #     main(mouse, date, plot=False)
-    multiple_sessions()
+    (
+        pcs_mask,
+        ensemble_matrix,
+        reactivation_strength,
+        reactivation_shuffle_mean,
+        reactivation_shuffle_std,
+        preactivation_strength,
+        preactivation_shuffle_mean,
+        preactivation_shuffle_std,
+        reactivation,
+        preactivation,
+        pcc_scores,
+    ) = load_data_from_cache(cache_file)
+
+    post_summary = summarise_reactivation(
+        reactivation_zscore(
+            reactivation_strength=reactivation_strength,
+            shuffle_mean=reactivation_shuffle_mean,
+            shuffle_std=reactivation_shuffle_std,
+        )
+    )
+    pre_summary = summarise_reactivation(
+        reactivation_zscore(
+            reactivation_strength=preactivation_strength,
+            shuffle_mean=preactivation_shuffle_mean,
+            shuffle_std=preactivation_shuffle_std,
+        )
+    )
+
+    # df = multiple_sessions(rewarded=rewarded)
+    # plot_reactivation_summary(df)

@@ -209,6 +209,26 @@ class EnsembleSessionResult:
 
 
 @dataclass
+class ReactivationSummary:
+    """Per-component summary of ICA ensemble reactivation in one offline epoch.
+
+    Rate and amplitude are kept apart on purpose: they are the two arms of the
+    rate-versus-content question, and a single scalar cannot tell "fewer, normal
+    events" from "as many events that no longer match the run map".
+
+    Both are computed on the shuffle-referenced z (see reactivation_zscore), so they
+    are dimensionless and comparable across sessions and animals. Rate is per second
+    of retained immobility rather than per frame, because the pre and post epochs
+    keep different numbers of frames once movement is masked out.
+    """
+
+    event_rate_hz: np.ndarray  # (n_components,) events per second of immobility
+    mean_peak_z: np.ndarray  # (n_components,) mean peak z per event, NaN if no events
+    n_events: np.ndarray  # (n_components,)
+    immobility_seconds: float
+
+
+@dataclass
 class MultipleSessionsConfig:
     window: int
     speed: float
