@@ -1,6 +1,5 @@
 from typing import Dict
 
-
 SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
     # Imaging in unsupervised of poor quality, don't analyse
     "JB011": {
@@ -84,6 +83,41 @@ SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
         "unsupervised": "2025-07-05",
         "learning": "2025-07-07",
         "learned": "2025-07-08",
+    },
+    "J030": {
+        "unsupervised": "2026-05-08",
+        "learning": "2026-05-13",
+        "learned": "2026-05-15",
+    },
+    "J031": {
+        "unsupervised": "2026-05-08",
+        "learning": "2026-05-18",
+        "learned": "2026-05-20",
+    },
+    "J032": {
+        "unsupervised": "2026-05-09",
+        "learning": "2026-05-15",
+        "learned": "2026-05-18",
+    },
+    "J034": {
+        "unsupervised": "2026-06-10",
+        "learning": "2025-06-16",
+        "learned": "2026-06-18",
+    },
+    "J035": {
+        "unsupervised": "2026-06-10",
+        "learning": "2026-02-12",
+        "learned": "2026-06-15",
+    },
+    "J037": {
+        "unsupervised": "2026-07-10",
+        "learning": "2026-07-14",
+        "learned": "2026-07-16",
+    },
+    "J038": {
+        "unsupervised": "2026-07-10",
+        "learning": "2026-07-14",
+        "learned": "2026-07-15",
     },
 }
 
