@@ -40,6 +40,7 @@ from viral.models import (
     MultipleSessionsConfig,
 )
 from viral.utils import (
+    SessionType,
     d_prime,
     get_genotype,
     get_wheel_circumference_from_rig,
@@ -851,7 +852,48 @@ def plot_learning_metric_first_x_trials(
     plt.show()
 
 
+def session_counter() -> None:
+    possible_mice = [f"JB{i:03d}" for i in range(1, 39)] + [
+        f"J{i:03d}" for i in range(30, 39)
+    ]
+    all_mice = {"WT": [], "NLGF": []}
+    session_types = [session_type.value for session_type in SessionType]
+    for mouse_name in possible_mice:
+        try:
+            genotype = get_genotype(mouse_name)
+            if genotype in all_mice:
+                all_mice[genotype].append(mouse_name)
+        except ValueError:
+            pass
+
+    freeze_counts = {
+        "WT": {k: 0 for k in session_types},
+        "NLGF": {k: 0 for k in session_types},
+    }
+    for genotype, mice in all_mice.items():
+        for mouse in mice:
+            metadata = gsheet2df(SPREADSHEET_ID, mouse, 1)
+            if "Wheel blocked?" not in metadata.columns:
+                print(f"Mouse {mouse} does not have 'Wheel blocked?' column")
+                continue
+            for _, row in metadata.iterrows():
+                type_check = row["Type"].lower()
+                try:
+                    session_type = get_session_type(session_name=type_check)
+                except ValueError:
+                    print(
+                        f"Mouse {mouse} has an unrecognized session type: {type_check}"
+                    )
+                    continue
+
+                wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+                freeze_counts[genotype][session_type] += 1
+
+    1 / 0
+
+
 if __name__ == "__main__":
+    session_counter()
 
     mice: List[MouseSummary] = []
 
