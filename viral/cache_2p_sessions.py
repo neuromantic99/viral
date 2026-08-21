@@ -872,11 +872,40 @@ def main() -> None:
     redo = False
     # Toggle whether the try catch throws or not without commenting it
     debug = False
-    for mouse_name in [
+    for mouse_name in {
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
+        "JB034",
+        "JB035",
+        "JB036",
         "J030",
         "J031",
         "J032",
-    ]:
+        "J035",
+        "J034",
+        "J036",
+        "J037",
+        "J038",
+    }:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
@@ -891,8 +920,16 @@ def main() -> None:
                     wheel_blocked = None
 
                 if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
-                    print(f"Skipping {mouse_name} {date} as already exists")
-                    continue
+                    previous = Cached2pSession.model_validate_json(
+                        (CACHE_PATH / f"{mouse_name}_{date}.json").read_text()
+                    )
+                    # Logic to get the new wheel freeze movement data out of existing sessions
+                    if previous.wheel_freeze is None:
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
+                    elif previous.wheel_freeze.freeze_movement_type is not None:
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
 
                 if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")
