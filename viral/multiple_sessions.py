@@ -32,16 +32,25 @@ from viral.single_session import (
     remove_bad_trials,
     summarise_trial,
 )
-from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
+from viral.constants import BEHAVIOUR_DATA_PATH, CACHE_PATH, HERE, SPREADSHEET_ID
 from viral.models import (
+    Cached2pSession,
     MouseSummary,
     SessionSummary,
+    TrialInfo,
     TrialSummary,
     MultipleSessionsConfig,
 )
+from viral.imaging_utils import (
+    get_ITI_start_frame,
+    get_session_n_frames,
+    trial_is_imaged,
+)
 from viral.utils import (
     SessionType,
+    below_threshold_for_n_consecutive_samples,
     d_prime,
+    degrees_to_cm,
     get_genotype,
     get_wheel_circumference_from_rig,
     shaded_line_plot,
@@ -50,11 +59,226 @@ from viral.utils import (
     get_session_type,
     get_rewarded_texture,
 )
+from viral.imaging_utils import compute_speed_grosmark
 
 import seaborn as sns
 import pandas as pd
 
 sns.set_theme(context="talk", style="ticks")
+
+
+def get_iti_still_frames(
+    session: Cached2pSession,
+    speed_threshold: float = 3.0,
+    n_consecutive_samples: int = 3 * 30,
+    exclude_start_seconds: float = 3.0,
+    lick_pad_frames: int = 15,
+    fs: int = 30,
+) -> Tuple[np.ndarray, pd.DataFrame]:
+    """Frames during the inter-trial interval in which the mouse was genuinely still.
+
+    The ITI is 20 s (598-600 frames), so a session of 40-100 trials carries 13-33
+    minutes of in-task quiescence - as much offline data as a freeze block, and
+    interleaved with the experience rather than bracketing it. That makes it usable for
+    reactivation analyses in the many sessions with no wheel freeze.
+
+    Three exclusions, all of which matter:
+
+    exclude_start_seconds drops the beginning of each ITI. GCaMP decays with a time
+    constant near 0.7 s, so running-evoked calcium bleeds several seconds past the end of
+    the trial; without this, apparent offline activity is partly the tail of the run.
+    Three seconds is about four time constants. It also removes reward delivery and the
+    arousal transient that follows it, which sit at the ITI start.
+
+    Licking is excluded with a pad either side, since lick bouts carry their own motor
+    and reward signals.
+
+    Stillness uses Grosmark's definition, matching get_resting_position_and_frames:
+    velocity below 3 cm/s for at least 3 consecutive seconds. It is applied per frame
+    rather than as a per-trial exclusion, because a few moving frames are far more
+    common than a whole ITI of running and a few is all it takes to contaminate a
+    correlation.
+
+    Worth running once at a stricter threshold as a sensitivity check - if the result
+    moves, movement is driving it.
+
+    The mask spans the whole session, so it indexes the neural array directly:
+
+        dff, spks, _ = load_imaging_data(mouse, date)
+        mask, per_trial = get_iti_still_frames(session)
+        quiescent = spks[:, mask]
+
+    Its length is read from the .npy header on the server by get_session_n_frames,
+    which costs one small read rather than pulling a multi-gigabyte array across the
+    network - so the frame budget can be checked across the whole cohort without
+    loading any imaging data.
+
+    The length is not inferred from the trials, because the recording continues past the
+    last trial - a long way past on a freeze session - so a trial-derived length would
+    be short and every downstream index would misalign silently.
+
+    Returns a boolean mask over the session's frames, and a per-trial frame budget so
+    you can see what was retained. Check the retained fraction by genotype before
+    comparing groups: if one group fidgets more it contributes less data AND different
+    data.
+    """
+    n_frames = get_session_n_frames(session.mouse_name, session.date)
+
+    mask = np.zeros(n_frames, dtype=bool)
+    records = []
+    max_frame_seen = -1
+
+    wheel_circumference = get_wheel_circumference_from_rig("2P")
+    exclude_start_frames = int(exclude_start_seconds * fs)
+
+    for idx, trial in enumerate(session.trials):
+        if not trial_is_imaged(trial):
+            continue
+
+        try:
+            iti_start = get_ITI_start_frame(trial)
+        except ValueError:
+            continue
+
+        iti_end = trial.trial_end_closest_frame
+        if iti_end is None:
+            continue
+        iti_end = int(iti_end)
+
+        position = degrees_to_cm(
+            np.array(trial.rotary_encoder_position), wheel_circumference
+        )
+        frame_position = np.array(
+            [
+                state.closest_frame_start
+                for state in trial.states_info
+                if state.name
+                in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+            ]
+        )
+        if len(position) != len(frame_position) or len(position) < 2:
+            continue
+
+        still = below_threshold_for_n_consecutive_samples(
+            compute_speed_grosmark(position),
+            threshold=speed_threshold,
+            n_samples=n_consecutive_samples,
+        )
+
+        # Frames sampled during the ITI, past the calcium-bleed exclusion
+        in_iti = (frame_position >= iti_start + exclude_start_frames) & (
+            frame_position <= iti_end
+        )
+
+        max_frame_seen = max(max_frame_seen, iti_end)
+
+        # Every count below is unique IMAGING FRAMES, so the columns subtract from one
+        # another. The behavioural samples these come from can be denser than the frame
+        # rate, so counting samples for one column and frames for another would make the
+        # per-stage costs uninterpretable.
+        def in_bounds(frames: np.ndarray) -> np.ndarray:
+            frames = np.unique(frames).astype(int)
+            return frames[(frames >= 0) & (frames < n_frames)]
+
+        scored_frames = in_bounds(frame_position[in_iti])
+        still_frames = in_bounds(frame_position[in_iti & still])
+
+        lick_frames = _lick_frames(trial, pad=lick_pad_frames)
+        keep_frames = (
+            still_frames[~np.isin(still_frames, lick_frames)]
+            if lick_frames.size
+            else still_frames
+        )
+
+        mask[keep_frames] = True
+
+        records.append(
+            {
+                "trial": idx,
+                "rewarded": trial.texture_rewarded,
+                "iti_frames": iti_end - iti_start,
+                "scored_frames": scored_frames.size,
+                "still_frames": still_frames.size,
+                "retained_frames": keep_frames.size,
+                "retained_seconds": keep_frames.size / fs,
+            }
+        )
+
+    # Catches a session whose behavioural frame indices run past the imaging data,
+    # which means the cache and the suite2p output disagree about the recording
+    assert max_frame_seen < n_frames, (
+        f"{session.mouse_name} {session.date}: trial frames run to {max_frame_seen} but "
+        f"the imaging data has only {n_frames} frames"
+    )
+
+    return mask, pd.DataFrame(records)
+
+
+def _lick_frames(trial: TrialInfo, pad: int) -> np.ndarray:
+    """Frames spanned by lick bouts, padded either side.
+
+    Port1In and Port1Out are not guaranteed to pair up - a trial can end mid-lick - so
+    they are zipped only as far as the shorter of the two rather than with strict=True.
+    """
+    onsets = [
+        event.closest_frame for event in trial.events_info if event.name == "Port1In"
+    ]
+    offsets = [
+        event.closest_frame for event in trial.events_info if event.name == "Port1Out"
+    ]
+
+    frames: List[int] = []
+    for onset, offset in zip(onsets, offsets):
+        if onset is None or offset is None:
+            continue
+        frames.extend(range(int(onset) - pad, int(offset) + pad + 1))
+
+    return np.array(sorted(set(frames)), dtype=int)
+
+
+def report_iti_still_frames(
+    session: Cached2pSession,
+    speed_threshold: float = 3.0,
+    n_consecutive_samples: int = 3 * 30,
+    exclude_start_seconds: float = 3.0,
+    lick_pad_frames: int = 15,
+    fs: int = 30,
+) -> pd.DataFrame:
+    """Print the ITI frame budget for one session and return the per-trial breakdown."""
+    mask, per_trial = get_iti_still_frames(
+        session,
+        speed_threshold=speed_threshold,
+        n_consecutive_samples=n_consecutive_samples,
+        exclude_start_seconds=exclude_start_seconds,
+        lick_pad_frames=lick_pad_frames,
+        fs=fs,
+    )
+
+    if per_trial.empty:
+        print(f"{session.mouse_name} {session.date}: no imaged trials with an ITI")
+        return per_trial
+
+    total_iti = per_trial["iti_frames"].sum()
+    scored = per_trial["scored_frames"].sum()
+    still = per_trial["still_frames"].sum()
+    retained = per_trial["retained_frames"].sum()
+
+    minutes = lambda frames: frames / fs / 60
+    print(
+        f"{session.mouse_name} {session.date} ({session.session_type}): "
+        f"{len(per_trial)} imaged trials\n"
+        f"  ITI total            {minutes(total_iti):6.1f} min\n"
+        f"  after start cut      {minutes(scored):6.1f} min  "
+        f"(-{minutes(total_iti - scored):.1f} min to calcium bleed and reward)\n"
+        f"  still                {minutes(still):6.1f} min  "
+        f"(-{minutes(scored - still):.1f} min to movement)\n"
+        f"  retained             {minutes(retained):6.1f} min  "
+        f"(-{minutes(still - retained):.1f} min to licking)\n"
+        f"  = {retained / total_iti:.1%} of the ITI, median "
+        f"{per_trial['retained_seconds'].median():.1f} s per trial of "
+        f"{per_trial['iti_frames'].median() / fs:.0f} s"
+    )
+    return per_trial
 
 
 def parse_session_number(session_number: str) -> List[str]:
@@ -889,6 +1113,38 @@ def session_counter() -> None:
                 wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
                 freeze_counts[genotype][session_type] += 1
 
+    1 / 0
+
+
+def iti_still_frames_all_mice() -> None:
+    cache_files = list(CACHE_PATH.glob("*.json"))
+
+    summary = {}
+
+    for file in cache_files:
+        session = Cached2pSession.model_validate_json(file.read_text())
+
+        if "trigger_panda_ITI" not in set(
+            [state.name for state in session.trials[0].states_info]
+        ):
+            continue
+        print(f"Processing {session.mouse_name} {session.date}")
+
+        per_trial = report_iti_still_frames(session)
+        genotype = get_genotype(session.mouse_name)
+        if genotype not in summary:
+            summary[genotype] = []
+        summary[genotype].append(per_trial)
+
+    collapsed = {k: [] for k in summary.keys()}
+    for genotype, per_trial_list in summary.items():
+        collapsed[genotype].extend(
+            [
+                per_trial["retained_seconds"].median()
+                for per_trial in per_trial_list
+                if "retained_seconds" in per_trial
+            ]
+        )
     1 / 0
 
 
