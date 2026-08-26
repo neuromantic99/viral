@@ -35,12 +35,14 @@ from viral.imaging_utils import (
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 
 from viral.utils import (
+    SessionType,
     compute_linear_slope,
     cross_correlation_pandas,
     degrees_to_cm,
     find_n_consecutive_trues_extent,
     get_genotype,
     get_movement_bool,
+    get_session_type,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
     remove_diagonal,
@@ -149,7 +151,7 @@ def get_place_cells(
     sigma_cm = 7.5  # Desired smoothing in cm
     sigma_bins = sigma_cm / config.bin_size  # Convert to bin units
 
-    n_shuffles = 500
+    n_shuffles = 2000
     if n_shuffles < 2000:
         warnings.warn(
             "n_shuffles is less than 2000. This may not be enough to get a good estimate of the place cell distribution."
@@ -602,7 +604,6 @@ def batch_runner() -> None:
     use_cache = False
     use_local_dff = False
 
-
     cache_files = sorted(
         cache_files, key=lambda x: (x.stem.split("_")[0], x.stem.split("_")[1])
     )
@@ -676,67 +677,77 @@ def offline_correlation_across_sessions() -> None:
     x_post_all = []
     y_post_all = []
 
-    for mouse in mice:
+    metadata_dict = {mouse: gsheet2df(SPREADSHEET_ID, mouse, 1) for mouse in mice}
+    result = {}
+
+    for cache_file in cache_files:
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
 
         if mouse == "JB031":
             continue
 
         genotype = get_genotype(mouse)
-        if genotype not in {"WT", "Neuronal-BACE1-KO"}:
+        if genotype not in {"WT"}:
             continue
         print(f"Processing mouse {mouse} with genotype {genotype}")
-        metadata = gsheet2df(SPREADSHEET_ID, mouse, 1)
-        session_types = metadata["Type"].values
-        learning_days = [
-            (idx, session_type)
-            for idx, session_type in enumerate(session_types)
-            if session_type.lower().startswith("learning day")
-        ]
-        expert_day = learning_days[-1]
-        print(learning_days, expert_day)
-        expert_date = metadata["Date"].values[expert_day[0]]
+        metadata = metadata_dict[mouse]
+        session_metadata = metadata[metadata["Date"] == date]
+        if get_session_type(session_metadata["Type"].values[0]) not in {
+            # SessionType.LEARNING.value,
+            SessionType.UNSUPERVISED.value,
+            # SessionType.REVERSAl.value,
+        }:
+            print(
+                f"Skipping {mouse} {date} because session type is not learning, unsupervised, or reversal"
+            )
+            continue
 
         try:
             with open(
-                SERVER_PATH
-                / "viral_caches"
-                / "cached_2p"
-                / f"{mouse}_{expert_date}.json",
+                SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json",
                 "r",
             ) as f:
                 session = Cached2pSession.model_validate_json(f.read())
         except:
-            print(f"Skipping {mouse} {expert_date} because session file not found")
+            print(f"Skipping {mouse} {date} because session file not found")
             continue
 
         if session.wheel_freeze is None:
-            print(f"Skipping {mouse} {expert_date} because wheel_freeze is None")
+            print(f"Skipping {mouse} {date} because wheel_freeze is None")
             continue
 
-        if (LOCAL_DFF_PATH / f"{mouse}_{expert_date}_dff.npy").exists():
-            dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_dff.npy")
-            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_spks.npy")
-            denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_denoised.npy")
+        if (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
+            dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy")
+            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy")
+            denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy")
         else:
-            dff, spks, denoised = load_imaging_data(mouse, expert_date)
-            np.save(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_dff.npy", dff)
-            np.save(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_spks.npy", spks)
-            np.save(LOCAL_DFF_PATH / f"{mouse}_{expert_date}_denoised.npy", denoised)
+            dff, spks, denoised = load_imaging_data(mouse, date)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy", dff)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy", spks)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy", denoised)
 
-        (
-            x_pre,
-            y_pre,
-            x_post,
-            y_post,
-        ) = grosmark_place_field(
-            session,
-            spks if data_type == "spks" else denoised,
-            rewarded=True,
-            config=grosmark_config,
-            cache_file_additional_info=(data_type if data_type == "denoised" else None),
-            use_cache=True,
-            plot=False,
-        )
+        try:
+            (
+                x_pre,
+                y_pre,
+                x_post,
+                y_post,
+            ) = grosmark_place_field(
+                session,
+                spks if data_type == "spks" else denoised,
+                rewarded=None,
+                config=grosmark_config,
+                cache_file_additional_info=(
+                    data_type if data_type == "denoised" else None
+                ),
+                use_cache=True,
+                plot=False,
+            )
+        except Exception as e:
+            print(f"Error processing {mouse} {date}: {e}")
+            continue
 
         x_pre_all.append(x_pre)
         y_pre_all.append(y_pre)
@@ -751,11 +762,14 @@ def offline_correlation_across_sessions() -> None:
 
 
 if __name__ == "__main__":
-    offline_correlation_across_sessions()
+    # offline_correlation_across_sessions()
     x_pre_all = np.load("x_pre_all.npy", allow_pickle=True)
     y_pre_all = np.load("y_pre_all.npy", allow_pickle=True)
     x_post_all = np.load("x_post_all.npy", allow_pickle=True)
     y_post_all = np.load("y_post_all.npy", allow_pickle=True)
+
+    # y_pre_all = zscore(np.array(y_pre_all), axis=1, nan_policy="omit")
+    # y_post_all = zscore(np.array(y_post_all), axis=1, nan_policy="omit")
 
     shaded_line_plot(y_pre_all, np.arange(120), "red", "pre")
     shaded_line_plot(y_post_all, np.arange(120), "green", "post")
