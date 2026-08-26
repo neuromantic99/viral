@@ -225,6 +225,7 @@ class ReactivationSummary:
     event_rate_hz: np.ndarray  # (n_components,) events per second of immobility
     mean_peak_z: np.ndarray  # (n_components,) mean peak z per event, NaN if no events
     n_events: np.ndarray  # (n_components,)
+    n_events_rejected: np.ndarray  # (n_components,) excursions failing the cell count
     immobility_seconds: float
 
 
