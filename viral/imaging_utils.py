@@ -12,6 +12,7 @@ from viral.utils import (
     degrees_to_cm,
     get_movement_bool,
     get_wheel_circumference_from_rig,
+    read_npy_shape,
     has_n_consecutive_trues,
     threshold_detect,
 )
@@ -61,6 +62,20 @@ def load_imaging_data(
     return dff, spks, denoised
 
 
+def get_session_n_frames(mouse_name: str, date: str) -> int:
+    """Number of imaging frames in a session, read from a .npy header.
+
+    Avoids pulling a multi-gigabyte spike matrix off the server just to learn its
+    length. Prefers oasis_spikes.npy and falls back to F.npy, which exists even before
+    the deconvolution has been run; both have one column per frame.
+    """
+    s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
+    for name in ("oasis_spikes.npy", "F.npy"):
+        if (s2p_path / name).exists():
+            return int(read_npy_shape(s2p_path / name)[1])
+    raise FileNotFoundError(f"No oasis_spikes.npy or F.npy under {s2p_path}")
+
+
 def get_ITI_start_frame(trial: TrialInfo) -> int:
     for state in trial.states_info:
         if state.name in {"ITI", "trigger_ITI"}:
@@ -75,9 +90,9 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
     two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 120 minutes.
     """
-    if 30 < len(frame_clock) / 1000 / 60 < 120:
+    if 30 < len(frame_clock) / 1000 / 60 < 130:
         return 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 120:
+    elif 30 < len(frame_clock) / 10000 / 60 < 130:
         return 10000
     raise ValueError("Could not determine sampling rate")
 
@@ -189,12 +204,18 @@ def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
 
 
 def get_resting_position_and_frames(
-    trial: TrialInfo, wheel_circumference: float
+    trial: TrialInfo, wheel_circumference: float, speed_threshold: float = 3
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
     smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
     Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
-    for at least 3 consecutive seconds."""
+    for at least 3 consecutive seconds.
+
+    speed_threshold is in cm / s and defaults to Grosmark's 3. It was previously
+    hardcoded to 1, which is stricter than the quoted definition and left the 1-5 cm/s
+    band belonging to neither this state nor the running state in
+    get_online_position_and_frames. If time spent shuffling slowly differs between
+    groups, that gap makes the two states unmatched between them."""
 
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference
@@ -211,7 +232,6 @@ def get_resting_position_and_frames(
     assert len(position) == len(frame_position)
 
     speed = compute_speed_grosmark(position)
-    speed_threshold = 1
     idx_keep = below_threshold_for_n_consecutive_samples(
         speed, threshold=speed_threshold, n_samples=3 * 30
     )
@@ -529,6 +549,7 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
         ("JB011", "2024-10-25"),
         ("JB031", "2025-03-10"),
         ("JB034", "2025-07-04"),
+        ("JB030", "2025-03-11"),
     ]
 
 
