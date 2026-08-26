@@ -3,7 +3,7 @@ from typing import Dict
 SESSIONS_KEEP: Dict[str, Dict[str, str | None]] = {
     # Imaging in unsupervised of poor quality, don't analyse
     "JB011": {
-        # "unsupervised": "2024-10-22",
+        "unsupervised": None,
         "learning": "2024-10-25",
         "learned": "2024-10-30",
     },

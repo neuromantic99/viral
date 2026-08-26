@@ -42,7 +42,9 @@ from viral.models import Cached2pSession, SessionImagingInfo, TrialInfo, WheelFr
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
+    SessionType,
     find_chunk,
+    get_session_type,
     get_tiff_paths_in_directory,
     is_ordered_subset,
     time_list_to_datetime,
@@ -349,6 +351,7 @@ def get_wheel_freeze(
         recorded_movement_during_freezes=recorded_movement_during_freezes,
     )
     if session_sync.offset_after_pre_epoch > 0:
+        print("Using offset after pre-epoch")
         return WheelFreeze(
             pre_training_start_frame=0,
             pre_training_end_frame=session_sync.offset_after_pre_epoch,
@@ -391,7 +394,7 @@ def add_imaging_info_to_trials(
             is_freeze_session=is_freeze_session,
         )
 
-    for trial in trials:
+    for idx, trial in enumerate(trials):
         check_timestamps(
             epochs=session_sync.epochs,
             trial=trial,
@@ -422,7 +425,7 @@ def get_session_sync(
     tiff_paths = sorted(get_tiff_paths_in_directory(tiff_directory))
 
     stack_lengths_tiffs, epochs, all_tiff_timestamps = get_tiff_metadata(
-        tiff_paths=tiff_paths
+        tiff_paths=tiff_paths, use_cache=True
     )
     print("Got tiff metadata")
 
@@ -440,6 +443,7 @@ def get_session_sync(
 
     print(f"Sampling rate: {sampling_rate}")
 
+    print("Extracting TTL chunks from behaviour")
     behaviour_times, behaviour_chunk_lens = extract_TTL_chunks(
         behaviour_clock, sampling_rate
     )
@@ -452,6 +456,7 @@ def get_session_sync(
     check, start = is_ordered_subset(num_spacers_per_trial, behaviour_chunk_lens)
     assert check, "Spacers recorded in txt file do not match sync"
 
+    print("Extracting TTL chunks from frame clock")
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
     correction = apply_session_correction(
@@ -476,6 +481,7 @@ def get_session_sync(
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
+    print("Getting valid frame times")
     valid_frame_times = get_valid_frame_times(
         stack_lengths_tiffs=stack_lengths_tiffs,
         frame_times_daq=frame_times_daq,
@@ -490,6 +496,7 @@ def get_session_sync(
             valid_frame_times, np.ones(shape=sum([14200, 13000]))
         )
 
+    print("Checking tiff timestamps against suite2p output")
     check_against_suite2p_output(mouse_name, date, valid_frame_times)
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
@@ -601,15 +608,14 @@ def get_tiff_metadata(
         all_tiff_timestamps.extend(tiff_timestamps)
         check_no_dropped_frames(tiff_timestamps)
 
-    if use_cache:
-        for variable, name in zip(
-            [stack_lengths, all_tiff_timestamps, epochs],
-            ["stack_lengths", "all_tiff_timestamps", "epochs"],
-        ):
-            np.save(
-                TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
-                variable,
-            )
+    for variable, name in zip(
+        [stack_lengths, all_tiff_timestamps, epochs],
+        ["stack_lengths", "all_tiff_timestamps", "epochs"],
+    ):
+        np.save(
+            TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
+            variable,
+        )
 
     return stack_lengths, epochs, all_tiff_timestamps
 
@@ -694,7 +700,7 @@ def check_timestamps(
         # Allow for some drift up to 20 ms at the start and 50ms at the end
         # The clocks do drift slightly but if we're within 50ms at the end
         # We have almost definitely asigned to the correct frames
-        increase_offset_allowance_time = 45
+        increase_offset_allowance_time = 30
         if frame / 60 / 30 < increase_offset_allowance_time:
             assert abs(offset) <= 0.02, "Tiff timestamp does not match daq timestamp"
         else:
@@ -731,6 +737,7 @@ def process_session(
         imaging_crashed=imaging_crashed,
     )
 
+    print("Got session sync")
     recorded_movement_during_freezes = "Session Number pre-freeze" in row
 
     manual = manual_wheel_freezes(mouse_name, date, session_sync)
@@ -868,54 +875,68 @@ def check_against_suite2p_output(
     assert len(valid_frame_times) == f.shape[1]
 
 
+ALL_MICE = [
+    # "JB011",
+    # "JB012",
+    # "JB013",
+    # "JB014",
+    # "JB015",
+    # "JB016",
+    # "JB017",
+    # "JB018",
+    # "JB019",
+    # "JB020",
+    # "JB021",
+    # "JB022",
+    # "JB023",
+    # "JB024",
+    # "JB025",
+    # "JB026",
+    # "JB027",
+    "JB030",
+    "JB031",
+    "JB032",
+    "JB033",
+    "JB034",
+    "JB035",
+    "JB036",
+    "J030",
+    "J031",
+    "J032",
+    "J035",
+    "J034",
+    "J036",
+    "J037",
+    "J038",
+]
+
+
 def main() -> None:
     redo = False
+    # for mouse_name in ["JB030"]:
     # Toggle whether the try catch throws or not without commenting it
-    debug = False
-    for mouse_name in {
-        "JB011",
-        "JB012",
-        "JB013",
-        "JB014",
-        "JB015",
-        "JB016",
-        "JB017",
-        "JB018",
-        "JB019",
-        "JB020",
-        "JB021",
-        "JB022",
-        "JB023",
-        "JB024",
-        "JB025",
-        "JB026",
-        "JB027",
-        "JB030",
-        "JB031",
-        "JB032",
-        "JB033",
-        "JB034",
-        "JB035",
-        "JB036",
-        "J030",
-        "J031",
-        "J032",
-        "J035",
-        "J034",
-        "J036",
-        "J037",
-        "J038",
-    }:
+    debug = True
+
+    for mouse_name in ALL_MICE:
+        #######3333333###33333################## TAKE ME OUT ###################################################
+        # if mouse_name == "JB033":
+        #     continue
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
                 print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
+                if "Analyse" in row and row["Analyse"] == "FALSE":
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} as Analyse is FALSE"
+                    )
+                    continue
+
                 try:
                     wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
                 except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print(f"No column 'Wheel blocked?' Error is: {e}")
                     print("Wheel blocked set to None")
                     wheel_blocked = None
 

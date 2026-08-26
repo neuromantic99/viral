@@ -492,27 +492,28 @@ def jb032_2025_04_10(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-@register_correction("JB033", "2025-03-20")
-def jb033_2025_03_20(c: SessionCorrection) -> SessionCorrection:
-    # stack_lengths_tiffs
-    # array([27000, 12249, 35828, 81547, 27000])
-    # chunk_lengths_daq
-    # array([  157, 27000, 12251, 35830, 81549,    44, 27000])
-    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0, 5])
-    c.frame_times_daq = np.concatenate(
-        [
-            c.frame_times_daq[157 : sum([157, 27000, 12251, 35830, 81549])],
-            c.frame_times_daq[sum([157, 27000, 12251, 35830, 81549, 44]) :],
-        ]
-    )
-    return SessionCorrection(
-        epochs=c.epochs,
-        all_tiff_timestamps=c.all_tiff_timestamps,
-        stack_lengths_tiffs=c.stack_lengths_tiffs,
-        chunk_lengths_daq=c.chunk_lengths_daq,
-        frame_times_daq=c.frame_times_daq,
-        offset_after_pre_epoch=0,
-    )
+# @register_correction("JB033", "2025-03-20")
+# def jb033_2025_03_20(c: SessionCorrection) -> SessionCorrection:
+#     pass
+# stack_lengths_tiffs
+# array([27000, 12249, 35828, 81547, 27000])
+# chunk_lengths_daq
+# array([  157, 27000, 12251, 35830, 81549,    44, 27000])
+# c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0, 5])
+# c.frame_times_daq = np.concatenate(
+#     [
+#         c.frame_times_daq[157 : sum([157, 27000, 12251, 35830, 81549])],
+#         c.frame_times_daq[sum([157, 27000, 12251, 35830, 81549, 44]) :],
+#     ]
+# )
+# return SessionCorrection(
+#     epochs=c.epochs,
+#     all_tiff_timestamps=c.all_tiff_timestamps,
+#     stack_lengths_tiffs=c.stack_lengths_tiffs,
+#     chunk_lengths_daq=c.chunk_lengths_daq,
+#     frame_times_daq=c.frame_times_daq,
+#     offset_after_pre_epoch=0,
+# )
 
 
 @register_correction("JB032", "2025-04-04")
