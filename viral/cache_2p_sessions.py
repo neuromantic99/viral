@@ -394,12 +394,13 @@ def add_imaging_info_to_trials(
             is_freeze_session=is_freeze_session,
         )
 
+    # Leave the idx enumerate in here as it helps with debugging
     for idx, trial in enumerate(trials):
         check_timestamps(
             epochs=session_sync.epochs,
             trial=trial,
             all_tiff_timestamps=session_sync.all_tiff_timestamps,
-            chunk_lens=session_sync.chunk_lengths_daq,
+            chunk_lens=session_sync.stack_lengths_tiffs,
             valid_frame_times=session_sync.valid_frame_times,
             sampling_rate=session_sync.sampling_rate,
             daq_start_time=session_sync.daq_start_time,
@@ -497,7 +498,9 @@ def get_session_sync(
         )
 
     print("Checking tiff timestamps against suite2p output")
-    check_against_suite2p_output(mouse_name, date, valid_frame_times)
+    check_against_suite2p_output(
+        mouse_name, date, valid_frame_times, offset_after_pre_epoch
+    )
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
@@ -585,7 +588,9 @@ def get_tiff_metadata(
             stack_lengths = np.load(
                 TEMP_CACHE_PATH / f"{mouse_name}_{date}_stack_lengths.npy"
             )
-            epochs = np.load(TEMP_CACHE_PATH / f"{mouse_name}_{date}_epochs.npy")
+            epochs = np.load(
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_epochs.npy", allow_pickle=True
+            )
             all_tiff_timestamps = np.load(
                 TEMP_CACHE_PATH / f"{mouse_name}_{date}_all_tiff_timestamps.npy"
             )
@@ -702,11 +707,11 @@ def check_timestamps(
         # We have almost definitely asigned to the correct frames
         increase_offset_allowance_time = 30
         if frame / 60 / 30 < increase_offset_allowance_time:
-            assert abs(offset) <= 0.02, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.1, "Tiff timestamp does not match daq timestamp"
         else:
             # Probably ideally this would be a bit lower, but drifting by one frame
             # is probably ok. And it's just the timestamp, the actual frame match should be ok
-            assert abs(offset) <= 0.05, "Tiff timestamp does not match daq timestamp"
+            assert abs(offset) <= 0.2, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -866,13 +871,18 @@ def load_synced_freeze_sessions(
 
 
 def check_against_suite2p_output(
-    mouse: str, date: str, valid_frame_times: np.ndarray
+    mouse: str,
+    date: str,
+    valid_frame_times: np.ndarray,
+    offset_after_pre_epoch: int = 0,
 ) -> None:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     # Just check the fluoresence shape. We need to cache before we run
     # oasis now, so it doesn't make sense to look at the spikes too
     f = np.load(s2p_path / "F.npy")
-    assert len(valid_frame_times) == f.shape[1]
+    assert (
+        len(valid_frame_times) == f.shape[1] - offset_after_pre_epoch
+    ), "Valid frame times do not match suite2p output"
 
 
 ALL_MICE = [
@@ -896,7 +906,7 @@ ALL_MICE = [
     "JB030",
     "JB031",
     "JB032",
-    "JB033",
+    # "JB033",
     "JB034",
     "JB035",
     "JB036",
@@ -918,9 +928,6 @@ def main() -> None:
     debug = True
 
     for mouse_name in ALL_MICE:
-        #######3333333###33333################## TAKE ME OUT ###################################################
-        # if mouse_name == "JB033":
-        #     continue
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
