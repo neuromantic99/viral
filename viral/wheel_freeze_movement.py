@@ -59,15 +59,23 @@ def get_wheel_freeze_movement(
     # Try the camera
     pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
     if pre_freeze_path is not None and post_freeze_path is not None:
-        movement_pre, movement_post = get_wheel_freeze_movement_camera(
-            wheel_freeze=wheel_freeze,
-            pre_freeze_path=pre_freeze_path,
-            post_freeze_path=post_freeze_path,
-            mouse_name=mouse_name,
-            date=date,
-            save_mp4s=save_mp4s,
-        )
-        return movement_pre, movement_post, "camera"
+        if (
+            pre_freeze_path.stat().st_size > 1e6
+            and post_freeze_path.stat().st_size > 1e6
+        ):
+            movement_pre, movement_post = get_wheel_freeze_movement_camera(
+                wheel_freeze=wheel_freeze,
+                pre_freeze_path=pre_freeze_path,
+                post_freeze_path=post_freeze_path,
+                mouse_name=mouse_name,
+                date=date,
+                save_mp4s=save_mp4s,
+            )
+            return movement_pre, movement_post, "camera"
+        else:
+            print(
+                f"Camera tiff files for {mouse_name} on {date} are too small, due to weird saving issue, falling back to encoder or suite2p"
+            )
 
     # Try the rotary encoder
     # TODO: one might be present and the other not, in which case we should still return the one that is present
