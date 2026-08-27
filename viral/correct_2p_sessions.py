@@ -327,8 +327,9 @@ def jb031_2025_04_07(c: SessionCorrection) -> SessionCorrection:
     c.epochs = np.delete(c.epochs, [0], axis=0)
     c.frame_times_daq = np.concatenate(
         [
-            c.frame_times_daq[sum([508, 3127]) : sum([508, 3127, 321, 164381])],
-            c.frame_times_daq[sum([508, 3127, 321, 164381, 324, 424, 1299]) :],
+            c.frame_times_daq[0:508],
+            c.frame_times_daq[508 + 3127 : sum([508, 3127, 321, 164381])],
+            c.frame_times_daq[-27000:],
         ]
     )
     return SessionCorrection(
@@ -492,28 +493,27 @@ def jb032_2025_04_10(c: SessionCorrection) -> SessionCorrection:
     )
 
 
-# @register_correction("JB033", "2025-03-20")
-# def jb033_2025_03_20(c: SessionCorrection) -> SessionCorrection:
-#     pass
-# stack_lengths_tiffs
-# array([27000, 12249, 35828, 81547, 27000])
-# chunk_lengths_daq
-# array([  157, 27000, 12251, 35830, 81549,    44, 27000])
-# c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0, 5])
-# c.frame_times_daq = np.concatenate(
-#     [
-#         c.frame_times_daq[157 : sum([157, 27000, 12251, 35830, 81549])],
-#         c.frame_times_daq[sum([157, 27000, 12251, 35830, 81549, 44]) :],
-#     ]
-# )
-# return SessionCorrection(
-#     epochs=c.epochs,
-#     all_tiff_timestamps=c.all_tiff_timestamps,
-#     stack_lengths_tiffs=c.stack_lengths_tiffs,
-#     chunk_lengths_daq=c.chunk_lengths_daq,
-#     frame_times_daq=c.frame_times_daq,
-#     offset_after_pre_epoch=0,
-# )
+@register_correction("JB033", "2025-03-20")
+def jb033_2025_03_20(c: SessionCorrection) -> SessionCorrection:
+    """
+    stack_lengths_tiffs
+    array([ 28014, 122997,    105,  29148])
+    chunk_lengths_daq
+    array([   466,  28016, 122999,    107,  29151])
+
+    Just need to remove the first one
+    """
+
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0])
+    c.frame_times_daq = c.frame_times_daq[466:]
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
 
 
 @register_correction("JB032", "2025-04-04")
