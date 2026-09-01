@@ -952,22 +952,35 @@ def get_movement_bool(wheel_freeze: WheelFreeze) -> tuple[np.ndarray, np.ndarray
     """Returns boolean arrays indicating whether the mouse was moving during the pre and post epochs."""
     movement_pre = np.array(wheel_freeze.movement_pre_freeze)
     movement_post = np.array(wheel_freeze.movement_post_freeze)
-    acceptable = {27000, 26999, 26998}
-    assert (
-        movement_pre.shape[0] in acceptable
-    ), f"Unexpected pre-freeze movement length: {movement_pre.shape[0]}"
-    assert (
-        movement_post.shape[0] in acceptable
-    ), f"Unexpected post-freeze movement length: {movement_post.shape[0]}"
+
+    flu_shape_pre_freeze = (
+        wheel_freeze.pre_training_end_frame - wheel_freeze.pre_training_start_frame
+    )
+    flu_shape_post_freeze = (
+        wheel_freeze.post_training_end_frame - wheel_freeze.post_training_start_frame
+    )
+
+    # Movements come from diffs (sometimes of diffs themselves), so can be a couple frames off.
+    assert movement_pre.shape[0] in {
+        flu_shape_pre_freeze,
+        flu_shape_pre_freeze - 1,
+        flu_shape_pre_freeze - 2,
+    }, f"Unexpected pre-freeze movement length: {movement_pre.shape[0]}"
+    assert movement_post.shape[0] in {
+        flu_shape_post_freeze,
+        flu_shape_post_freeze - 1,
+        flu_shape_post_freeze - 2,
+    }, f"Unexpected post-free movement length: {movement_post.shape[0]}"
+
     # If required, extend out to 27000, repeating the last value
     movement_pre = np.pad(
         movement_pre,
-        (0, 27000 - movement_pre.shape[0]),
+        (0, flu_shape_pre_freeze - movement_pre.shape[0]),
         mode="edge",
     )
     movement_post = np.pad(
         movement_post,
-        (0, 27000 - movement_post.shape[0]),
+        (0, flu_shape_post_freeze - movement_post.shape[0]),
         mode="edge",
     )
 
