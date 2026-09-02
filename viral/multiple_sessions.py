@@ -201,6 +201,8 @@ def get_iti_still_frames(
                 "still_frames": still_frames.size,
                 "retained_frames": keep_frames.size,
                 "retained_seconds": keep_frames.size / fs,
+                # kept so the retained frames can be split by the trial they follow
+                "frames": keep_frames,
             }
         )
 
@@ -234,6 +236,36 @@ def _lick_frames(trial: TrialInfo, pad: int) -> np.ndarray:
         frames.extend(range(int(onset) - pad, int(offset) + pad + 1))
 
     return np.array(sorted(set(frames)), dtype=int)
+
+
+def iti_masks_by_trial_type(
+    per_trial: pd.DataFrame, n_frames: int
+) -> Dict[str, np.ndarray]:
+    """Split retained ITI frames by whether the trial they FOLLOW was rewarded.
+
+    This is the frame-split design, and it exists because the template split does not
+    survive contact with the data: each split template is built from half the running
+    bouts, so it frequently yields zero significant components and the session drops out
+    of the comparison entirely.
+
+    Splitting the frames instead costs nothing - the ensembles are still built from all
+    the running data - and it asks a question generic online-offline coupling cannot
+    answer. Coupling is a static property of the cells and is identical in both frame
+    subsets, so it cannot produce a difference between them. A difference means the
+    offline period is expressing something about the trial that just happened.
+
+    Note what each contrast buys. With the "all" template this is a main effect: is
+    reactivation stronger after reward? (Real and published - Singer and Frank - but
+    explicable by arousal.) The content-specificity claim needs the interaction, which
+    needs the split templates too, so both are emitted where both exist.
+    """
+    masks = {}
+    for label, is_rewarded in (("rewarded", True), ("unrewarded", False)):
+        mask = np.zeros(n_frames, dtype=bool)
+        for frames in per_trial.loc[per_trial["rewarded"] == is_rewarded, "frames"]:
+            mask[frames] = True
+        masks[label] = mask
+    return masks
 
 
 def report_iti_still_frames(

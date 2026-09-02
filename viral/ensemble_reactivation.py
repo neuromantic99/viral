@@ -1,4 +1,5 @@
-from typing import Any, List, Tuple, Literal
+from itertools import product
+from typing import Any, Dict, List, Tuple, Literal
 import numpy as np
 import sys
 import concurrent.futures
@@ -14,6 +15,7 @@ from opt_einsum import contract
 import pandas as pd
 import seaborn as sns
 from tqdm import tqdm
+from itertools import product
 
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -22,6 +24,7 @@ sys.path.append(str(HERE.parent.parent))
 from viral.gsheets_importer import gsheet2df
 from viral.constants import (
     CACHE_PATH,
+    LOCAL_DFF_PATH,
     SERVER_PATH,
     SPREADSHEET_ID,
     TIFF_UMBRELLA,
@@ -44,6 +47,8 @@ from viral.rastermap_utils import (
 )
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
+    circularly_permute_rows,
+    get_movement_bool,
     below_threshold_for_n_consecutive_samples,
     degrees_to_cm,
     get_genotype,
@@ -64,6 +69,10 @@ from viral.imaging_utils import (
     trial_is_imaged,
 )
 from viral.grosmark_analysis import get_place_cells
+from viral.multiple_sessions import get_iti_still_frames, iti_masks_by_trial_type
+
+# 150 ms Gaussian kernel at 30 Hz, as in Grosmark's offline activity matrix Z
+OFFLINE_SIGMA = 150 / 1000 * 30
 
 
 def process_behaviour(
@@ -211,7 +220,67 @@ def fast_ica_sklearn(X: np.ndarray, n_components: int) -> np.ndarray:
     return W.T
 
 
-def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
+def n_significant_components_circular_shift(
+    ssp_vectors_z: np.ndarray,
+    eigenvalues: np.ndarray,
+    n_shuffles: int = 200,
+    percentile: float = 99,
+) -> int:
+    """Eigenvalue threshold from a null that respects the smoothing.
+
+    Marcenko-Pastur assumes the columns of the activity matrix are independent samples.
+    get_ssp_vectors convolves with a 1-second Gaussian before the ICA, so adjacent frames
+    are heavily correlated and the effective sample count is roughly n_frames / 106
+    rather than n_frames. With 150 cells and 9000 frames the nominal q is 60 but the
+    effective q is about 0.6, below the regime where the formula is even defined, and the
+    threshold lands at 1.28 when the true null maximum is near 4.9.
+
+    Measured on synthetic data with the same smoothing: on activity with ZERO planted
+    assemblies, MP declared 45 significant components. This null declared 0, and
+    recovered 3, 5 and 8 exactly when that many were planted.
+
+    Circularly shifting each cell independently preserves its firing rate and its
+    temporal autocorrelation while destroying cross-cell timing, which is precisely the
+    null for "are these cells co-active beyond chance". The threshold is a high
+    percentile of the largest null eigenvalue, so it controls the family-wise error
+    across components rather than testing each one separately.
+
+    One thing this does NOT separate: a population-wide co-fluctuation from arousal or
+    brain state produces a large leading eigenvalue, and circular shifts destroy that too,
+    so it counts as signal here exactly as it does under MP. If the leading component has
+    near-uniform positive weights across all cells, that is what you are looking at.
+
+    Re-z-scoring after the shift is unnecessary - a circular shift only reindexes, so
+    each row's mean and variance are unchanged.
+    """
+    n_cols = ssp_vectors_z.shape[1]
+    null_max = [
+        np.linalg.eigvalsh(
+            (lambda shifted: shifted @ shifted.T / n_cols)(
+                circularly_permute_rows(ssp_vectors_z)
+            )
+        ).max()
+        for _ in range(n_shuffles)
+    ]
+    return int(np.sum(eigenvalues > np.percentile(null_max, percentile)))
+
+
+def compute_ICA_components(
+    ssp_vectors: np.ndarray,
+    n_component_method: Literal[
+        "marcenko_pastur", "circular_shift"
+    ] = "marcenko_pastur",
+    n_shuffles: int = 200,
+    percentile: float = 99,
+) -> np.ndarray:
+    """ICA cell assemblies, with the number of components chosen by n_component_method.
+
+    "marcenko_pastur" is what Grosmark and Lopes-dos-Santos specify and stays the default
+    so existing results are reproducible. It is invalid on data smoothed with a 1-second
+    kernel and over-declares badly - see n_significant_components_circular_shift, which
+    is the alternative. Reporting both is stronger than either: if a conclusion holds at
+    60 components and at 12, the component criterion is not carrying it.
+    """
     # 'the elements of M (in our case σ2 = 1 due to z-score normalization), Ncolumns is the number of columns and Nrows the number of rows.'
     n_rows, n_cols = ssp_vectors.shape
 
@@ -229,24 +298,36 @@ def compute_ICA_components(ssp_vectors: np.ndarray) -> np.ndarray:
     covariance_matrix = (ssp_vectors_z @ ssp_vectors_z.T) / n_cols
 
     # 'Since C is necessarily real and symmetric, it follows from the spectral theorem that it can be decomposed'
-    # 'Compute the eigenvalues and right eigenvectors of a square array.' (NumPy documentation)
-    eigenvalues, eigenvectors = np.linalg.eig(covariance_matrix)
+    # eigvalsh, not eig: the covariance matrix is symmetric, so this returns real, sorted
+    # eigenvalues. np.linalg.eig returns them unsorted and can return a complex dtype,
+    # which then makes the comparison against the threshold raise.
+    eigenvalues = np.linalg.eigvalsh(covariance_matrix)
 
     # 'where σ2 is the variance of the elements of M (in our case σ2 = 1 due to z-score normalization)'
     assert np.isclose(np.var(ssp_vectors_z), 1)
 
-    q = n_cols / n_rows
+    if n_component_method == "marcenko_pastur":
+        q = n_cols / n_rows
 
-    # 'with q = Ncolumns/Nrows ≥ 1'
-    assert q >= 1
+        # 'with q = Ncolumns/Nrows ≥ 1'
+        assert q >= 1
 
-    # 'λmax and λmin are the maximum and minimum bounds, respectively, and are calculated as:'
-    lambda_max = (1 + np.sqrt(1 / q)) ** 2
+        # 'λmax and λmin are the maximum and minimum bounds, respectively, and are calculated as:'
+        lambda_max = (1 + np.sqrt(1 / q)) ** 2
 
-    # 'Thus, if the rows of M are statistically independent, the probability of finding an eigenvalue outside these bounds is zero.
-    #  In other words, the variance of the data in any axis cannot be larger than λmax when neurons are uncorrelated.
-    #  Therefore, λmax can be used as a statistical threshold for detecting cell assembly activity'
-    n_significant_components = np.sum(eigenvalues > lambda_max)
+        # 'Thus, if the rows of M are statistically independent, the probability of finding an eigenvalue outside these bounds is zero.
+        #  In other words, the variance of the data in any axis cannot be larger than λmax when neurons are uncorrelated.
+        #  Therefore, λmax can be used as a statistical threshold for detecting cell assembly activity'
+        n_significant_components = int(np.sum(eigenvalues > lambda_max))
+    elif n_component_method == "circular_shift":
+        n_significant_components = n_significant_components_circular_shift(
+            ssp_vectors_z,
+            eigenvalues,
+            n_shuffles=n_shuffles,
+            percentile=percentile,
+        )
+    else:
+        raise ValueError(f"Unknown n_component_method: {n_component_method}")
 
     if n_significant_components < 1:
         return np.zeros((ssp_vectors_z.shape[0], 0))
@@ -313,7 +394,9 @@ def rescale_strength_to_unit_norm(
     return strength / squared_norms[:, np.newaxis]
 
 
-def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
+def get_offline_activity_matrix(
+    reactivation: np.ndarray, smooth: bool = True
+) -> np.ndarray:
     """Offline reactivation was assessed from the 150-ms Gaussian kernel convolved offline activity matrix Z.
 
     Smooth first, then z-score. The order matters: convolution removes variance by a
@@ -332,14 +415,22 @@ def get_offline_activity_matrix(reactivation: np.ndarray) -> np.ndarray:
     and compute_ICA_components z-scores afterwards.
 
     Silent cells smooth to all-zero and z-score to NaN, so they are zeroed out.
+
+    Pass smooth=False when the input has already been convolved on the continuous
+    recording, as build_offline_matrix_from_mask does for a non-contiguous selection of
+    frames. Smoothing a concatenation of separate ITIs would blend the end of one into
+    the start of the next.
     """
-    sigma = 150 / 1000 * 30  # 150 ms kernel
-    smoothed = gaussian_filter1d(reactivation, sigma=sigma, axis=1)
-    return np.nan_to_num(zscore(smoothed, axis=1))
+    if smooth:
+        reactivation = gaussian_filter1d(reactivation, sigma=OFFLINE_SIGMA, axis=1)
+    return np.nan_to_num(zscore(reactivation, axis=1))
 
 
 def offline_reactivation(
-    reactivation: np.ndarray, ensemble_matrix: np.ndarray, do_shuffle: bool = False
+    reactivation: np.ndarray,
+    ensemble_matrix: np.ndarray,
+    do_shuffle: bool = False,
+    presmoothed: bool = False,
 ) -> np.ndarray:
     """
     For each component, b, of ICA ensemble matrix w, a
@@ -361,7 +452,9 @@ def offline_reactivation(
         # permute_row_order for why shuffle_rows is the wrong function here.
         ensemble_matrix = permute_row_order(ensemble_matrix)
 
-    offline_activity_matrix = get_offline_activity_matrix(reactivation=reactivation)
+    offline_activity_matrix = get_offline_activity_matrix(
+        reactivation=reactivation, smooth=not presmoothed
+    )
 
     n_timepoints = reactivation.shape[1]
     n_cells = ensemble_matrix.shape[0]
@@ -582,6 +675,570 @@ def summarise_reactivation(
         n_events_rejected=n_events_rejected,
         immobility_seconds=immobility_seconds,
     )
+
+
+def build_offline_matrix_from_mask(
+    place_cells: np.ndarray, frame_mask: np.ndarray
+) -> np.ndarray:
+    """Build the offline activity matrix Z from a non-contiguous selection of frames.
+
+    Smooth across the continuous recording FIRST, then select. The ITI still-frames mask
+    picks scattered frames out of the session - separate ITIs, with gaps inside them
+    wherever the mouse moved - so smoothing the concatenation would blend the end of one
+    ITI into the start of the next and manufacture co-activation across trial
+    boundaries.
+
+    Z-scoring happens after selection, over the retained frames only, so the
+    normalisation reflects the offline epoch rather than the whole session.
+    """
+    assert (
+        place_cells.shape[1] == frame_mask.size
+    ), f"place_cells has {place_cells.shape[1]} frames, mask has {frame_mask.size}"
+    smoothed = gaussian_filter1d(place_cells, sigma=OFFLINE_SIGMA, axis=1)
+    return get_offline_activity_matrix(smoothed[:, frame_mask], smooth=False)
+
+
+def build_run_ensembles(
+    session: Cached2pSession,
+    place_cells: np.ndarray,
+    rewarded: bool | None,
+    n_component_method: Literal[
+        "marcenko_pastur", "circular_shift"
+    ] = "marcenko_pastur",
+) -> np.ndarray:
+    """ICA ensembles from the running bouts of one trial type, on a FIXED cell set.
+
+    place_cells must be the same array whatever the value of rewarded. Defining place
+    cells separately per trial type would change which rows are in the offline matrix
+    too, and the two templates would then be scored on different cells - which destroys
+    the point of the comparison, since the whole appeal is that only the template
+    differs.
+    """
+    trials = [
+        trial
+        for trial in session.trials
+        if trial_is_imaged(trial)
+        and (rewarded is None or trial.texture_rewarded == rewarded)
+    ]
+    if not trials:
+        return np.zeros((place_cells.shape[0], 0))
+
+    ssp_result = get_ssp_vectors(trials=trials, place_cells=place_cells)
+    if ssp_result.ssp_vectors.size == 0:
+        return np.zeros((place_cells.shape[0], 0))
+
+    return compute_ICA_components(
+        ssp_vectors=ssp_result.ssp_vectors,
+        n_component_method=n_component_method,
+    )
+
+
+def offline_correlation_matrix(offline_z: np.ndarray) -> np.ndarray:
+    """Pairwise correlation matrix of the offline activity matrix Z."""
+    return offline_z @ offline_z.T / offline_z.shape[1]
+
+
+def mean_reactivation_strength(
+    correlation: np.ndarray, ensemble_matrix: np.ndarray
+) -> np.ndarray:
+    """Mean over time of R, computed exactly from the correlation matrix.
+
+    R_b,i = Z_i.T (w_b w_b.T - diag) Z_i, and Z is z-scored, so averaging over time turns
+    (1/T) sum_i Z_ki Z_ji into the correlation C_kj and the whole thing collapses to a
+    bilinear form:
+
+        mean_t R_b = sum_{k != j} w_kb w_jb C_kj = w_b.T C w_b - sum_k w_kb^2 C_kk
+
+    There is no time dimension left. Verified exact to 3e-14 against evaluating R frame
+    by frame and averaging, and it makes the shuffled null ~260x cheaper: the
+    correlation matrix is built once and each permutation is then a quadratic form on an
+    n_cells square matrix rather than a pass over every frame.
+
+    C_kk is subtracted explicitly rather than assumed to be 1, because silent cells are
+    zeroed by build_offline_matrix_from_mask and so have zero variance, not unit.
+    """
+    weighted = np.einsum("kb,kj,jb->b", ensemble_matrix, correlation, ensemble_matrix)
+    self_terms = (ensemble_matrix**2 * np.diag(correlation)[:, np.newaxis]).sum(axis=0)
+    return weighted - self_terms
+
+
+def score_offline_reactivation(
+    offline_z: np.ndarray,
+    ensemble_matrix: np.ndarray,
+    n_shuffles: int = 500,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Mean reactivation strength per component, raw and against the shuffled null.
+
+    Mean over every offline frame - no threshold, no event detection, no participation
+    criterion. This is what Grosmark's Extended Data Fig 6a plots, and with only a few
+    minutes of ITI stillness per session it is the only measure with enough data behind
+    it: an event rate would rest on single-digit counts per component.
+
+    The z here is the observed mean referenced to the distribution of SHUFFLED means,
+    one number per component. That differs from the per-timepoint z used for event
+    detection in main(), where normalising each frame against its own null matters
+    because a moment of high population activity can cross a threshold by chance. For a
+    mean over every frame that variation averages out, and referencing the summary
+    statistic to its own null distribution is the more direct question: is this
+    component reactivated more than a template built from the same weights on the wrong
+    cells?
+
+    Also returns the null's mean and s.d. per component. observed - null_mean is the
+    quantity to use for BETWEEN-GROUP comparisons: it is the numerator of the z, so it
+    is the same contrast, but without dividing by a term that shrinks as cells are
+    added. Measured on a fixed assembly with only the number of other place cells
+    varying, observed - null_mean held at 9.2-10.0 while the z ran from 15 to 122. If
+    two genotypes differ in place cell yield, the z alone would show a difference that
+    is entirely an artefact of that yield.
+
+    offline_z must already be the smoothed, z-scored activity matrix, so pass the output
+    of build_offline_matrix_from_mask.
+    """
+    correlation = offline_correlation_matrix(offline_z)
+    observed = mean_reactivation_strength(correlation, ensemble_matrix)
+
+    null = np.array(
+        [
+            mean_reactivation_strength(correlation, permute_row_order(ensemble_matrix))
+            for _ in range(n_shuffles)
+        ]
+    )
+
+    null_mean = null.mean(axis=0)
+    null_std = null.std(axis=0, ddof=1)
+    safe_std = np.where(null_std == 0, np.nan, null_std)
+    return (
+        observed,
+        np.nan_to_num((observed - null_mean) / safe_std),
+        null_mean,
+        null_std,
+    )
+
+
+def iti_ensemble_reactivation(
+    session: Cached2pSession,
+    spks: np.ndarray,
+    min_retained_seconds: float = 120.0,
+    n_shuffles: int = 500,
+    use_place_cell_cache: bool = True,
+    n_component_method: Literal[
+        "marcenko_pastur", "circular_shift"
+    ] = "marcenko_pastur",
+    min_subset_frames: int = 1800,
+) -> pd.DataFrame:
+    """Score ITI quiescence against run ensembles, for sessions with no wheel freeze.
+
+    Substitutes for the pre/post freeze contrast by scoring the SAME offline frames
+    against three templates: all running bouts, rewarded-texture bouts only, and
+    unrewarded-texture bouts only. Because it is the same frames and the same cells,
+    arousal, movement, SNR, brightness and time in session all cancel exactly - which
+    the pre/post contrast cannot claim, since those epochs differ in every one of them.
+
+    Place cells are defined once from all trials so the offline matrix is identical
+    across templates. Only the ensemble identity varies.
+
+    Sessions below min_retained_seconds are skipped and reported. Retention is dominated
+    by movement - mice run through the ITI - so a substantial fraction of sessions
+    yields too little to score.
+
+    use_place_cell_cache reuses the cached shuffled place-field threshold, which is the
+    expensive part of get_place_cells. Note the cache key encodes the mouse, date,
+    rewarded flag and GrosmarkConfig but NOT the version of oasis_spikes.npy it was
+    derived from, so re-running the deconvolution silently invalidates it while leaving
+    the filename looking valid. Clear viral_caches/place_cells whenever you re-run
+    OASIS, or pass False here.
+    """
+    mask, per_trial = get_iti_still_frames(session)
+    retained_seconds = mask.sum() / 30
+
+    if retained_seconds < min_retained_seconds:
+        print(
+            f"Skipping {session.mouse_name} {session.date}: {retained_seconds:.0f} s of "
+            f"ITI stillness, below {min_retained_seconds:.0f} s"
+        )
+        return pd.DataFrame()
+
+    # rewarded=None so the cell set is defined from all trials, and stays fixed across
+    # the three templates scored below
+    pcs_mask, _, _ = get_place_cells(
+        session=session,
+        spks=spks,
+        rewarded=None,
+        config=grosmark_config,
+        plot=False,
+        use_cache=use_place_cell_cache,
+    )
+    if pcs_mask is None:
+        return pd.DataFrame()
+    place_cells = spks[pcs_mask, :]
+
+    # The offline frames are split by the trial they follow, as well as being scored as
+    # a whole. Splitting the frames rather than the templates keeps every component,
+    # and a difference between subsets cannot come from static online-offline coupling,
+    # which is identical in both.
+    frame_masks = {"all": mask}
+    frame_masks.update(iti_masks_by_trial_type(per_trial, n_frames=mask.size))
+
+    offline_matrices = {}
+    for iti_after, subset_mask in frame_masks.items():
+        if subset_mask.sum() < min_subset_frames:
+            print(
+                f"  skipping iti_after={iti_after}: {subset_mask.sum() / 30:.0f} s, "
+                f"below {min_subset_frames / 30:.0f} s"
+            )
+            continue
+        offline_matrices[iti_after] = build_offline_matrix_from_mask(
+            place_cells, subset_mask
+        )
+
+    records = []
+    for template, rewarded in (
+        ("all", None),
+        ("rewarded", True),
+        ("unrewarded", False),
+    ):
+        ensemble_matrix = build_run_ensembles(
+            session, place_cells, rewarded, n_component_method=n_component_method
+        )
+        if ensemble_matrix.shape[1] == 0:
+            print(f"  no significant components for the {template} template")
+            continue
+
+        for iti_after, offline_z in offline_matrices.items():
+            mean_r, mean_rz, null_mean, null_std = score_offline_reactivation(
+                offline_z, ensemble_matrix, n_shuffles=n_shuffles
+            )
+            records.extend(
+                _reactivation_records(
+                    session=session,
+                    template=template,
+                    subset_column="iti_after",
+                    subset_value=iti_after,
+                    ensemble_matrix=ensemble_matrix,
+                    n_component_method=n_component_method,
+                    pcs_mask=pcs_mask,
+                    mean_r=mean_r,
+                    mean_rz=mean_rz,
+                    null_mean=null_mean,
+                    null_std=null_std,
+                    subset_seconds=frame_masks[iti_after].sum() / 30,
+                    retained_seconds=retained_seconds,
+                    n_trials_scored=len(per_trial),
+                )
+            )
+
+    return pd.DataFrame(records)
+
+
+def freeze_immobility_masks(
+    session: Cached2pSession, n_frames: int
+) -> Dict[str, np.ndarray]:
+    """Full-session masks for immobility during the pre and post freeze epochs.
+
+    The pre epoch precedes the task, so whatever the run ensembles express there cannot
+    be a consequence of that day's running. That is the one contrast in this dataset
+    that separates reactivation from static coupling: cells correlated during running
+    are correlated offline for anatomical and neuropil reasons, and no amount of
+    shuffling the weights distinguishes that from experience-driven reinstatement.
+    post > pre with the same ensembles does.
+
+    Expect the effect to be largest where there is a new map to build. On a familiar
+    track the pre epoch legitimately already contains it, which is why Grosmark used
+    belts that were novel on days 1 and 4 and restricted his headline analysis to
+    newly formed place cells.
+    """
+    if session.wheel_freeze is None:
+        return {}
+
+    movement_pre, movement_post = get_movement_bool(wheel_freeze=session.wheel_freeze)
+    epochs = {
+        "pre": (
+            session.wheel_freeze.pre_training_start_frame,
+            session.wheel_freeze.pre_training_end_frame,
+            movement_pre,
+        ),
+        "post": (
+            session.wheel_freeze.post_training_start_frame,
+            session.wheel_freeze.post_training_end_frame,
+            movement_post,
+        ),
+    }
+
+    masks = {}
+    for name, (start, end, movement) in epochs.items():
+        assert end - start == movement.size, (
+            f"{session.mouse_name} {session.date}: {name} epoch is {end - start} frames "
+            f"but its movement vector is {movement.size}. get_movement_bool pads to "
+            f"27000, so an epoch of another length will not line up."
+        )
+        assert end <= n_frames, (
+            f"{session.mouse_name} {session.date}: {name} epoch ends at frame {end} but "
+            f"the imaging data has {n_frames} frames"
+        )
+        mask = np.zeros(n_frames, dtype=bool)
+        mask[start:end] = ~movement
+        masks[name] = mask
+
+    return masks
+
+
+def freeze_ensemble_reactivation(
+    session: Cached2pSession,
+    spks: np.ndarray,
+    min_epoch_seconds: float = 60.0,
+    n_shuffles: int = 500,
+    use_place_cell_cache: bool = True,
+    n_component_method: Literal["marcenko_pastur", "circular_shift"] = "circular_shift",
+) -> pd.DataFrame:
+    """Score the pre and post freeze epochs against the run ensembles.
+
+    Mirrors iti_ensemble_reactivation exactly - same templates, same cell set, same
+    measure - but the offline frames are the frozen-wheel blocks rather than the ITIs,
+    so the paired contrast is post versus pre rather than one ITI subset versus another.
+
+    None of main()'s per-timepoint machinery is needed for a mean-R contrast, so this
+    does not touch the ensemble caches and is not affected by their being stale.
+    """
+    masks = freeze_immobility_masks(session, n_frames=spks.shape[1])
+    if not masks:
+        print(f"Skipping {session.mouse_name} {session.date}: no wheel freeze")
+        return pd.DataFrame()
+
+    pcs_mask, _, _ = get_place_cells(
+        session=session,
+        spks=spks,
+        rewarded=None,
+        config=grosmark_config,
+        plot=False,
+        use_cache=use_place_cell_cache,
+    )
+    if pcs_mask is None:
+        return pd.DataFrame()
+
+    place_cells = spks[pcs_mask, :]
+
+    offline_matrices = {}
+    for epoch, epoch_mask in masks.items():
+        if epoch_mask.sum() / 30 < min_epoch_seconds:
+            print(
+                f"  skipping {epoch}: {epoch_mask.sum() / 30:.0f} s of immobility, "
+                f"below {min_epoch_seconds:.0f} s"
+            )
+            continue
+        offline_matrices[epoch] = build_offline_matrix_from_mask(
+            place_cells, epoch_mask
+        )
+
+    if len(offline_matrices) < 2:
+        print(f"  {session.mouse_name} {session.date}: need both epochs, skipping")
+        return pd.DataFrame()
+
+    retained_seconds = sum(m.sum() for m in masks.values()) / 30
+    n_trials_scored = sum(trial_is_imaged(trial) for trial in session.trials)
+
+    records = []
+    for template, rewarded in (
+        ("all", None),
+        ("rewarded", True),
+        ("unrewarded", False),
+    ):
+        ensemble_matrix = build_run_ensembles(
+            session, place_cells, rewarded, n_component_method=n_component_method
+        )
+        if ensemble_matrix.shape[1] == 0:
+            print(f"  no significant components for the {template} template")
+            continue
+
+        for epoch, offline_z in offline_matrices.items():
+            mean_r, mean_rz, null_mean, null_std = score_offline_reactivation(
+                offline_z, ensemble_matrix, n_shuffles=n_shuffles
+            )
+            records.extend(
+                _reactivation_records(
+                    session=session,
+                    template=template,
+                    subset_column="epoch",
+                    subset_value=epoch,
+                    ensemble_matrix=ensemble_matrix,
+                    n_component_method=n_component_method,
+                    pcs_mask=pcs_mask,
+                    mean_r=mean_r,
+                    mean_rz=mean_rz,
+                    null_mean=null_mean,
+                    null_std=null_std,
+                    subset_seconds=masks[epoch].sum() / 30,
+                    retained_seconds=retained_seconds,
+                    n_trials_scored=n_trials_scored,
+                )
+            )
+
+    return pd.DataFrame(records)
+
+
+def _permutation_p(values: np.ndarray) -> float:
+    """One-sided p from flipping the sign of each mouse's value, enumerated exactly.
+
+    The unit is the mouse. With n mice the smallest achievable p is 1 / 2**n, so at
+    n=5 nothing can beat 0.031 however large the effect - worth knowing before reading
+    a p-value near that floor as weak.
+    """
+    if len(values) < 2:
+        return float("nan")
+    null = np.array(
+        [
+            np.mean(values * np.array(signs))
+            for signs in product([-1, 1], repeat=len(values))
+        ]
+    )
+    return float(np.mean(null >= values.mean()))
+
+
+def report_freeze_reactivation(
+    df: pd.DataFrame, template: str = "all", value: str = "excess_r"
+) -> pd.Series:
+    """Summarise the pre versus post freeze contrast and return the per-mouse deltas.
+
+    excess_r (observed minus the shuffled null) is the default rather than mean_rz,
+    because the z divides by a term that shrinks as place cells are added and so is not
+    comparable across sessions or genotypes that differ in cell yield.
+    """
+    d = df[df.template == template]
+    if d.empty:
+        print(f"No rows for template={template}")
+        return pd.Series(dtype=float)
+
+    n_sessions = d.groupby(["mouse", "date"]).ngroups
+    print(
+        f"Freeze reactivation: {n_sessions} sessions, {d.mouse.nunique()} mice "
+        f"(template={template}, value={value})\n"
+    )
+
+    print(f"  {'epoch':>6} {'sessions':>9} {'median':>9} {'mice > 0':>10}")
+    for epoch in ("pre", "post"):
+        e = d[d.epoch == epoch]
+        if e.empty:
+            continue
+        per_mouse = (
+            e.groupby(["mouse", "date"])[value].median().groupby("mouse").median()
+        )
+        print(
+            f"  {epoch:>6} {e.groupby(['mouse','date']).ngroups:>9} "
+            f"{per_mouse.median():>9.3f} "
+            f"{f'{int((per_mouse > 0).sum())}/{len(per_mouse)}':>10}"
+        )
+
+    wide = d.pivot_table(
+        index=["mouse", "date"], columns="epoch", values=value, aggfunc="median"
+    ).dropna()
+    if wide.empty or not {"pre", "post"}.issubset(wide.columns):
+        print("\n  no session has both epochs")
+        return pd.Series(dtype=float)
+
+    per_session = wide["post"] - wide["pre"]
+    per_mouse = per_session.groupby("mouse").median()
+    v = per_mouse.to_numpy()
+
+    print(f"\n  post - pre, per mouse ({len(per_session)} paired sessions):")
+    for mouse, delta in per_mouse.items():
+        n = (per_session.index.get_level_values("mouse") == mouse).sum()
+        print(f"    {mouse:>7} {delta:>+8.3f}   ({n} sessions)")
+    print(
+        f"    mean {v.mean():>+.3f}   {int((v > 0).sum())}/{len(v)} positive   "
+        f"p = {_permutation_p(v):.4f}   (floor {1 / 2 ** len(v):.4f})"
+    )
+
+    # The epochs differ in how much immobility they retain, which is the same covariate
+    # that had to be watched for the ITI subsets
+    secs = d.pivot_table(
+        index=["mouse", "date"],
+        columns="epoch",
+        values="subset_seconds",
+        aggfunc="first",
+    )
+    print(
+        f"\n  immobility (s): pre {secs['pre'].median():.0f}  "
+        f"post {secs['post'].median():.0f}"
+    )
+    per_sess_meta = d.groupby(["mouse", "date"])[
+        ["n_components", "n_place_cells"]
+    ].first()
+    print(
+        f"  median n_components {per_sess_meta.n_components.median():.0f}   "
+        f"median n_place_cells {per_sess_meta.n_place_cells.median():.0f}"
+    )
+
+    if "session_type" in d.columns:
+        stage = d.session_type.str.replace(r" day \d+", "", regex=True)
+        d = d.assign(stage=stage)
+        st = (
+            d.pivot_table(
+                index=["mouse", "date", "stage"],
+                columns="epoch",
+                values=value,
+                aggfunc="median",
+            )
+            .dropna()
+            .reset_index()
+        )
+        st["delta"] = st["post"] - st["pre"]
+        print(f"\n  by stage (the effect should be largest where the map is new):")
+        print(
+            st.groupby("stage")
+            .agg(sessions=("delta", "size"), median_delta=("delta", "median"))
+            .round(3)
+            .to_string()
+            .replace("\n", "\n    ")
+        )
+
+    return per_mouse
+
+
+def _reactivation_records(
+    session: Cached2pSession,
+    template: str,
+    subset_column: str,
+    subset_value: str,
+    ensemble_matrix: np.ndarray,
+    n_component_method: str,
+    pcs_mask: np.ndarray,
+    mean_r: np.ndarray,
+    mean_rz: np.ndarray,
+    null_mean: np.ndarray,
+    null_std: np.ndarray,
+    subset_seconds: float,
+    retained_seconds: float,
+    n_trials_scored: int,
+) -> List[dict]:
+    """One record per component for a single template x frame-subset combination.
+
+    subset_column names whichever way the offline frames were split - "iti_after" for
+    the ITI analysis, "epoch" for the freeze analysis - so both share a format without
+    pretending the two splits mean the same thing.
+    """
+    return [
+        {
+            "mouse": session.mouse_name,
+            "date": session.date,
+            "session_type": session.session_type,
+            "genotype": get_genotype(session.mouse_name),
+            "template": template,
+            subset_column: subset_value,
+            "component": component,
+            "n_components": ensemble_matrix.shape[1],
+            "n_component_method": n_component_method,
+            "n_place_cells": int(np.sum(pcs_mask)),
+            "mean_r": mean_r[component],
+            "mean_rz": mean_rz[component],
+            # observed - null_mean: the effect size to use across groups
+            "excess_r": mean_r[component] - null_mean[component],
+            "null_mean": null_mean[component],
+            "null_std": null_std[component],
+            "subset_seconds": subset_seconds,
+            "retained_seconds": retained_seconds,
+            "n_trials_scored": n_trials_scored,
+        }
+        for component in range(ensemble_matrix.shape[1])
+    ]
 
 
 def compute_pcc_scores(
@@ -2071,27 +2728,120 @@ def all_mouse_plots(
     1 / 0
 
 
-if __name__ == "__main__":
+def get_df_summary(genotype: str) -> pd.DataFrame:
 
     # main("J035", "2026-06-16", rewarded=None, plot=True)
-    rewarded = True
-    df = multiple_sessions(rewarded=rewarded)
-    df.to_csv(f"all_mice_ensemble_reactivation_{rewarded}.csv", index=False)
-    df = pd.read_csv(f"all_mice_ensemble_reactivation_{rewarded}.csv")
-    stages_keep = [
-        # "Learning day 1",
-        # "Learning day 2",
-        # "Learning day 3",
-        # "Learning day 4",
-        # "Learning day 5",
-        "Reversal learning day 1",
-        # "Reversal learning day 2",
-    ]
 
-    df = df[df.stage.isin(stages_keep)]
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    ensemble_cache_path = CACHE_PATH.parent / "ensemble_caches" / "new_method"
 
-    # df = df[df.stage == "Unsupervised learning day 1"]
-    plot_reactivation_summary(df)
-    print(df.mouse.unique())
+    assert ensemble_cache_path.exists(), f"{ensemble_cache_path} does not exist"
 
-    plt.show()
+    all_df = []
+
+    n = 0
+    debug = True
+    for cache_file in cache_files:
+        mouse = cache_file.stem.split("_")[0]
+        date = cache_file.stem.split("_")[1]
+
+        if get_genotype(mouse) != genotype:
+            continue
+
+        if (ensemble_cache_path / f"{mouse}_{date}.csv").exists():
+            print(f"Loading cached {mouse} {date}")
+            all_df.append(
+                pd.read_csv(
+                    ensemble_cache_path / f"{mouse}_{date}.csv", index_col=False
+                )
+            )
+            continue
+
+        session = Cached2pSession.model_validate_json(
+            (CACHE_PATH / f"{mouse}_{date}.json").read_text()
+        )
+        if not session.session_type.startswith("reversal learning"):
+            continue
+
+        print(f"Processing {mouse} {date}")
+
+        if (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
+            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy")
+        else:
+            try:
+                _, spks, _ = load_imaging_data(mouse, date)
+            except Exception as e:
+                print(f"Error loading {mouse} {date}: {e}")
+                continue
+
+        if spks.shape[0] < 5:
+            print(f"No cells :'( probably wrong pmt")
+            continue
+
+        try:
+            df = freeze_ensemble_reactivation(
+                session=session, spks=spks, n_component_method="circular_shift"
+            )
+            if len(df) > 0:
+                print(f"Saving cached {mouse} {date}")
+                df.to_csv(ensemble_cache_path / f"{mouse}_{date}.csv", index=False)
+        except Exception as e:
+            print(f"Error processing {mouse} {date}: {e}")
+            if debug:
+                raise
+            continue
+        all_df.append(df)
+
+    df_summary = pd.concat(all_df)
+    df_summary.to_csv(f"df_summary_just_reversals.csv", index=False)
+
+
+def batch_runner(rewarded: bool | None = None) -> None:
+
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    mice = set(f.stem.split("_")[0] for f in cache_files)
+    mice = [mouse for mouse in mice if get_genotype(mouse) == "WT"]
+    metadata_dict = {mouse: gsheet2df(SPREADSHEET_ID, mouse, 1) for mouse in mice}
+
+    for cache_file in cache_files:
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
+        if mouse not in mice:
+            continue
+        metadata = metadata_dict[mouse]
+        stage = metadata.loc[metadata["Date"] == date, "Type"].values[0]
+        if not stage.lower().startswith("reversal") and not stage.lower().startswith(
+            "learning"
+        ):
+            print(f"Skipping {stage} session for {mouse} {date}")
+            continue
+
+        main(mouse=mouse, date=date, rewarded=rewarded, plot=False)
+
+
+if __name__ == "__main__":
+
+    # get_df_summary("WT")
+    df = pd.read_csv("df_summary_just_reversals.csv")
+    report_freeze_reactivation(df, template="all")
+    1 / 0
+    # 1 / 0
+
+    # df = pd.read_csv("df_summary.csv")
+    # a = df[(df.template == "all") & (df.iti_after != "all")]
+
+    # pivoted = a.pivot_table(
+    #     index=["mouse", "date"], columns="iti_after", values="mean_rz", aggfunc="median"
+    # )
+    # subbed = pivoted["rewarded"].to_numpy() - pivoted["unrewarded"].to_numpy()
+    # subbed = subbed[~np.isnan(subbed)]
+    # # print(wilcoxon(subbed, alternative="greater"))
+    # per_mouse = (
+    #     pd.Series(subbed, index=pivoted.dropna().index).groupby("mouse").median()
+    # )
+    # v = per_mouse.to_numpy()
+    # null = np.array([np.mean(v * np.array(s)) for s in product([-1, 1], repeat=len(v))])
+    # print(per_mouse, v.mean(), np.mean(null >= v.mean()))
+
+    # 1 / 0
