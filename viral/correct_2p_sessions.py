@@ -697,3 +697,36 @@ def jb034_2025_07_04(c: SessionCorrection) -> SessionCorrection:
         frame_times_daq=c.frame_times_daq,
         offset_after_pre_epoch=0,
     )
+
+
+@register_correction("JB031", "2025-03-24")
+def jb031_2025_03_24(c: SessionCorrection) -> SessionCorrection:
+
+    # stack_lengths_tiffs
+    # array([  615, 27000, 54065, 60318, 27000])
+    # chunk_lengths_daq
+    # array([27000, 54067, 60320, 27000])
+
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [2])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: sum([27000, 116295])],
+            c.frame_times_daq[
+                sum(
+                    [
+                        27000,
+                        116295,
+                        458,
+                    ]
+                ) :
+            ],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )

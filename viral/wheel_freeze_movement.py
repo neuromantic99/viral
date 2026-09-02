@@ -72,10 +72,9 @@ def get_wheel_freeze_movement(
                 save_mp4s=save_mp4s,
             )
             return movement_pre, movement_post, "camera"
-        else:
-            print(
-                f"Camera tiff files for {mouse_name} on {date} are too small, due to weird saving issue, falling back to encoder or suite2p"
-            )
+        print(
+            f"Camera tiff files for {mouse_name} on {date} are too small, due to weird saving issue, falling back to encoder or suite2p"
+        )
 
     # Try the rotary encoder
     # TODO: one might be present and the other not, in which case we should still return the one that is present
@@ -335,7 +334,7 @@ def test_movement_extraction() -> None:
     save the results of all of them and compare them to each other
     """
     mouse_name = "J034"
-    date = "2026-06-10"
+    date = "2026-06-25"
 
     session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
     session = Cached2pSession.model_validate_json(session_path.read_text())

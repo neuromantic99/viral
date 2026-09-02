@@ -94,6 +94,8 @@ def get_sampling_rate(frame_clock: np.ndarray) -> int:
         return 1000
     elif 30 < len(frame_clock) / 10000 / 60 < 130:
         return 10000
+    elif len(frame_clock) == 607666161:  # accidently left one session running overnight
+        return 10000
     raise ValueError("Could not determine sampling rate")
 
 

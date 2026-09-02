@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from nptdms import TdmsFile
 from ScanImageTiffReader import ScanImageTiffReader
+from tqdm import tqdm
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
@@ -379,7 +380,9 @@ def add_imaging_info_to_trials(
     """Adds imaging info to trials."""
     logger.info("Adding imaging info to trials")
 
-    for idx, trial in enumerate(trials):
+    for idx, trial in tqdm(
+        enumerate(trials), desc="Adding imaging info to trials", total=len(trials)
+    ):
         # Works in place, maybe not ideal
         add_daq_times_to_trial(
             trial,
@@ -395,7 +398,9 @@ def add_imaging_info_to_trials(
         )
 
     # Leave the idx enumerate in here as it helps with debugging
-    for idx, trial in enumerate(trials):
+    for idx, trial in tqdm(
+        enumerate(trials), desc="Checking timestamps", total=len(trials)
+    ):
         check_timestamps(
             epochs=session_sync.epochs,
             trial=trial,
@@ -756,13 +761,7 @@ def process_session(
         )
     )
 
-    trials = add_imaging_info_to_trials(
-        trials=trials,
-        session_sync=session_sync,
-        wheel_freeze=wheel_freeze,
-        daq_crashed=daq_crashed,
-        is_freeze_session=False,
-    )
+    print("got wheel freeze")
 
     trials_pre_freeze, trials_post_freeze = load_synced_freeze_sessions(
         mouse_name=mouse_name,
@@ -784,6 +783,14 @@ def process_session(
                 trials_post_freeze=trials_post_freeze,
             )
         )
+
+    trials = add_imaging_info_to_trials(
+        trials=trials,
+        session_sync=session_sync,
+        wheel_freeze=wheel_freeze,
+        daq_crashed=daq_crashed,
+        is_freeze_session=False,
+    )
 
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
@@ -903,26 +910,25 @@ ALL_MICE = [
     # "JB025",
     # "JB026",
     # "JB027",
-    "JB030",
-    "JB031",
-    "JB032",
+    # "JB030",
+    # "JB031",
+    # "JB032",
     # "JB033",
-    "JB034",
-    "JB035",
-    "JB036",
-    "J030",
-    "J031",
-    "J032",
-    "J035",
+    # "JB034",
+    # "JB035",
+    # "JB036",
+    # "J030",
+    # "J031",
+    # "J032",
+    # "J035",
     "J034",
-    "J036",
-    "J037",
-    "J038",
+    # "J037",
+    # "J038",
 ]
 
 
 def main() -> None:
-    redo = False
+    redo = True
     # for mouse_name in ["JB030"]:
     # Toggle whether the try catch throws or not without commenting it
     debug = True
@@ -935,8 +941,19 @@ def main() -> None:
                 date = row["Date"]
                 session_type = row["Type"].lower()
                 if "Analyse" in row and row["Analyse"] == "FALSE":
+
                     print(
                         f"Skipping {mouse_name} {date} {session_type} as Analyse is FALSE"
+                    )
+                    continue
+
+                if (
+                    not session_type.lower().startswith("learning")
+                    and not session_type.lower().startswith("reversal")
+                    and not session_type.lower().startswith("unsupervised")
+                ):
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} cos cba with these session rn"
                     )
                     continue
 
