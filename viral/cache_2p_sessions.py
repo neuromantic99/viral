@@ -37,6 +37,7 @@ from viral.imaging_utils import (
     get_daq_crashed,
     get_imaging_crashed,
     get_sampling_rate,
+    restrict_to_immobility,
     trial_is_imaged,
 )
 from viral.models import Cached2pSession, SessionImagingInfo, TrialInfo, WheelFreeze
@@ -45,6 +46,7 @@ from viral.single_session import HERE, load_data
 from viral.utils import (
     SessionType,
     find_chunk,
+    get_movement_bool,
     get_session_type,
     get_tiff_paths_in_directory,
     is_ordered_subset,
@@ -850,7 +852,12 @@ def load_synced_freeze_sessions(
             assert (
                 check and start is not None
             ), "Spacers recorded in txt file do not match sync"
-            num_trials_in_daq = len(session_sync.behaviour_chunk_lens) - start
+            num_trials_in_daq = (
+                len(session_sync.behaviour_chunk_lens)
+                - start
+                # Stopped in the middle of the spacers on this session
+                - (1 if mouse_name == "J037" and date == "2026-07-14" else 0)
+            )
             trials = trials[:num_trials_in_daq]
             print(f"Post-freeze trials truncated to {num_trials_in_daq}")
 
@@ -1029,5 +1036,115 @@ def main() -> None:
                 print(full_tb)
 
 
+def fix_broken_wheel_movement() -> None:
+    existing_sessions = list(CACHE_PATH.glob("*.json"))
+    mice = set(session_file.stem.split("_")[0] for session_file in existing_sessions)
+    metadata_dict = {mouse: gsheet2df(SPREADSHEET_ID, mouse, 1) for mouse in mice}
+    checked_already_file = "checked_already.txt"
+    for session_file in existing_sessions:
+        mouse = session_file.stem.split("_")[0]
+        date = session_file.stem.split("_")[1]
+
+        if date == "2026-05-15" and mouse == "J030":
+            print("Skipping this for now, it's being recached")
+            continue
+        with open(checked_already_file, "r") as f:
+            checked_already = f.read().splitlines()
+        if f"{mouse} {date}" in checked_already:
+            print(f"Skipping {mouse} {date} as already checked")
+            continue
+        metadata = metadata_dict[mouse]
+
+        row = metadata.loc[metadata["Date"] == date].iloc[0]
+        session_type = row["Type"].lower()
+        if not session_type.startswith("learning") and not session_type.startswith(
+            "reversal"
+        ):
+            print(f"Skipping {mouse} {date} as not learning or reversal")
+            with open(checked_already_file, "a") as f:
+                f.write(f"{mouse} {date}\n")
+            continue
+
+        session = Cached2pSession.model_validate_json(session_file.read_text())
+        if session.wheel_freeze is None:
+            if "Wheel blocked?" not in row:
+                print(f"Skipping {session.mouse_name} {session.date} as no wheel info")
+                with open(checked_already_file, "a") as f:
+                    f.write(f"{mouse} {date}\n")
+                continue
+            wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+            if not wheel_blocked:
+                print(
+                    f"Skipping {session.mouse_name} {session.date} as wheel not blocked"
+                )
+                with open(checked_already_file, "a") as f:
+                    f.write(f"{mouse} {date}\n")
+                continue
+        try:
+            get_movement_bool(wheel_freeze=session.wheel_freeze)
+            # Check whether there's now a pupil where there wasn't before.
+            if session.wheel_freeze.freeze_movement_type == "rotary_encoder" and row[
+                "Pupil pre-freeze"
+            ].endswith(".mp4"):
+                print(
+                    f"Fixing {session.mouse_name} {session.date} as pupil is now present"
+                )
+            else:
+                print(
+                    f"Skipping {session.mouse_name} {session.date} as movement bool is fine"
+                )
+                with open(checked_already_file, "a") as f:
+                    f.write(f"{mouse} {date}\n")
+                continue
+        except (AssertionError, IndexError):
+            print(
+                f"Fixing {session.mouse_name} {session.date} as movement bool is broken"
+            )
+
+        print(f"Fixing {session.mouse_name} {session.date}")
+        trials_pre_freeze, trials_post_freeze = load_synced_freeze_sessions(
+            mouse_name=session.mouse_name,
+            date=session.date,
+            row=row,
+            daq_crashed=get_daq_crashed(session.mouse_name, session.date),
+            session_sync=get_session_sync(
+                tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                mouse_name=session.mouse_name,
+                date=session.date,
+                tiff_directory=TIFF_UMBRELLA / session.date / session.mouse_name,
+                trials=session.trials,
+                imaging_crashed=get_imaging_crashed(session.mouse_name, session.date),
+            ),
+            wheel_freeze=session.wheel_freeze,
+        )
+        movement_pre_freeze, movement_post_freeze, freeze_movement_type = (
+            get_wheel_freeze_movement(
+                wheel_freeze=session.wheel_freeze,
+                row=row,
+                mouse_name=session.mouse_name,
+                date=session.date,
+                trials_pre_freeze=trials_pre_freeze,
+                trials_post_freeze=trials_post_freeze,
+            )
+        )
+        new_wheel_freeze = session.wheel_freeze.model_copy(
+            update={
+                "trials_pre_freeze": trials_pre_freeze,
+                "trials_post_freeze": trials_post_freeze,
+                "movement_pre_freeze": movement_pre_freeze.tolist(),
+                "movement_post_freeze": movement_post_freeze.tolist(),
+                "freeze_movement_type": freeze_movement_type,
+            }
+        )
+        new_session = session.model_copy(update={"wheel_freeze": new_wheel_freeze})
+
+        # Make sure it works
+        get_movement_bool(wheel_freeze=new_session.wheel_freeze)
+        with open(checked_already_file, "a") as f:
+            f.write(f"{mouse} {date}\n")
+        with open(session_file, "w") as f:
+            json.dump(new_session.model_dump(), f)
+
+
 if __name__ == "__main__":
-    main()
+    fix_broken_wheel_movement()

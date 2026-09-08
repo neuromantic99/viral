@@ -35,6 +35,21 @@ from viral.utils import (
     motion_energy_in_chunks,
     subset_frames_mp4,
 )
+import re
+from datetime import datetime
+
+
+def extract_timestamp(filename: str) -> datetime:
+    """Return a datetime from names like 'fc2_save_2026-05-21-163611-0000.mp4'.
+
+    Returns None if no timestamp is found.
+    """
+
+    timestamp_re = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{6})-(\d{4})\.mp4$")
+    m = timestamp_re.search(filename)
+    assert m is not None, f"Could not extract timestamp from {filename}"
+    y, mo, d, hms, _seq = m.groups()
+    return datetime.strptime(f"{y}{mo}{d}{hms}", "%Y%m%d%H%M%S")
 
 
 def get_wheel_freeze_movement(
@@ -58,7 +73,9 @@ def get_wheel_freeze_movement(
 
     # Try the camera
     pre_freeze_path, post_freeze_path = extract_freeze_paths(row, date, mouse_name)
+
     if pre_freeze_path is not None and post_freeze_path is not None:
+        sanity_check_pupil_paths(mouse_name, date, pre_freeze_path, post_freeze_path)
         if (
             pre_freeze_path.stat().st_size > 1e6
             and post_freeze_path.stat().st_size > 1e6
@@ -90,6 +107,26 @@ def get_wheel_freeze_movement(
         mouse_name, date, wheel_freeze
     )
     return movement_pre, movement_post, "suite2p"
+
+
+def sanity_check_pupil_paths(
+    mouse_name: str, date: str, pre_freeze_path: Path, post_freeze_path: Path
+) -> None:
+    assert (
+        mouse_name in str(pre_freeze_path)
+        and mouse_name in str(post_freeze_path)
+        and date in str(pre_freeze_path)
+        and date in str(post_freeze_path)
+    )
+
+    pre_freeze_timestamp = extract_timestamp(pre_freeze_path.name)
+    post_freeze_timestamp = extract_timestamp(post_freeze_path.name)
+    assert (
+        post_freeze_timestamp > pre_freeze_timestamp
+    ), f"Post freeze timestamp {post_freeze_timestamp} is not after pre freeze timestamp {pre_freeze_timestamp}"
+
+    for ts in pre_freeze_timestamp, post_freeze_timestamp:
+        assert ts.isoformat().split("T")[0] == date
 
 
 def get_wheel_freeze_movement_suite2p(
@@ -272,7 +309,7 @@ def load_freeze_trials(
     try:
         session_number_pre = parse_session_number(row["Session Number pre-freeze"])[0]
         session_number_post = parse_session_number(row["Session Number post-freeze"])[0]
-    except KeyError as e:
+    except (KeyError, AssertionError) as e:
         print(
             f"Missing freeze session numbers for {mouse_name} on {date}. Error is: {e}"
         )

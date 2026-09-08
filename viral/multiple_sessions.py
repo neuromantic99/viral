@@ -25,6 +25,7 @@ import matplotlib
 
 matplotlib.rcParams["pdf.fonttype"] = 42
 import numpy as np
+from viral.nlgf.style import GENOTYPE_COLOURS
 from viral.gsheets_importer import gsheet2df
 from viral.single_session import (
     get_binned_licks,
@@ -64,7 +65,7 @@ from viral.imaging_utils import compute_speed_grosmark
 import seaborn as sns
 import pandas as pd
 
-sns.set_theme(context="talk", style="ticks")
+sns.set_theme(context="poster", style="ticks")
 
 
 def get_iti_still_frames(
@@ -582,7 +583,7 @@ def plot_rolling_performance(
             horizontalalignment="right",
             verticalalignment="center",
             color="gray",
-            fontsize=12,
+            fontsize=18,
             weight="bold",
             clip_on=True,
         )
@@ -867,6 +868,9 @@ def plot_performance_summaries(
     group_by: list[str],
     config: MultipleSessionsConfig,
 ) -> None:
+
+    GENOTYPE_COLOURS
+
     rolling_performance_dict = create_metric_dict(
         mice,
         rolling_performance,
@@ -902,7 +906,9 @@ def plot_performance_summaries(
     plt.figure()
     plt.ylabel("Trials to criterion")
     plt.title(session_type.replace("_", " ").capitalize())
-    sns.boxplot(to_plot, showfliers=False)
+    sns.boxplot(
+        to_plot, showfliers=False, palette=GENOTYPE_COLOURS, hue_order=["WT", "NLGF"]
+    )
     ax = plt.gca()
     new_labels = [
         label.get_text()
@@ -910,45 +916,70 @@ def plot_performance_summaries(
         .replace("_", "\n")
         for label in ax.get_xticklabels()
     ]
-    ax.set_xticklabels(new_labels, fontsize=12)
-    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+    ax.set_xticklabels(new_labels)
+    sns.stripplot(
+        to_plot,
+        edgecolor="black",
+        linewidth=1,
+        palette=GENOTYPE_COLOURS,
+        hue_order=["WT", "NLGF"],
+    )
 
     nlgf_vs_wt = stats.ttest_ind(
         to_plot["NLGF"],
         to_plot["WT"],
     )
-    wt_vs_oligo = stats.ttest_ind(
-        to_plot["WT"],
-        to_plot["Oligo-BACE1-KO"],
-    )
     print(f"NLGF vs WT: {nlgf_vs_wt.pvalue:.3f}")
-    print(f"WT vs Oligo-BACE1-KO: {wt_vs_oligo.pvalue:.3f}")
 
     # Add statistical significance annotations
+    offset = 30
     plt.text(
         0.5,
-        max(max(to_plot["NLGF"]), max(to_plot["WT"])) + 1,
-        f"p={nlgf_vs_wt.pvalue:.3f}",
+        max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset,
+        f"p = {nlgf_vs_wt.pvalue:.2f}",
         ha="center",
-        fontsize=12,
+        fontsize=18,
     )
-    plt.text(
-        1.5,
-        max(max(to_plot["WT"]), max(to_plot["Oligo-BACE1-KO"])) + 1,
-        f"p={wt_vs_oligo.pvalue:.3f}",
-        ha="center",
-        fontsize=12,
+
+    # Add the horizontaol line underneath the significance annotation
+    plt.hlines(
+        y=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 5,
+        xmin=0,
+        xmax=1,
+        color="black",
+        linewidth=1,
     )
+
+    # and the vertical lines connecting the boxes to the horizontal line
+    plt.vlines(
+        x=0,
+        ymin=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 5,
+        ymax=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 15,
+        color="black",
+        linewidth=1,
+    )
+    plt.vlines(
+        x=1,
+        ymin=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 5,
+        ymax=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 15,
+        color="black",
+        linewidth=1,
+    )
+
+    # plt.ylim(0, max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset + 30)
+    plt.ylim(0, 470)
 
     sns.despine()
     plt.tight_layout()
     group_suffix = "-".join(group_by)
-    plt.savefig(
-        HERE.parent
-        / "plots"
-        / f"behaviour-summaries-{group_suffix}-{session_type}.pdf",
-        dpi=300,
-    )
+
+    for extension in ["png", "pdf"]:
+        plt.savefig(
+            HERE.parent
+            / "plots"
+            / f"behaviour-summaries-{group_suffix}-{session_type}.{extension}",
+            dpi=300,
+        )
     plt.show()
 
 
@@ -981,18 +1012,18 @@ def plot_mouse_performance(mouse: MouseSummary, config: MultipleSessionsConfig) 
             "excluded_session_types": ["reversal", "recall", "recall_reversal"],
             "colour": sns.color_palette()[0],
         },
-        {
-            "name": "recall",
-            "label": "Memory\nRecall\nStarts",
-            "excluded_session_types": ["recall", "recall_reversal"],
-            "colour": sns.color_palette()[1],
-        },
-        {
-            "name": "recall_reversal",
-            "label": "Recall\nReversal\nStarts",
-            "excluded_session_types": ["recall_reversal"],
-            "colour": sns.color_palette()[2],
-        },
+        # {
+        #     "name": "recall",
+        #     "label": "Memory\nRecall\nStarts",
+        #     "excluded_session_types": ["recall", "recall_reversal"],
+        #     "colour": sns.color_palette()[1],
+        # },
+        # {
+        #     "name": "recall_reversal",
+        #     "label": "Recall\nReversal\nStarts",
+        #     "excluded_session_types": ["recall_reversal"],
+        #     "colour": sns.color_palette()[2],
+        # },
     ]
     for phase in phases:
         num_to_x = get_num_to_x(
@@ -1009,12 +1040,21 @@ def plot_mouse_performance(mouse: MouseSummary, config: MultipleSessionsConfig) 
             2,
             phase["label"],
             color=phase["colour"],
-            fontsize=15,
+            fontsize=18,
         )
     plt.axhline(1, color="red", linestyle="dotted", alpha=0.7, linewidth=1.5)
+    plt.text(
+        5,
+        1.05,
+        "Criterion",
+        color="red",
+        fontsize=18,
+    )
     plt.title(mouse.name)
     plt.tight_layout()
+    sns.despine()
     plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.svg", dpi=300)
+    plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.png", dpi=300)
     plt.show()
 
 
@@ -1145,8 +1185,6 @@ def session_counter() -> None:
                 wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
                 freeze_counts[genotype][session_type] += 1
 
-    1 / 0
-
 
 def iti_still_frames_all_mice() -> None:
     cache_files = list(CACHE_PATH.glob("*.json"))
@@ -1181,50 +1219,52 @@ def iti_still_frames_all_mice() -> None:
 
 
 if __name__ == "__main__":
-    session_counter()
 
     mice: List[MouseSummary] = []
 
-    redo = True
+    redo = False
 
     config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
-    for mouse_name in {
-        # "JB011",
-        # "JB012",
-        # "JB013",
-        # "JB014",
-        # "JB015",
-        # "JB016",
-        # "JB017",
-        # "JB018",
-        # "JB019",
-        # "JB020",
-        # "JB021",
-        # "JB022",
-        # "JB023",
-        # "JB024",
-        # "JB025",
-        # "JB026",
-        # "JB027",
-        # "JB030",
-        # "JB031",
-        # "JB032",
-        # "JB033",
-        # "JB034",
-        # "JB035",
-        # "JB036",
-        # "J030",
-        # "J031",
-        # "J032",
-        # "J035"
-        # "J034"
-        "J036"
-        # "J037"
-        # "J038"
-    }:
+    for mouse_name in [
+        "JB011",
+        "JB012",
+        "JB013",
+        "JB014",
+        "JB015",
+        "JB016",
+        "JB017",
+        "JB018",
+        "JB019",
+        "JB020",
+        "JB021",
+        "JB022",
+        "JB023",
+        "JB024",
+        "JB025",
+        "JB026",
+        "JB027",
+        "JB030",
+        "JB031",
+        "JB032",
+        "JB033",
+        "JB034",
+        "JB035",
+        "JB036",
+        "J030",
+        "J031",
+        "J032",
+        "J035",
+        "J034",
+        "J036",
+        "J037",
+        "J038",
+    ]:
 
         print(f"\nProcessing {mouse_name}...")
+        # if not get_genotype(mouse_name) in {"WT", "NLGF"}:
+        # continue
+
         if redo:
             cache_mouse(mouse_name)
             mice.append(load_cache(mouse_name))
@@ -1239,13 +1279,17 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
+    # for s in ["learning", "reversal"]:
+    #     plot_performance_summaries(mice, s, ["genotype"], config=config)
+
+    plot_mouse_performance(mice[-7], config=config)
+
     # plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
 
     # plot_mouse_performance(mice[0], config=config)
     # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    for mouse in mice:
-        plot_mouse_performance(mouse, config=config)
+    # for mouse in mice:
+    #     plot_mouse_performance(mouse, config=config)
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # ## Probably not interesting as related to speed
     # plot_trial_time_summaries(mice, "learning")

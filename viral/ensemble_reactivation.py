@@ -2822,7 +2822,7 @@ def batch_runner(rewarded: bool | None = None) -> None:
 
 if __name__ == "__main__":
 
-    # get_df_summary("WT")
+    get_df_summary("WT")
     df = pd.read_csv("df_summary_just_reversals.csv")
     report_freeze_reactivation(df, template="all")
     1 / 0

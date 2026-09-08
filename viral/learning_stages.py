@@ -163,7 +163,7 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
     print("Processing", mouse_name, date)
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
-    
+
     _, spks, _ = load_imaging_data(mouse=mouse_name, date=date)
 
     for rewarded in [False, True, None]:
@@ -385,7 +385,6 @@ def get_speed_summary(
 
 def tuning_comparison_plot() -> None:
 
-
     wt = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
         genotype="WT",
@@ -428,7 +427,6 @@ def tuning_comparison_plot() -> None:
         bbox_inches="tight",
         transparent=True,
     )
-
 
 
 def plot_place_cell_results(
@@ -873,10 +871,9 @@ def plot_place_cell_heatmaps() -> None:
             )
 
 
-
-
 if __name__ == "__main__":
     # plot_place_cell_heatmaps()
+    pass
     # landmark_comparison_plot(bod=False)
     # tuning_comparison_plot()
 
