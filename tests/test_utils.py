@@ -6,14 +6,16 @@ from viral.imaging_utils import (
     compute_windowed_speed_1d,
     extract_TTL_chunks,
 )
-from viral.models import SpeedPosition
+from viral.models import SpeedPosition, WheelFreeze
 from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
     below_threshold_for_n_consecutive_samples,
+    get_movement_bool,
     get_speed_positions,
     corr_vs_distance,
     has_n_consecutive_trues,
+    is_ordered_subset,
     remove_consecutive_ones,
     round_up_to_base,
     shuffle_rows,
@@ -695,3 +697,89 @@ def test_round_up_to_base() -> None:
     assert round_up_to_base(0, base=5) == 0
     assert round_up_to_base(-3, base=5) == 0
     assert round_up_to_base(-7, base=5) == -5
+
+
+def test_is_ordered_subset() -> None:
+    a = np.array([3, 5, 6])
+    b = np.array([1, 2, 3, 5, 6])
+
+    check, start = is_ordered_subset(a, b)
+    assert check
+    assert start == 2
+
+    b = np.array([1, 2, 3, 4, 5, 6])
+    check, start = is_ordered_subset(a, b)
+    assert not check
+    assert start is None
+
+    a = np.array([6, 5, 4])
+    b = np.array([4, 5, 6])
+    check, start = is_ordered_subset(a, b)
+    assert not check
+    assert start is None
+
+    a = np.array([4, 5, 6])
+    b = np.array([4, 5, 6])
+    check, start = is_ordered_subset(a, b)
+    assert check
+    assert start == 0
+
+    a = np.random.randint(1, 10000, 50)
+    b = np.random.randint(1, 10000, 100)
+    check, start = is_ordered_subset(a, b)
+    assert not check
+    assert start is None
+
+    a = b[50:100]
+    check, start = is_ordered_subset(a, b)
+    assert check
+    assert start == 50
+
+
+def test_get_movement_bool_basic() -> None:
+    wheel_freeze = WheelFreeze(
+        pre_training_start_frame=0,
+        pre_training_end_frame=27000,
+        post_training_start_frame=100_000,
+        post_training_end_frame=100_000 + 27_000,
+        movement_pre_freeze=list(np.ones(26_999, dtype=bool)),
+        movement_post_freeze=list(np.zeros(26_999, dtype=bool)),
+    )
+    result_pre, result_post = get_movement_bool(wheel_freeze)
+
+    assert np.array_equal(result_pre, np.ones(27000, dtype=bool))
+    assert np.array_equal(result_post, np.zeros(27000, dtype=bool))
+
+
+def test_get_movement_bool_shape_different() -> None:
+    wheel_freeze = WheelFreeze(
+        pre_training_start_frame=0,
+        pre_training_end_frame=22_000,
+        post_training_start_frame=100_000,
+        post_training_end_frame=100_000 + 30_000,
+        movement_pre_freeze=list(np.ones(21_998, dtype=bool)),
+        movement_post_freeze=list(np.zeros(30_000, dtype=bool)),
+    )
+    result_pre, result_post = get_movement_bool(wheel_freeze)
+    assert np.array_equal(result_pre, np.ones(22_000, dtype=bool))
+    assert np.array_equal(result_post, np.zeros(30_000, dtype=bool))
+
+    wheel_freeze.movement_pre_freeze.append(False)
+    result_pre, result_post = get_movement_bool(wheel_freeze)
+    assert np.array_equal(
+        result_pre, np.append(np.ones(21_998, dtype=bool), [False, False])
+    )
+
+
+def test_get_movement_bool_assertion_error() -> None:
+    wheel_freeze = WheelFreeze(
+        pre_training_start_frame=0,
+        pre_training_end_frame=22_000,
+        post_training_start_frame=100_000,
+        post_training_end_frame=100_000 + 30_000,
+        movement_pre_freeze=list(np.ones(23_000, dtype=bool)),
+        movement_post_freeze=list(np.zeros(30_000, dtype=bool)),
+    )
+
+    with np.testing.assert_raises(AssertionError):
+        get_movement_bool(wheel_freeze)

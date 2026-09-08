@@ -29,10 +29,9 @@ from viral.utils import (
 
 sns.set_theme(context="talk", style="ticks")
 
-MOUSE = "J032"
-DATE = "2026-05-13"
-SESSION_NUMBER = "004"
-
+MOUSE = "J036"
+DATE = "2026-07-24"
+SESSION_NUMBER = "003"
 
 SESSION_PATH = BEHAVIOUR_DATA_PATH / MOUSE / DATE / SESSION_NUMBER
 
@@ -85,7 +84,6 @@ def plot_lick_raster(
     # f.suptitle(f"{title}. Number of trials: {len(lick_positions)}")
 
     for idx, lick_trial in enumerate(lick_positions):
-
         a0.scatter(
             lick_trial,
             [idx + random.random() * jitter for _ in range(len(lick_trial))],
@@ -115,7 +113,6 @@ def plot_lick_raster(
 
 
 def get_anticipatory_licking(trial: TrialInfo, wheel_circumference: float) -> int:
-
     lick_positions = licks_to_position(trial, wheel_circumference)
     lick_times = np.array(
         [event.start_time for event in trial.events_info if event.name == "Port1In"]
@@ -241,7 +238,6 @@ def plot_licking_all_trials(
 def plot_rewarded_vs_unrewarded_licking(
     trials: List[TrialInfo], wheel_circumference: float
 ) -> None:
-
     rewarded = [trial for trial in trials if trial.texture_rewarded]
     unrewarded = [trial for trial in trials if not trial.texture_rewarded]
 
@@ -373,6 +369,7 @@ def plot_speed_reward_unrewarded(
     last_position = 200
     # last_position = 180
     step_size = 5
+
     for idx, trial in enumerate(trials):
         position = degrees_to_cm(
             np.array(trial.rotary_encoder_position),
@@ -386,6 +383,16 @@ def plot_speed_reward_unrewarded(
             step_size=step_size,
             sampling_rate=sampling_rate,
         )
+        for bin_idx in range(len(speed)):
+            if np.isinf(speed[bin_idx].speed):
+                if speed[bin_idx].position_start >= 180:
+                    continue  # Doesn't matter
+                print(
+                    f"Got inf speed for position {speed[bin_idx].position_stop} in trial {idx}"
+                )
+                speed[bin_idx].speed = np.mean(
+                    [bin.speed for bin in speed if not np.isinf(bin.speed)]
+                )
 
         if trial.texture_rewarded:
             rewarded.append(speed)
@@ -443,7 +450,6 @@ def remove_bad_trials(
 
 
 def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummary:
-
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference=wheel_circumference
     )

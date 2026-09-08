@@ -1,6 +1,7 @@
 import pickle
 import time
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 import sys
@@ -97,12 +98,41 @@ def process_cell(
     wheel_freeze: WheelFreeze | None,
     plot: bool = False,
     figure_path: Path | None = None,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Deconvolve one cell, chunk by chunk.
+
+    Also returns one diagnostics dict per chunk. The point of these is that every
+    correction here is applied WITHIN a chunk - the percentile-filter baseline, and
+    the normalisation of spike estimates by that chunk's own mad_residual. That fixes
+    scale and slow drift, but it cannot fix signal-to-noise: if transients shrink
+    relative to shot noise later in the session, a fixed 1.25 m.a.d. threshold admits
+    a different mixture of real and noise-driven events, the binary Ssp becomes a
+    noisier measurement of the same activity, and every pairwise correlation is
+    attenuated by a common multiplicative factor. That is indistinguishable from a
+    global reactivation difference in the pre/post comparison, so it needs measuring.
+
+    The per-chunk normalisation also partly pins the event rate: the threshold is
+    1.25 x that chunk's own noise, so the fraction of frames crossing it is somewhat
+    fixed by construction, and a genuine global firing change between pre and post is
+    partly normalised away before reactivation is ever computed.
+
+    Returns spikes (binary, one per supra-threshold frame) AND amplitudes (the same
+    frames, carrying the normalised spike estimate rather than a 1). Binarising makes
+    the measure a count of EVENTS; a burst of ten spikes and a single spike both become
+    one. Amplitude tracks spike count instead. Report both: agreement means the result
+    is robust to burst structure, disagreement localises the difference to it.
+
+    Note that amplitudes are NOT passed through remove_consecutive_ones, so their
+    support differs from the saved oasis_spikes.npy. Sum amplitudes over an epoch to get
+    total activity; do not compare the two arrays frame by frame.
+    """
     raw = np.array([])
     baselined = np.array([])
     baseline = np.array([])
     spikes = np.array([])
+    amplitudes = np.array([])
     denoised = np.array([])
+    diagnostics: list[dict] = []
 
     chunk_names = ["pre", "online", "post"] if wheel_freeze is not None else ["online"]
     chunks = (
@@ -146,6 +176,45 @@ def process_cell(
 
         threshold = 1.5 if chunk_name == "online" else 1.25
 
+        # Stats on the NORMALISED spike estimate before it is binarised. How far the
+        # real events sit above the threshold is the signal-to-noise measure that the
+        # per-chunk mad normalisation cannot restore.
+        supra = chunk_spikes_norm[chunk_spikes_norm >= threshold]
+        diagnostics.append(
+            {
+                "chunk": chunk_name,
+                "n_frames": int(chunk.size),
+                "threshold": float(threshold),
+                # noise scale: the attenuation driver
+                "mad_residual": float(mad_residual),
+                # raw brightness, for a direct look at bleaching
+                "baseline_median": float(np.median(chunk_baseline)),
+                "baselined_mad": float(median_abs_deviation(chunk_baselined)),
+                # signal-to-noise: how far above the threshold events actually sit
+                "spike_norm_p99": float(np.percentile(chunk_spikes_norm, 99)),
+                "spike_norm_p999": float(np.percentile(chunk_spikes_norm, 99.9)),
+                "supra_median": float(np.median(supra)) if supra.size else np.nan,
+                "supra_max": float(np.max(supra)) if supra.size else np.nan,
+                # detection rate, before remove_consecutive_ones sparsification
+                "n_supra": int(supra.size),
+                "event_rate_hz": float(supra.size / (chunk.size / 30)),
+                # Amplitude tracks spike count where the binary count tracks event
+                # count. On synthetic data holding the spike count fixed at 900 while
+                # varying burst size from 1 to 10, the binarised count swung 6-fold
+                # (1135 -> 188) while summed amplitude held within 15%. If the groups
+                # differ in burst structure the binary count can invert the answer.
+                "summed_amplitude": float(supra.sum()),
+                # summed amplitude per event: a proxy for spikes per burst
+                "amplitude_per_event": float(supra.mean()) if supra.size else np.nan,
+            }
+        )
+
+        # Threshold but do NOT binarise, so the amplitude survives
+        chunk_amplitudes = np.where(
+            chunk_spikes_norm >= threshold, chunk_spikes_norm, 0
+        )
+        amplitudes = np.append(amplitudes, chunk_amplitudes)
+
         chunk_spikes_norm[chunk_spikes_norm < threshold] = 0
         chunk_spikes_norm[chunk_spikes_norm >= threshold] = 1
 
@@ -157,6 +226,7 @@ def process_cell(
     assert (
         baselined.shape
         == spikes.shape
+        == amplitudes.shape
         == baseline.shape
         == denoised.shape
         == cell.shape
@@ -174,7 +244,7 @@ def process_cell(
         ) as f:
             pickle.dump(fig, f)
 
-    return spikes, denoised
+    return spikes, amplitudes, denoised, diagnostics
 
 
 def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
@@ -199,14 +269,16 @@ def correct_f(f: np.ndarray, s2p_path: Path) -> np.ndarray:
 
 def _process_cell_no_plot_with_index(
     args: tuple[int, np.ndarray, WheelFreeze | None],
-) -> tuple[int, np.ndarray, np.ndarray]:
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, list[dict]]:
     """Driver for parallel processing, ensure cells are returned in the correct order"""
     idx, cell, wheel_freeze = args
     from pathlib import Path  # Needed for process_cell signature in subprocesses
     import numpy as np
 
-    spikes, denoised = process_cell(cell, wheel_freeze, plot=False, figure_path=None)
-    return idx, spikes, denoised
+    spikes, amplitudes, denoised, diagnostics = process_cell(
+        cell, wheel_freeze, plot=False, figure_path=None
+    )
+    return idx, spikes, amplitudes, denoised, diagnostics
 
 
 def preprocess_and_run(
@@ -214,8 +286,12 @@ def preprocess_and_run(
     wheel_freeze: WheelFreeze | None,
     plot: bool = False,
     parallel: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Set parallel to True to run across all cores available on your system (no plotting)"""
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
+    """Set parallel to True to run across all cores available on your system (no plotting)
+
+    Returns spikes, amplitudes, denoised, and a tidy per-cell per-chunk diagnostics
+    frame. See process_cell for why amplitudes are worth keeping.
+    """
 
     f_raw = np.load(s2p_path / "F.npy")
     f_neu = np.load(s2p_path / "Fneu.npy")
@@ -236,18 +312,26 @@ def preprocess_and_run(
         # Sort results by index to preserve order
         results.sort(key=lambda x: x[0])
         all_spikes = np.stack([r[1] for r in results])
-        all_denoised = np.stack([r[2] for r in results])
-        assert all_spikes.shape == all_denoised.shape == f.shape
+        all_amplitudes = np.stack([r[2] for r in results])
+        all_denoised = np.stack([r[3] for r in results])
+        diagnostics = pd.DataFrame(
+            [dict(cell=r[0], **d) for r in results for d in r[4]]
+        )
+        assert all_spikes.shape == all_amplitudes.shape == all_denoised.shape == f.shape
         print(f"Time taken: {time.time() - t1} seconds")
-        return all_spikes, all_denoised
+        return all_spikes, all_amplitudes, all_denoised, diagnostics
 
     all_spikes = []
+    all_amplitudes = []
     all_denoised = []
+    all_diagnostics = []
     for idx, cell in tqdm(enumerate(f)):
         mouse, date = get_mouse_and_date_from_path(s2p_path)
         (
             spikes,
+            amplitudes,
             denoised,
+            diagnostics,
         ) = process_cell(
             cell,
             wheel_freeze,
@@ -259,17 +343,20 @@ def preprocess_and_run(
         )
 
         all_spikes.append(spikes)
+        all_amplitudes.append(amplitudes)
         all_denoised.append(denoised)
+        all_diagnostics.extend(dict(cell=idx, **d) for d in diagnostics)
 
         if idx == 10 and plot:
             plt.show()
     all_spikes = np.array(all_spikes)
+    all_amplitudes = np.array(all_amplitudes)
     all_denoised = np.array(all_denoised)
 
-    assert all_spikes.shape == all_denoised.shape == f.shape
+    assert all_spikes.shape == all_amplitudes.shape == all_denoised.shape == f.shape
     print(f"Time taken: {time.time() - t1} seconds")
 
-    return all_spikes, all_denoised
+    return all_spikes, all_amplitudes, all_denoised, pd.DataFrame(all_diagnostics)
 
 
 def get_mouse_and_date_from_path(s2p_path: Path) -> Tuple[str, str]:
@@ -331,7 +418,7 @@ def main(
     plot: bool = False,
 ) -> None:
 
-    all_spikes, all_denoised = preprocess_and_run(
+    all_spikes, all_amplitudes, all_denoised, diagnostics = preprocess_and_run(
         s2p_path,
         wheel_freeze=wheel_freeze,
         plot=plot,
@@ -341,8 +428,77 @@ def main(
     all_spikes = remove_consecutive_ones(all_spikes)
 
     np.save(s2p_path / "oasis_spikes.npy", all_spikes)
+    # Thresholded but neither binarised nor sparsified, so summing over an epoch gives
+    # total activity rather than an event count. See process_cell.
+    np.save(s2p_path / "oasis_amplitudes.npy", all_amplitudes)
     np.save(s2p_path / "oasis_denoised.npy", all_denoised)
+    diagnostics.to_csv(s2p_path / "oasis_diagnostics.csv", index=False)
+    report_chunk_diagnostics(diagnostics, s2p_path)
     np.save(s2p_path / "full_grosmark_oasis_preprocessed.npy", np.array([True]))
+
+
+def report_chunk_diagnostics(diagnostics: pd.DataFrame, s2p_path: Path) -> None:
+    """Print the pre versus post comparison that decides whether the two freeze epochs
+    are measured equally well.
+
+    What to look for. If post has a larger mad_residual, or a lower baseline_median,
+    or lower supra_median / spike_norm_p99, then the post epoch is a noisier
+    measurement of the same activity. Pairwise correlations are then attenuated there
+    by a common multiplicative factor, which looks exactly like a uniform pre/post
+    difference in the offline correlation-versus-peak-distance curve, with no change
+    in its shape.
+
+    The rough attenuation this predicts is printed as a ratio. Compare it against the
+    observed pre/post ratio of the correlation curves: if they match, the difference
+    is measurement quality, not reactivation.
+    """
+    if diagnostics.empty or "pre" not in set(diagnostics["chunk"]):
+        print("No pre/post chunks in this session, skipping diagnostics report")
+        return
+
+    columns = [
+        "mad_residual",
+        "baseline_median",
+        "baselined_mad",
+        "spike_norm_p99",
+        "supra_median",
+        "event_rate_hz",
+        # If these two disagree the difference is in burst structure: the same number
+        # of events carrying more spikes each. The binary event rate is blind to that.
+        "summed_amplitude",
+        "amplitude_per_event",
+    ]
+
+    print(f"\nOASIS per-chunk diagnostics: {s2p_path}")
+    print(f"  {diagnostics['cell'].nunique()} cells\n")
+    header = f"{'metric':>17}" + "".join(f"{c:>12}" for c in ["pre", "online", "post"])
+    print(header + f"{'post/pre':>11}")
+    for column in columns:
+        medians = diagnostics.groupby("chunk")[column].median()
+        row = f"{column:>17}"
+        for chunk in ("pre", "online", "post"):
+            row += f"{medians.get(chunk, float('nan')):>12.4g}"
+        ratio = medians.get("post", np.nan) / medians.get("pre", np.nan)
+        print(row + f"{ratio:>11.3f}")
+
+    # Paired within cell, which is the comparison that matters
+    wide = diagnostics.pivot(index="cell", columns="chunk", values="mad_residual")
+    if {"pre", "post"}.issubset(wide.columns):
+        worse = float((wide["post"] > wide["pre"]).mean())
+        print(
+            f"\n  cells with a noisier post epoch: {worse:.1%} "
+            f"(50% = no systematic difference)"
+        )
+        # Correlation attenuation scales with the reliability of each signal, so a
+        # first-order guess at the correlation ratio is the inverse noise ratio.
+        print(
+            f"  predicted attenuation of post correlations vs pre: "
+            f"~{float((wide['pre'] / wide['post']).median()):.3f}x"
+        )
+        print(
+            "  -> compare with the observed pre/post ratio of the offline "
+            "correlation curves\n"
+        )
 
 
 if __name__ == "__main__":

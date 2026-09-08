@@ -175,6 +175,31 @@ def jb031_2025_04_01(c: SessionCorrection) -> SessionCorrection:
     )
 
 
+@register_correction("J031", "2026-05-12")
+def j030_2026_05_12(c: SessionCorrection) -> SessionCorrection:
+    """Focus without a grab"""
+    # stack_lengths_tiffs
+    # array([27000, 36211, 80411, 27000])
+    # chunk_lengths_daq
+    # array([27000, 36213, 254, 80413, 27000])
+
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, 2)
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: 27000 + 36213],
+            c.frame_times_daq[sum([27000, 36213, 254]) :],
+        ]
+    )
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
 @register_correction("JB035", "2025-07-04")
 def jb035_2025_07_04(c: SessionCorrection) -> SessionCorrection:
     # stack_lengths_tiffs
@@ -302,8 +327,9 @@ def jb031_2025_04_07(c: SessionCorrection) -> SessionCorrection:
     c.epochs = np.delete(c.epochs, [0], axis=0)
     c.frame_times_daq = np.concatenate(
         [
-            c.frame_times_daq[sum([508, 3127]) : sum([508, 3127, 321, 164381])],
-            c.frame_times_daq[sum([508, 3127, 321, 164381, 324, 424, 1299]) :],
+            c.frame_times_daq[0:508],
+            c.frame_times_daq[508 + 3127 : sum([508, 3127, 321, 164381])],
+            c.frame_times_daq[-27000:],
         ]
     )
     return SessionCorrection(
@@ -469,17 +495,17 @@ def jb032_2025_04_10(c: SessionCorrection) -> SessionCorrection:
 
 @register_correction("JB033", "2025-03-20")
 def jb033_2025_03_20(c: SessionCorrection) -> SessionCorrection:
-    # stack_lengths_tiffs
-    # array([27000, 12249, 35828, 81547, 27000])
-    # chunk_lengths_daq
-    # array([  157, 27000, 12251, 35830, 81549,    44, 27000])
-    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0, 5])
-    c.frame_times_daq = np.concatenate(
-        [
-            c.frame_times_daq[157 : sum([157, 27000, 12251, 35830, 81549])],
-            c.frame_times_daq[sum([157, 27000, 12251, 35830, 81549, 44]) :],
-        ]
-    )
+    """
+    stack_lengths_tiffs
+    array([ 28014, 122997,    105,  29148])
+    chunk_lengths_daq
+    array([   466,  28016, 122999,    107,  29151])
+
+    Just need to remove the first one
+    """
+
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [0])
+    c.frame_times_daq = c.frame_times_daq[466:]
     return SessionCorrection(
         epochs=c.epochs,
         all_tiff_timestamps=c.all_tiff_timestamps,
@@ -663,6 +689,39 @@ def jb034_2025_07_04(c: SessionCorrection) -> SessionCorrection:
     c.all_tiff_timestamps = c.all_tiff_timestamps[: sum([27000, 30240, 69451, 10372])]
     c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [4])
     c.frame_times_daq = c.frame_times_daq[: sum([27000, 30242, 69454, 10374])]
+    return SessionCorrection(
+        epochs=c.epochs,
+        all_tiff_timestamps=c.all_tiff_timestamps,
+        stack_lengths_tiffs=c.stack_lengths_tiffs,
+        chunk_lengths_daq=c.chunk_lengths_daq,
+        frame_times_daq=c.frame_times_daq,
+        offset_after_pre_epoch=0,
+    )
+
+
+@register_correction("JB031", "2025-03-24")
+def jb031_2025_03_24(c: SessionCorrection) -> SessionCorrection:
+
+    # stack_lengths_tiffs
+    # array([  615, 27000, 54065, 60318, 27000])
+    # chunk_lengths_daq
+    # array([27000, 54067, 60320, 27000])
+
+    c.chunk_lengths_daq = np.delete(c.chunk_lengths_daq, [2])
+    c.frame_times_daq = np.concatenate(
+        [
+            c.frame_times_daq[: sum([27000, 116295])],
+            c.frame_times_daq[
+                sum(
+                    [
+                        27000,
+                        116295,
+                        458,
+                    ]
+                ) :
+            ],
+        ]
+    )
     return SessionCorrection(
         epochs=c.epochs,
         all_tiff_timestamps=c.all_tiff_timestamps,

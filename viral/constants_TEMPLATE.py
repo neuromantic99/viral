@@ -1,10 +1,8 @@
 from pathlib import Path
 
-
 HERE = Path(__file__).parent
 
 from viral.models import GrosmarkConfig
-
 
 SERVER_PATH = Path("YOUR/SERVER/FOLDER")
 
@@ -19,6 +17,8 @@ TEMP_CACHE_PATH = SERVER_PATH / "viral_caches" / "temp_caches"
 
 # Probably true of all encoders but again may need adjusting
 ENCODER_TICKS_PER_TURN = 360
+
+LOCAL_DFF_PATH = Path("YOUR/LOCAL/FOLDER")
 
 
 # The ID of your google sheet can be found in the URL:

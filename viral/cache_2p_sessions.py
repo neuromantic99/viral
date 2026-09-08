@@ -1,32 +1,26 @@
-from datetime import datetime, timedelta
 import json
-from pathlib import Path
 import re
 import sys
 import time
 import traceback
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Tuple
-import matplotlib.pyplot as plt
+from dataclasses import replace
 
-from nptdms import TdmsFile
-from ScanImageTiffReader import ScanImageTiffReader
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from nptdms import TdmsFile
+from ScanImageTiffReader import ScanImageTiffReader
+from tqdm import tqdm
 
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-from viral.imaging_utils import (
-    extract_TTL_chunks,
-    get_sampling_rate,
-    get_imaging_crashed,
-    get_daq_crashed,
-    load_imaging_data,
-    trial_is_imaged,
-)
-
+import logging
 
 from viral.constants import (
     BEHAVIOUR_DATA_PATH,
@@ -36,20 +30,33 @@ from viral.constants import (
     TEMP_CACHE_PATH,
     TIFF_UMBRELLA,
 )
+from viral.correct_2p_sessions import apply_session_correction
 from viral.gsheets_importer import gsheet2df
-from viral.models import Cached2pSession, TrialInfo, WheelFreeze, SessionImagingInfo
+from viral.imaging_utils import (
+    extract_TTL_chunks,
+    get_daq_crashed,
+    get_imaging_crashed,
+    get_sampling_rate,
+    restrict_to_immobility,
+    trial_is_imaged,
+)
+from viral.models import Cached2pSession, SessionImagingInfo, TrialInfo, WheelFreeze
 from viral.multiple_sessions import parse_session_number
 from viral.single_session import HERE, load_data
 from viral.utils import (
+    SessionType,
     find_chunk,
+    get_movement_bool,
+    get_session_type,
     get_tiff_paths_in_directory,
+    is_ordered_subset,
     time_list_to_datetime,
     uk_to_utc,
 )
-
-from viral.correct_2p_sessions import apply_session_correction
-
-import logging
+from viral.wheel_freeze_movement import (
+    get_wheel_freeze_movement,
+    load_freeze_trials,
+)
 
 logging.basicConfig(
     filename="2p_cacher_log.log",
@@ -101,13 +108,21 @@ def add_daq_times_to_trial(
     daq_sampling_rate: int,
     wheel_freeze: WheelFreeze | None = None,
     offset_after_pre_epoch: int = 0,
+    task_sync_start: int | None = None,
+    is_freeze_session: bool = False,
 ) -> None:
+
+    # If we recorded a task for the pre-freeze, remove these syncs from the daq so
+    # only task syncs are used for the trial
+    task_sync_start = task_sync_start if task_sync_start is not None else 0
+    behaviour_times = behaviour_times[np.sum(behaviour_chunk_lens[:task_sync_start]) :]
+    behaviour_chunk_lens = behaviour_chunk_lens[task_sync_start:]
+
     trial_spacer_daq_times = behaviour_times[
         np.sum(behaviour_chunk_lens[:trial_idx]) : np.sum(
             behaviour_chunk_lens[: trial_idx + 1]
         )
     ]
-    # Sanity check the above logic
     assert len(trial_spacer_daq_times) == count_spacers(trial)
 
     trial_spacer_bpod_times = np.array(
@@ -116,7 +131,6 @@ def add_daq_times_to_trial(
 
     # Should be the first state, but verify
     assert trial_spacer_bpod_times[0] == 0
-
     # Check that the clocks are equal to the millisecond
     np.testing.assert_almost_equal(
         (trial_spacer_daq_times - trial_spacer_daq_times[0]) / daq_sampling_rate,
@@ -156,18 +170,18 @@ def add_daq_times_to_trial(
                 + offset_after_pre_epoch
             )
 
-        if wheel_freeze and not np.isnan(state.start_time):
-            assert (
-                state.closest_frame_start >= wheel_freeze.pre_training_end_frame
-                and state.closest_frame_start <= wheel_freeze.post_training_start_frame
-            ), "Behaviour signal detected in frozen wheel period"
-            assert (
-                state.closest_frame_end >= wheel_freeze.pre_training_end_frame
-                and state.closest_frame_end <= wheel_freeze.post_training_start_frame
-            ), "Behaviour signal detected in frozen wheel period"
-
         if state.name == "spacer_high_00":
             trial.trial_start_closest_frame = state.closest_frame_start
+
+    if trial_is_imaged(trial):
+        for state in trial.states_info:
+            assert_against_wheel_freeze_indices(
+                wheel_freeze, is_freeze_session, state.closest_frame_start
+            )
+
+            assert_against_wheel_freeze_indices(
+                wheel_freeze, is_freeze_session, state.closest_frame_end
+            )
 
     last_state = trial.states_info[-1]
     trial.trial_end_closest_frame = last_state.closest_frame_end
@@ -181,11 +195,36 @@ def add_daq_times_to_trial(
                 int(np.argmin(np.abs(valid_frame_times - event.start_time_daq)))
                 + offset_after_pre_epoch
             )
-        if wheel_freeze and not np.isnan(event.start_time):
-            assert (
-                event.closest_frame >= wheel_freeze.pre_training_end_frame
-                and event.closest_frame <= wheel_freeze.post_training_start_frame
-            ), "Behaviour signal detected in frozen wheel period"
+
+        if trial_is_imaged(trial):
+            assert_against_wheel_freeze_indices(
+                wheel_freeze, is_freeze_session, event.closest_frame
+            )
+
+
+def assert_against_wheel_freeze_indices(
+    wheel_freeze: WheelFreeze | None, is_freeze_session: bool, frame_time: float
+) -> None:
+    if wheel_freeze is None:
+        return
+
+    if np.isnan(frame_time):
+        return
+
+    if is_freeze_session:
+        assert (
+            frame_time >= wheel_freeze.pre_training_start_frame
+            and frame_time <= wheel_freeze.pre_training_end_frame
+        ) or (
+            frame_time >= wheel_freeze.post_training_start_frame
+            and frame_time <= wheel_freeze.post_training_end_frame
+        ), "Wheel freeze trials assigned to main task period"
+        return
+
+    assert (
+        frame_time >= wheel_freeze.pre_training_end_frame
+        and frame_time <= wheel_freeze.post_training_start_frame
+    ), "Main task trials assigned to wheel freeze period"
 
 
 def extract_frozen_wheel_chunks(
@@ -195,6 +234,7 @@ def extract_frozen_wheel_chunks(
     sampling_rate: int,
     frame_rate: int = 30,
     check_first_chunk: bool = True,
+    recorded_movement_during_freezes: bool = False,
 ) -> tuple[tuple[int, int], tuple[int, int]] | tuple[None, tuple[int, int]]:
     """Extract start and end frame index for pre-training and post-training imaging chunks.
     Args:
@@ -257,18 +297,21 @@ def extract_frozen_wheel_chunks(
         <= 20 * 60 * sampling_rate
     ), "Last chunk length does not match expected length"
 
-    if check_first_chunk:
+    # Need to disable this check with the most recent verion as
+    # we are now recording movement on the bpod during the wheel freezes
+    if check_first_chunk and not recorded_movement_during_freezes:
         assert not np.any(
             (behaviour_times >= first_chunk_times[0])
             & (behaviour_times <= first_chunk_times[-1])
         ), "Behavioural pulses detected in pre-training period!"
 
-    assert not np.any(
-        (behaviour_times >= last_chunk_times[0])
-        & (behaviour_times <= last_chunk_times[-1])
-    ), "Behavioural pulses detected in post-training period!"
+    if not recorded_movement_during_freezes:
+        assert not np.any(
+            (behaviour_times >= last_chunk_times[0])
+            & (behaviour_times <= last_chunk_times[-1])
+        ), "Behavioural pulses detected in post-training period!"
 
-    return (first_chunk, last_chunk)
+    return first_chunk, last_chunk
 
 
 def manual_wheel_freezes(
@@ -285,7 +328,9 @@ def manual_wheel_freezes(
     return None
 
 
-def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
+def get_wheel_freeze(
+    session_sync: SessionImagingInfo, recorded_movement_during_freezes: bool
+) -> WheelFreeze:
     """Get wheel freeze object."""
     # TODO: if this occurs more often, find a more elegant fix
     # manually set wheel freeze objects for crashed recordings
@@ -306,8 +351,10 @@ def get_wheel_freeze(session_sync: SessionImagingInfo) -> WheelFreeze:
         behaviour_times=session_sync.behaviour_times,
         sampling_rate=session_sync.sampling_rate,
         check_first_chunk=session_sync.offset_after_pre_epoch == 0,
+        recorded_movement_during_freezes=recorded_movement_during_freezes,
     )
     if session_sync.offset_after_pre_epoch > 0:
+        print("Using offset after pre-epoch")
         return WheelFreeze(
             pre_training_start_frame=0,
             pre_training_end_frame=session_sync.offset_after_pre_epoch,
@@ -330,11 +377,14 @@ def add_imaging_info_to_trials(
     session_sync: SessionImagingInfo,
     wheel_freeze: WheelFreeze | None = None,
     daq_crashed: bool = False,
+    is_freeze_session: bool = False,
 ) -> List[TrialInfo]:
     """Adds imaging info to trials."""
     logger.info("Adding imaging info to trials")
 
-    for idx, trial in enumerate(trials):
+    for idx, trial in tqdm(
+        enumerate(trials), desc="Adding imaging info to trials", total=len(trials)
+    ):
         # Works in place, maybe not ideal
         add_daq_times_to_trial(
             trial,
@@ -345,14 +395,19 @@ def add_imaging_info_to_trials(
             session_sync.sampling_rate,
             wheel_freeze,
             session_sync.offset_after_pre_epoch,
+            session_sync.task_sync_start,
+            is_freeze_session=is_freeze_session,
         )
 
-    for trial in trials:
+    # Leave the idx enumerate in here as it helps with debugging
+    for idx, trial in tqdm(
+        enumerate(trials), desc="Checking timestamps", total=len(trials)
+    ):
         check_timestamps(
             epochs=session_sync.epochs,
             trial=trial,
             all_tiff_timestamps=session_sync.all_tiff_timestamps,
-            chunk_lens=session_sync.chunk_lengths_daq,
+            chunk_lens=session_sync.stack_lengths_tiffs,
             valid_frame_times=session_sync.valid_frame_times,
             sampling_rate=session_sync.sampling_rate,
             daq_start_time=session_sync.daq_start_time,
@@ -378,7 +433,7 @@ def get_session_sync(
     tiff_paths = sorted(get_tiff_paths_in_directory(tiff_directory))
 
     stack_lengths_tiffs, epochs, all_tiff_timestamps = get_tiff_metadata(
-        tiff_paths=tiff_paths
+        tiff_paths=tiff_paths, use_cache=True
     )
     print("Got tiff metadata")
 
@@ -396,6 +451,7 @@ def get_session_sync(
 
     print(f"Sampling rate: {sampling_rate}")
 
+    print("Extracting TTL chunks from behaviour")
     behaviour_times, behaviour_chunk_lens = extract_TTL_chunks(
         behaviour_clock, sampling_rate
     )
@@ -405,10 +461,10 @@ def get_session_sync(
     if "JB011" in str(tdms_path) and "2024-10-22" in str(tdms_path):
         behaviour_chunk_lens = np.delete(behaviour_chunk_lens, 52)
 
-    assert np.array_equal(
-        behaviour_chunk_lens, num_spacers_per_trial
-    ), "Spacers recorded in txt file do not match sync"
+    check, start = is_ordered_subset(num_spacers_per_trial, behaviour_chunk_lens)
+    assert check, "Spacers recorded in txt file do not match sync"
 
+    print("Extracting TTL chunks from frame clock")
     frame_times_daq, chunk_lengths_daq = extract_TTL_chunks(frame_clock, sampling_rate)
 
     correction = apply_session_correction(
@@ -433,6 +489,7 @@ def get_session_sync(
 
     sanity_check_imaging_frames(frame_times_daq, sampling_rate, frame_clock)
 
+    print("Getting valid frame times")
     valid_frame_times = get_valid_frame_times(
         stack_lengths_tiffs=stack_lengths_tiffs,
         frame_times_daq=frame_times_daq,
@@ -447,7 +504,10 @@ def get_session_sync(
             valid_frame_times, np.ones(shape=sum([14200, 13000]))
         )
 
-    check_against_suite2p_output(mouse_name, date, valid_frame_times)
+    print("Checking tiff timestamps against suite2p output")
+    check_against_suite2p_output(
+        mouse_name, date, valid_frame_times, offset_after_pre_epoch
+    )
 
     # not the most beautiful solution, but works and relieves add_imaging_info_to_trials
     return SessionImagingInfo(
@@ -463,6 +523,7 @@ def get_session_sync(
         behaviour_times=behaviour_times,
         sampling_rate=sampling_rate,
         offset_after_pre_epoch=offset_after_pre_epoch,
+        task_sync_start=start,
     )
 
 
@@ -478,7 +539,7 @@ def get_valid_frame_times(
     from a completed grab).
     The reason for first extra frame is obvious (we stop the imaging mid-way through a frame so it is not saved).
     The second happens for unclear reasons but must be at the end as there are no extra frames in the middle and the first
-    frame is relaibly correct
+    frame is reliably correct
     Possible we may see a recording with one extra frame if the imaging is stopped on flyback. The error below will catch this
 
     We also now have a one recording that was not aborted (i.e. ran to 100,000 frames. The assertion below deals with this.
@@ -493,7 +554,6 @@ def get_valid_frame_times(
     for stack_len_tiff, chunk_len_daq in zip(
         stack_lengths_tiffs, chunk_lengths_daq, strict=True
     ):
-
         assert (
             chunk_len_daq - stack_len_tiff
             in {
@@ -526,7 +586,6 @@ def get_valid_frame_times(
 def get_tiff_metadata(
     tiff_paths: List[Path], use_cache: bool = True
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
     mouse_name = tiff_paths[0].parent.name
     date = tiff_paths[0].parent.parent.name
 
@@ -536,7 +595,9 @@ def get_tiff_metadata(
             stack_lengths = np.load(
                 TEMP_CACHE_PATH / f"{mouse_name}_{date}_stack_lengths.npy"
             )
-            epochs = np.load(TEMP_CACHE_PATH / f"{mouse_name}_{date}_epochs.npy")
+            epochs = np.load(
+                TEMP_CACHE_PATH / f"{mouse_name}_{date}_epochs.npy", allow_pickle=True
+            )
             all_tiff_timestamps = np.load(
                 TEMP_CACHE_PATH / f"{mouse_name}_{date}_all_tiff_timestamps.npy"
             )
@@ -554,21 +615,19 @@ def get_tiff_metadata(
     epochs = []
     all_tiff_timestamps = []
     for tiff in tiffs:
-        stack_length, epoch, tiff_timestamps = extract_metadata(tiff)
-        stack_lengths.append(stack_length)
+        _, epoch, tiff_timestamps = extract_metadata(tiff)
         epochs.append(epoch)
         all_tiff_timestamps.extend(tiff_timestamps)
         check_no_dropped_frames(tiff_timestamps)
 
-    if use_cache:
-        for variable, name in zip(
-            [stack_lengths, all_tiff_timestamps, epochs],
-            ["stack_lengths", "all_tiff_timestamps", "epochs"],
-        ):
-            np.save(
-                TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
-                variable,
-            )
+    for variable, name in zip(
+        [stack_lengths, all_tiff_timestamps, epochs],
+        ["stack_lengths", "all_tiff_timestamps", "epochs"],
+    ):
+        np.save(
+            TEMP_CACHE_PATH / f"{mouse_name}_{date}_{name}.npy",
+            variable,
+        )
 
     return stack_lengths, epochs, all_tiff_timestamps
 
@@ -642,7 +701,6 @@ def check_timestamps(
     chunk_start = uk_to_utc(time_list_to_datetime(epochs[epoch_trial]))
 
     for frame in range(first_frame_trial, last_frame_trial):
-
         # The time in the tiff. Not sure if this is the end or the start of the tiff
         frame_datetime = chunk_start + timedelta(seconds=all_tiff_timestamps[frame])
         frame_daq_time = daq_start_time + timedelta(
@@ -651,14 +709,16 @@ def check_timestamps(
 
         offset = (frame_datetime - frame_daq_time).total_seconds()
 
-        # Allow for some drift up to 15ms
-        # Take into account that the recording in wheel block is 1.5x longer,
-        # i.e. one minute into the behaviour is at least 15 mins into the entire session
-        increase_offset_allowance_time = 30 if not wheel_blocked else 50
-        if trial.trial_start_time / 60 < increase_offset_allowance_time:
-            assert abs(offset) <= 0.02, "Tiff timestamp does not match daq timestamp"
+        # Allow for some drift up to 20 ms at the start and 50ms at the end
+        # The clocks do drift slightly but if we're within 50ms at the end
+        # We have almost definitely asigned to the correct frames
+        increase_offset_allowance_time = 30
+        if frame / 60 / 30 < increase_offset_allowance_time:
+            assert abs(offset) <= 0.1, "Tiff timestamp does not match daq timestamp"
         else:
-            assert abs(offset) <= 0.025, "Tiff timestamp does not match daq timestamp"
+            # Probably ideally this would be a bit lower, but drifting by one frame
+            # is probably ok. And it's just the timestamp, the actual frame match should be ok
+            assert abs(offset) <= 0.2, "Tiff timestamp does not match daq timestamp"
 
 
 def process_session(
@@ -669,6 +729,7 @@ def process_session(
     date: str,
     session_type: str,
     wheel_blocked: bool,
+    row: pd.Series,
 ) -> None:
     print(f"Off we go for {mouse_name} {date} {session_type}")
     imaging_crashed = get_imaging_crashed(mouse_name, date)
@@ -688,14 +749,50 @@ def process_session(
         imaging_crashed=imaging_crashed,
     )
 
+    print("Got session sync")
+    recorded_movement_during_freezes = "Session Number pre-freeze" in row
+
     manual = manual_wheel_freezes(mouse_name, date, session_sync)
     wheel_freeze = (
         manual
         if manual is not None
-        else get_wheel_freeze(session_sync) if wheel_blocked else None
+        else (
+            get_wheel_freeze(session_sync, recorded_movement_during_freezes)
+            if wheel_blocked
+            else None
+        )
     )
 
-    trials = add_imaging_info_to_trials(trials, session_sync, wheel_freeze, daq_crashed)
+    print("got wheel freeze")
+
+    trials_pre_freeze, trials_post_freeze = load_synced_freeze_sessions(
+        mouse_name=mouse_name,
+        date=date,
+        row=row,
+        daq_crashed=daq_crashed,
+        session_sync=session_sync,
+        wheel_freeze=wheel_freeze,
+    )
+
+    if wheel_blocked and wheel_freeze is not None:
+        movement_pre_freeze, movement_post_freeze, freeze_movement_type = (
+            get_wheel_freeze_movement(
+                wheel_freeze=wheel_freeze,
+                row=row,
+                mouse_name=mouse_name,
+                date=date,
+                trials_pre_freeze=trials_pre_freeze,
+                trials_post_freeze=trials_post_freeze,
+            )
+        )
+
+    trials = add_imaging_info_to_trials(
+        trials=trials,
+        session_sync=session_sync,
+        wheel_freeze=wheel_freeze,
+        daq_crashed=daq_crashed,
+        is_freeze_session=False,
+    )
 
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "w") as f:
         json.dump(
@@ -704,7 +801,20 @@ def process_session(
                 date=date,
                 trials=trials,
                 session_type=session_type,
-                wheel_freeze=wheel_freeze,
+                # Could it be more obvious that we changed the datastructure after the code was written?
+                wheel_freeze=(
+                    wheel_freeze.model_copy(
+                        update={
+                            "trials_pre_freeze": trials_pre_freeze,
+                            "trials_post_freeze": trials_post_freeze,
+                            "movement_pre_freeze": movement_pre_freeze.tolist(),
+                            "movement_post_freeze": movement_post_freeze.tolist(),
+                            "freeze_movement_type": freeze_movement_type,
+                        }
+                    )
+                    if wheel_freeze is not None
+                    else None
+                ),
             ).model_dump(),
             f,
         )
@@ -712,37 +822,166 @@ def process_session(
     print(f"Done for {mouse_name} {date} {session_type}")
 
 
+def load_synced_freeze_sessions(
+    mouse_name: str,
+    date: str,
+    row: pd.Series,
+    daq_crashed: bool,
+    session_sync: SessionImagingInfo,
+    wheel_freeze: WheelFreeze | None,
+) -> tuple[list[TrialInfo] | None, list[TrialInfo] | None]:
+
+    pre_freeze_trials, post_freeze_trials = load_freeze_trials(mouse_name, date, row)
+    if pre_freeze_trials is None or post_freeze_trials is None:
+        # TODO: case where one exists but one does not
+        return None, None
+
+    result = []
+    for freeze_type, trials in zip(
+        ["pre", "post"], [pre_freeze_trials, post_freeze_trials]
+    ):
+
+        num_spacers_per_trial = np.array([count_spacers(trial) for trial in trials])
+        if freeze_type == "post":
+            # I sometimes stop the daq before I stop the post-freeze task.
+            # So some trials are recorded as jsons but not in the daq.
+            # Should have the first 15 minutes though, so correct that here
+            check, start = is_ordered_subset(
+                num_spacers_per_trial[:30], session_sync.behaviour_chunk_lens
+            )
+            assert (
+                check and start is not None
+            ), "Spacers recorded in txt file do not match sync"
+            num_trials_in_daq = (
+                len(session_sync.behaviour_chunk_lens)
+                - start
+                # Stopped in the middle of the spacers on this session
+                - (1 if mouse_name == "J037" and date == "2026-07-14" else 0)
+            )
+            trials = trials[:num_trials_in_daq]
+            print(f"Post-freeze trials truncated to {num_trials_in_daq}")
+
+        else:
+            check, start = is_ordered_subset(
+                num_spacers_per_trial, session_sync.behaviour_chunk_lens
+            )
+            assert check, "Spacers recorded in txt file do not match sync"
+
+        # Utterly filthy mutation of session sync,
+        # but it saves a complete re-write or loading big files three times.
+        # Doesn't mutate the original.
+        session_sync_freeze = replace(session_sync, task_sync_start=start)
+
+        trials = add_imaging_info_to_trials(
+            trials,
+            session_sync_freeze,
+            wheel_freeze,
+            daq_crashed,
+            is_freeze_session=True,
+        )
+        result.append(trials)
+
+    return result[0], result[1]
+
+
 def check_against_suite2p_output(
-    mouse: str, date: str, valid_frame_times: np.ndarray
+    mouse: str,
+    date: str,
+    valid_frame_times: np.ndarray,
+    offset_after_pre_epoch: int = 0,
 ) -> None:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     # Just check the fluoresence shape. We need to cache before we run
     # oasis now, so it doesn't make sense to look at the spikes too
     f = np.load(s2p_path / "F.npy")
-    assert len(valid_frame_times) == f.shape[1]
+    assert (
+        len(valid_frame_times) == f.shape[1] - offset_after_pre_epoch
+    ), "Valid frame times do not match suite2p output"
+
+
+ALL_MICE = [
+    # "JB011",
+    # "JB012",
+    # "JB013",
+    # "JB014",
+    # "JB015",
+    # "JB016",
+    # "JB017",
+    # "JB018",
+    # "JB019",
+    # "JB020",
+    # "JB021",
+    # "JB022",
+    # "JB023",
+    # "JB024",
+    # "JB025",
+    # "JB026",
+    # "JB027",
+    # "JB030",
+    # "JB031",
+    # "JB032",
+    # "JB033",
+    # "JB034",
+    # "JB035",
+    # "JB036",
+    # "J030",
+    # "J031",
+    # "J032",
+    # "J035",
+    "J034",
+    # "J037",
+    # "J038",
+]
 
 
 def main() -> None:
-    """TODO: Can probably deprecate this as it's superceded by learning_stages.py"""
-
-    # for mouse_name in ["JB017", "JB019", "JB020", "JB021", "JB022", "JB023"]:
     redo = True
-    for mouse_name in ["JB036"]:
+    # for mouse_name in ["JB030"]:
+    # Toggle whether the try catch throws or not without commenting it
+    debug = True
+
+    for mouse_name in ALL_MICE:
         metadata = gsheet2df(SPREADSHEET_ID, mouse_name, 1)
         for _, row in metadata.iterrows():
             try:
                 print(f"The type is {row['Type']}")
                 date = row["Date"]
                 session_type = row["Type"].lower()
+                if "Analyse" in row and row["Analyse"] == "FALSE":
+
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} as Analyse is FALSE"
+                    )
+                    continue
+
+                if (
+                    not session_type.lower().startswith("learning")
+                    and not session_type.lower().startswith("reversal")
+                    and not session_type.lower().startswith("unsupervised")
+                ):
+                    print(
+                        f"Skipping {mouse_name} {date} {session_type} cos cba with these session rn"
+                    )
+                    continue
+
                 try:
-                    wheel_blocked = row["Wheel blocked?"].lower() == "yes"
+                    wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
                 except KeyError as e:
-                    print(f"No column 'Wheel blocked?' found: {e}")
+                    print(f"No column 'Wheel blocked?' Error is: {e}")
                     print("Wheel blocked set to None")
                     wheel_blocked = None
+
                 if not redo and (CACHE_PATH / f"{mouse_name}_{date}.json").exists():
-                    print(f"Skipping {mouse_name} {date} as already exists")
-                    continue
+                    previous = Cached2pSession.model_validate_json(
+                        (CACHE_PATH / f"{mouse_name}_{date}.json").read_text()
+                    )
+                    # Logic to get the new wheel freeze movement data out of existing sessions
+                    if previous.wheel_freeze is None:
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
+                    elif previous.wheel_freeze.freeze_movement_type is not None:
+                        print(f"Skipping {mouse_name} {date} as already exists")
+                        continue
 
                 if "learning" not in session_type:
                     print(f"Skipping {mouse_name} {date} {session_type}")
@@ -775,11 +1014,14 @@ def main() -> None:
                     session_type=session_type,
                     date=date,
                     wheel_blocked=wheel_blocked,
+                    row=row,
                 )
                 logger.info(
                     f"Completed processing for {mouse_name} {date} {session_type}"
                 )
             except Exception as e:
+                if debug:
+                    raise
                 tb = traceback.extract_tb(e.__traceback__)
                 last_trace = tb[
                     -1
@@ -794,5 +1036,115 @@ def main() -> None:
                 print(full_tb)
 
 
+def fix_broken_wheel_movement() -> None:
+    existing_sessions = list(CACHE_PATH.glob("*.json"))
+    mice = set(session_file.stem.split("_")[0] for session_file in existing_sessions)
+    metadata_dict = {mouse: gsheet2df(SPREADSHEET_ID, mouse, 1) for mouse in mice}
+    checked_already_file = "checked_already.txt"
+    for session_file in existing_sessions:
+        mouse = session_file.stem.split("_")[0]
+        date = session_file.stem.split("_")[1]
+
+        if date == "2026-05-15" and mouse == "J030":
+            print("Skipping this for now, it's being recached")
+            continue
+        with open(checked_already_file, "r") as f:
+            checked_already = f.read().splitlines()
+        if f"{mouse} {date}" in checked_already:
+            print(f"Skipping {mouse} {date} as already checked")
+            continue
+        metadata = metadata_dict[mouse]
+
+        row = metadata.loc[metadata["Date"] == date].iloc[0]
+        session_type = row["Type"].lower()
+        if not session_type.startswith("learning") and not session_type.startswith(
+            "reversal"
+        ):
+            print(f"Skipping {mouse} {date} as not learning or reversal")
+            with open(checked_already_file, "a") as f:
+                f.write(f"{mouse} {date}\n")
+            continue
+
+        session = Cached2pSession.model_validate_json(session_file.read_text())
+        if session.wheel_freeze is None:
+            if "Wheel blocked?" not in row:
+                print(f"Skipping {session.mouse_name} {session.date} as no wheel info")
+                with open(checked_already_file, "a") as f:
+                    f.write(f"{mouse} {date}\n")
+                continue
+            wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+            if not wheel_blocked:
+                print(
+                    f"Skipping {session.mouse_name} {session.date} as wheel not blocked"
+                )
+                with open(checked_already_file, "a") as f:
+                    f.write(f"{mouse} {date}\n")
+                continue
+        try:
+            get_movement_bool(wheel_freeze=session.wheel_freeze)
+            # Check whether there's now a pupil where there wasn't before.
+            if session.wheel_freeze.freeze_movement_type == "rotary_encoder" and row[
+                "Pupil pre-freeze"
+            ].endswith(".mp4"):
+                print(
+                    f"Fixing {session.mouse_name} {session.date} as pupil is now present"
+                )
+            else:
+                print(
+                    f"Skipping {session.mouse_name} {session.date} as movement bool is fine"
+                )
+                with open(checked_already_file, "a") as f:
+                    f.write(f"{mouse} {date}\n")
+                continue
+        except (AssertionError, IndexError):
+            print(
+                f"Fixing {session.mouse_name} {session.date} as movement bool is broken"
+            )
+
+        print(f"Fixing {session.mouse_name} {session.date}")
+        trials_pre_freeze, trials_post_freeze = load_synced_freeze_sessions(
+            mouse_name=session.mouse_name,
+            date=session.date,
+            row=row,
+            daq_crashed=get_daq_crashed(session.mouse_name, session.date),
+            session_sync=get_session_sync(
+                tdms_path=SYNC_FILE_PATH / Path(row["Sync file"]),
+                mouse_name=session.mouse_name,
+                date=session.date,
+                tiff_directory=TIFF_UMBRELLA / session.date / session.mouse_name,
+                trials=session.trials,
+                imaging_crashed=get_imaging_crashed(session.mouse_name, session.date),
+            ),
+            wheel_freeze=session.wheel_freeze,
+        )
+        movement_pre_freeze, movement_post_freeze, freeze_movement_type = (
+            get_wheel_freeze_movement(
+                wheel_freeze=session.wheel_freeze,
+                row=row,
+                mouse_name=session.mouse_name,
+                date=session.date,
+                trials_pre_freeze=trials_pre_freeze,
+                trials_post_freeze=trials_post_freeze,
+            )
+        )
+        new_wheel_freeze = session.wheel_freeze.model_copy(
+            update={
+                "trials_pre_freeze": trials_pre_freeze,
+                "trials_post_freeze": trials_post_freeze,
+                "movement_pre_freeze": movement_pre_freeze.tolist(),
+                "movement_post_freeze": movement_post_freeze.tolist(),
+                "freeze_movement_type": freeze_movement_type,
+            }
+        )
+        new_session = session.model_copy(update={"wheel_freeze": new_wheel_freeze})
+
+        # Make sure it works
+        get_movement_bool(wheel_freeze=new_session.wheel_freeze)
+        with open(checked_already_file, "a") as f:
+            f.write(f"{mouse} {date}\n")
+        with open(session_file, "w") as f:
+            json.dump(new_session.model_dump(), f)
+
+
 if __name__ == "__main__":
-    main()
+    fix_broken_wheel_movement()

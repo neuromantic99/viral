@@ -25,6 +25,7 @@ import matplotlib
 
 matplotlib.rcParams["pdf.fonttype"] = 42
 import numpy as np
+from viral.nlgf.style import GENOTYPE_COLOURS
 from viral.gsheets_importer import gsheet2df
 from viral.single_session import (
     get_binned_licks,
@@ -32,15 +33,25 @@ from viral.single_session import (
     remove_bad_trials,
     summarise_trial,
 )
-from viral.constants import BEHAVIOUR_DATA_PATH, HERE, SPREADSHEET_ID
+from viral.constants import BEHAVIOUR_DATA_PATH, CACHE_PATH, HERE, SPREADSHEET_ID
 from viral.models import (
+    Cached2pSession,
     MouseSummary,
     SessionSummary,
+    TrialInfo,
     TrialSummary,
     MultipleSessionsConfig,
 )
+from viral.imaging_utils import (
+    get_ITI_start_frame,
+    get_session_n_frames,
+    trial_is_imaged,
+)
 from viral.utils import (
+    SessionType,
+    below_threshold_for_n_consecutive_samples,
     d_prime,
+    degrees_to_cm,
     get_genotype,
     get_wheel_circumference_from_rig,
     shaded_line_plot,
@@ -49,11 +60,258 @@ from viral.utils import (
     get_session_type,
     get_rewarded_texture,
 )
+from viral.imaging_utils import compute_speed_grosmark
 
 import seaborn as sns
 import pandas as pd
 
-sns.set_theme(context="talk", style="ticks")
+sns.set_theme(context="poster", style="ticks")
+
+
+def get_iti_still_frames(
+    session: Cached2pSession,
+    speed_threshold: float = 3.0,
+    n_consecutive_samples: int = 3 * 30,
+    exclude_start_seconds: float = 3.0,
+    lick_pad_frames: int = 15,
+    fs: int = 30,
+) -> Tuple[np.ndarray, pd.DataFrame]:
+    """Frames during the inter-trial interval in which the mouse was genuinely still.
+
+    The ITI is 20 s (598-600 frames), so a session of 40-100 trials carries 13-33
+    minutes of in-task quiescence - as much offline data as a freeze block, and
+    interleaved with the experience rather than bracketing it. That makes it usable for
+    reactivation analyses in the many sessions with no wheel freeze.
+
+    Three exclusions, all of which matter:
+
+    exclude_start_seconds drops the beginning of each ITI. GCaMP decays with a time
+    constant near 0.7 s, so running-evoked calcium bleeds several seconds past the end of
+    the trial; without this, apparent offline activity is partly the tail of the run.
+    Three seconds is about four time constants. It also removes reward delivery and the
+    arousal transient that follows it, which sit at the ITI start.
+
+    Licking is excluded with a pad either side, since lick bouts carry their own motor
+    and reward signals.
+
+    Stillness uses Grosmark's definition, matching get_resting_position_and_frames:
+    velocity below 3 cm/s for at least 3 consecutive seconds. It is applied per frame
+    rather than as a per-trial exclusion, because a few moving frames are far more
+    common than a whole ITI of running and a few is all it takes to contaminate a
+    correlation.
+
+    Worth running once at a stricter threshold as a sensitivity check - if the result
+    moves, movement is driving it.
+
+    The mask spans the whole session, so it indexes the neural array directly:
+
+        dff, spks, _ = load_imaging_data(mouse, date)
+        mask, per_trial = get_iti_still_frames(session)
+        quiescent = spks[:, mask]
+
+    Its length is read from the .npy header on the server by get_session_n_frames,
+    which costs one small read rather than pulling a multi-gigabyte array across the
+    network - so the frame budget can be checked across the whole cohort without
+    loading any imaging data.
+
+    The length is not inferred from the trials, because the recording continues past the
+    last trial - a long way past on a freeze session - so a trial-derived length would
+    be short and every downstream index would misalign silently.
+
+    Returns a boolean mask over the session's frames, and a per-trial frame budget so
+    you can see what was retained. Check the retained fraction by genotype before
+    comparing groups: if one group fidgets more it contributes less data AND different
+    data.
+    """
+    n_frames = get_session_n_frames(session.mouse_name, session.date)
+
+    mask = np.zeros(n_frames, dtype=bool)
+    records = []
+    max_frame_seen = -1
+
+    wheel_circumference = get_wheel_circumference_from_rig("2P")
+    exclude_start_frames = int(exclude_start_seconds * fs)
+
+    for idx, trial in enumerate(session.trials):
+        if not trial_is_imaged(trial):
+            continue
+
+        try:
+            iti_start = get_ITI_start_frame(trial)
+        except ValueError:
+            continue
+
+        iti_end = trial.trial_end_closest_frame
+        if iti_end is None:
+            continue
+        iti_end = int(iti_end)
+
+        position = degrees_to_cm(
+            np.array(trial.rotary_encoder_position), wheel_circumference
+        )
+        frame_position = np.array(
+            [
+                state.closest_frame_start
+                for state in trial.states_info
+                if state.name
+                in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+            ]
+        )
+        if len(position) != len(frame_position) or len(position) < 2:
+            continue
+
+        still = below_threshold_for_n_consecutive_samples(
+            compute_speed_grosmark(position),
+            threshold=speed_threshold,
+            n_samples=n_consecutive_samples,
+        )
+
+        # Frames sampled during the ITI, past the calcium-bleed exclusion
+        in_iti = (frame_position >= iti_start + exclude_start_frames) & (
+            frame_position <= iti_end
+        )
+
+        max_frame_seen = max(max_frame_seen, iti_end)
+
+        # Every count below is unique IMAGING FRAMES, so the columns subtract from one
+        # another. The behavioural samples these come from can be denser than the frame
+        # rate, so counting samples for one column and frames for another would make the
+        # per-stage costs uninterpretable.
+        def in_bounds(frames: np.ndarray) -> np.ndarray:
+            frames = np.unique(frames).astype(int)
+            return frames[(frames >= 0) & (frames < n_frames)]
+
+        scored_frames = in_bounds(frame_position[in_iti])
+        still_frames = in_bounds(frame_position[in_iti & still])
+
+        lick_frames = _lick_frames(trial, pad=lick_pad_frames)
+        keep_frames = (
+            still_frames[~np.isin(still_frames, lick_frames)]
+            if lick_frames.size
+            else still_frames
+        )
+
+        mask[keep_frames] = True
+
+        records.append(
+            {
+                "trial": idx,
+                "rewarded": trial.texture_rewarded,
+                "iti_frames": iti_end - iti_start,
+                "scored_frames": scored_frames.size,
+                "still_frames": still_frames.size,
+                "retained_frames": keep_frames.size,
+                "retained_seconds": keep_frames.size / fs,
+                # kept so the retained frames can be split by the trial they follow
+                "frames": keep_frames,
+            }
+        )
+
+    # Catches a session whose behavioural frame indices run past the imaging data,
+    # which means the cache and the suite2p output disagree about the recording
+    assert max_frame_seen < n_frames, (
+        f"{session.mouse_name} {session.date}: trial frames run to {max_frame_seen} but "
+        f"the imaging data has only {n_frames} frames"
+    )
+
+    return mask, pd.DataFrame(records)
+
+
+def _lick_frames(trial: TrialInfo, pad: int) -> np.ndarray:
+    """Frames spanned by lick bouts, padded either side.
+
+    Port1In and Port1Out are not guaranteed to pair up - a trial can end mid-lick - so
+    they are zipped only as far as the shorter of the two rather than with strict=True.
+    """
+    onsets = [
+        event.closest_frame for event in trial.events_info if event.name == "Port1In"
+    ]
+    offsets = [
+        event.closest_frame for event in trial.events_info if event.name == "Port1Out"
+    ]
+
+    frames: List[int] = []
+    for onset, offset in zip(onsets, offsets):
+        if onset is None or offset is None:
+            continue
+        frames.extend(range(int(onset) - pad, int(offset) + pad + 1))
+
+    return np.array(sorted(set(frames)), dtype=int)
+
+
+def iti_masks_by_trial_type(
+    per_trial: pd.DataFrame, n_frames: int
+) -> Dict[str, np.ndarray]:
+    """Split retained ITI frames by whether the trial they FOLLOW was rewarded.
+
+    This is the frame-split design, and it exists because the template split does not
+    survive contact with the data: each split template is built from half the running
+    bouts, so it frequently yields zero significant components and the session drops out
+    of the comparison entirely.
+
+    Splitting the frames instead costs nothing - the ensembles are still built from all
+    the running data - and it asks a question generic online-offline coupling cannot
+    answer. Coupling is a static property of the cells and is identical in both frame
+    subsets, so it cannot produce a difference between them. A difference means the
+    offline period is expressing something about the trial that just happened.
+
+    Note what each contrast buys. With the "all" template this is a main effect: is
+    reactivation stronger after reward? (Real and published - Singer and Frank - but
+    explicable by arousal.) The content-specificity claim needs the interaction, which
+    needs the split templates too, so both are emitted where both exist.
+    """
+    masks = {}
+    for label, is_rewarded in (("rewarded", True), ("unrewarded", False)):
+        mask = np.zeros(n_frames, dtype=bool)
+        for frames in per_trial.loc[per_trial["rewarded"] == is_rewarded, "frames"]:
+            mask[frames] = True
+        masks[label] = mask
+    return masks
+
+
+def report_iti_still_frames(
+    session: Cached2pSession,
+    speed_threshold: float = 3.0,
+    n_consecutive_samples: int = 3 * 30,
+    exclude_start_seconds: float = 3.0,
+    lick_pad_frames: int = 15,
+    fs: int = 30,
+) -> pd.DataFrame:
+    """Print the ITI frame budget for one session and return the per-trial breakdown."""
+    mask, per_trial = get_iti_still_frames(
+        session,
+        speed_threshold=speed_threshold,
+        n_consecutive_samples=n_consecutive_samples,
+        exclude_start_seconds=exclude_start_seconds,
+        lick_pad_frames=lick_pad_frames,
+        fs=fs,
+    )
+
+    if per_trial.empty:
+        print(f"{session.mouse_name} {session.date}: no imaged trials with an ITI")
+        return per_trial
+
+    total_iti = per_trial["iti_frames"].sum()
+    scored = per_trial["scored_frames"].sum()
+    still = per_trial["still_frames"].sum()
+    retained = per_trial["retained_frames"].sum()
+
+    minutes = lambda frames: frames / fs / 60
+    print(
+        f"{session.mouse_name} {session.date} ({session.session_type}): "
+        f"{len(per_trial)} imaged trials\n"
+        f"  ITI total            {minutes(total_iti):6.1f} min\n"
+        f"  after start cut      {minutes(scored):6.1f} min  "
+        f"(-{minutes(total_iti - scored):.1f} min to calcium bleed and reward)\n"
+        f"  still                {minutes(still):6.1f} min  "
+        f"(-{minutes(scored - still):.1f} min to movement)\n"
+        f"  retained             {minutes(retained):6.1f} min  "
+        f"(-{minutes(still - retained):.1f} min to licking)\n"
+        f"  = {retained / total_iti:.1%} of the ITI, median "
+        f"{per_trial['retained_seconds'].median():.1f} s per trial of "
+        f"{per_trial['iti_frames'].median() / fs:.0f} s"
+    )
+    return per_trial
 
 
 def parse_session_number(session_number: str) -> List[str]:
@@ -325,7 +583,7 @@ def plot_rolling_performance(
             horizontalalignment="right",
             verticalalignment="center",
             color="gray",
-            fontsize=12,
+            fontsize=18,
             weight="bold",
             clip_on=True,
         )
@@ -610,6 +868,9 @@ def plot_performance_summaries(
     group_by: list[str],
     config: MultipleSessionsConfig,
 ) -> None:
+
+    GENOTYPE_COLOURS
+
     rolling_performance_dict = create_metric_dict(
         mice,
         rolling_performance,
@@ -645,7 +906,9 @@ def plot_performance_summaries(
     plt.figure()
     plt.ylabel("Trials to criterion")
     plt.title(session_type.replace("_", " ").capitalize())
-    sns.boxplot(to_plot, showfliers=False)
+    sns.boxplot(
+        to_plot, showfliers=False, palette=GENOTYPE_COLOURS, hue_order=["WT", "NLGF"]
+    )
     ax = plt.gca()
     new_labels = [
         label.get_text()
@@ -653,45 +916,70 @@ def plot_performance_summaries(
         .replace("_", "\n")
         for label in ax.get_xticklabels()
     ]
-    ax.set_xticklabels(new_labels, fontsize=12)
-    sns.stripplot(to_plot, edgecolor="black", linewidth=1)
+    ax.set_xticklabels(new_labels)
+    sns.stripplot(
+        to_plot,
+        edgecolor="black",
+        linewidth=1,
+        palette=GENOTYPE_COLOURS,
+        hue_order=["WT", "NLGF"],
+    )
 
     nlgf_vs_wt = stats.ttest_ind(
         to_plot["NLGF"],
         to_plot["WT"],
     )
-    wt_vs_oligo = stats.ttest_ind(
-        to_plot["WT"],
-        to_plot["Oligo-BACE1-KO"],
-    )
     print(f"NLGF vs WT: {nlgf_vs_wt.pvalue:.3f}")
-    print(f"WT vs Oligo-BACE1-KO: {wt_vs_oligo.pvalue:.3f}")
 
     # Add statistical significance annotations
+    offset = 30
     plt.text(
         0.5,
-        max(max(to_plot["NLGF"]), max(to_plot["WT"])) + 1,
-        f"p={nlgf_vs_wt.pvalue:.3f}",
+        max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset,
+        f"p = {nlgf_vs_wt.pvalue:.2f}",
         ha="center",
-        fontsize=12,
+        fontsize=18,
     )
-    plt.text(
-        1.5,
-        max(max(to_plot["WT"]), max(to_plot["Oligo-BACE1-KO"])) + 1,
-        f"p={wt_vs_oligo.pvalue:.3f}",
-        ha="center",
-        fontsize=12,
+
+    # Add the horizontaol line underneath the significance annotation
+    plt.hlines(
+        y=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 5,
+        xmin=0,
+        xmax=1,
+        color="black",
+        linewidth=1,
     )
+
+    # and the vertical lines connecting the boxes to the horizontal line
+    plt.vlines(
+        x=0,
+        ymin=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 5,
+        ymax=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 15,
+        color="black",
+        linewidth=1,
+    )
+    plt.vlines(
+        x=1,
+        ymin=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 5,
+        ymax=max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset - 15,
+        color="black",
+        linewidth=1,
+    )
+
+    # plt.ylim(0, max(max(to_plot["NLGF"]), max(to_plot["WT"])) + offset + 30)
+    plt.ylim(0, 470)
 
     sns.despine()
     plt.tight_layout()
     group_suffix = "-".join(group_by)
-    plt.savefig(
-        HERE.parent
-        / "plots"
-        / f"behaviour-summaries-{group_suffix}-{session_type}.pdf",
-        dpi=300,
-    )
+
+    for extension in ["png", "pdf"]:
+        plt.savefig(
+            HERE.parent
+            / "plots"
+            / f"behaviour-summaries-{group_suffix}-{session_type}.{extension}",
+            dpi=300,
+        )
     plt.show()
 
 
@@ -724,18 +1012,18 @@ def plot_mouse_performance(mouse: MouseSummary, config: MultipleSessionsConfig) 
             "excluded_session_types": ["reversal", "recall", "recall_reversal"],
             "colour": sns.color_palette()[0],
         },
-        {
-            "name": "recall",
-            "label": "Memory\nRecall\nStarts",
-            "excluded_session_types": ["recall", "recall_reversal"],
-            "colour": sns.color_palette()[1],
-        },
-        {
-            "name": "recall_reversal",
-            "label": "Recall\nReversal\nStarts",
-            "excluded_session_types": ["recall_reversal"],
-            "colour": sns.color_palette()[2],
-        },
+        # {
+        #     "name": "recall",
+        #     "label": "Memory\nRecall\nStarts",
+        #     "excluded_session_types": ["recall", "recall_reversal"],
+        #     "colour": sns.color_palette()[1],
+        # },
+        # {
+        #     "name": "recall_reversal",
+        #     "label": "Recall\nReversal\nStarts",
+        #     "excluded_session_types": ["recall_reversal"],
+        #     "colour": sns.color_palette()[2],
+        # },
     ]
     for phase in phases:
         num_to_x = get_num_to_x(
@@ -752,12 +1040,21 @@ def plot_mouse_performance(mouse: MouseSummary, config: MultipleSessionsConfig) 
             2,
             phase["label"],
             color=phase["colour"],
-            fontsize=15,
+            fontsize=18,
         )
     plt.axhline(1, color="red", linestyle="dotted", alpha=0.7, linewidth=1.5)
+    plt.text(
+        5,
+        1.05,
+        "Criterion",
+        color="red",
+        fontsize=18,
+    )
     plt.title(mouse.name)
     plt.tight_layout()
+    sns.despine()
     plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.svg", dpi=300)
+    plt.savefig(HERE.parent / "plots" / f"{mouse.name}-performance.png", dpi=300)
     plt.show()
 
 
@@ -851,15 +1148,85 @@ def plot_learning_metric_first_x_trials(
     plt.show()
 
 
+def session_counter() -> None:
+    possible_mice = [f"JB{i:03d}" for i in range(1, 39)] + [
+        f"J{i:03d}" for i in range(30, 39)
+    ]
+    all_mice = {"WT": [], "NLGF": []}
+    session_types = [session_type.value for session_type in SessionType]
+    for mouse_name in possible_mice:
+        try:
+            genotype = get_genotype(mouse_name)
+            if genotype in all_mice:
+                all_mice[genotype].append(mouse_name)
+        except ValueError:
+            pass
+
+    freeze_counts = {
+        "WT": {k: 0 for k in session_types},
+        "NLGF": {k: 0 for k in session_types},
+    }
+    for genotype, mice in all_mice.items():
+        for mouse in mice:
+            metadata = gsheet2df(SPREADSHEET_ID, mouse, 1)
+            if "Wheel blocked?" not in metadata.columns:
+                print(f"Mouse {mouse} does not have 'Wheel blocked?' column")
+                continue
+            for _, row in metadata.iterrows():
+                type_check = row["Type"].lower()
+                try:
+                    session_type = get_session_type(session_name=type_check)
+                except ValueError:
+                    print(
+                        f"Mouse {mouse} has an unrecognized session type: {type_check}"
+                    )
+                    continue
+
+                wheel_blocked = row["Wheel blocked?"].lower() in {"yes", "true"}
+                freeze_counts[genotype][session_type] += 1
+
+
+def iti_still_frames_all_mice() -> None:
+    cache_files = list(CACHE_PATH.glob("*.json"))
+
+    summary = {}
+
+    for file in cache_files:
+        session = Cached2pSession.model_validate_json(file.read_text())
+
+        if "trigger_panda_ITI" not in set(
+            [state.name for state in session.trials[0].states_info]
+        ):
+            continue
+        print(f"Processing {session.mouse_name} {session.date}")
+
+        per_trial = report_iti_still_frames(session)
+        genotype = get_genotype(session.mouse_name)
+        if genotype not in summary:
+            summary[genotype] = []
+        summary[genotype].append(per_trial)
+
+    collapsed = {k: [] for k in summary.keys()}
+    for genotype, per_trial_list in summary.items():
+        collapsed[genotype].extend(
+            [
+                per_trial["retained_seconds"].median()
+                for per_trial in per_trial_list
+                if "retained_seconds" in per_trial
+            ]
+        )
+    1 / 0
+
+
 if __name__ == "__main__":
 
     mice: List[MouseSummary] = []
 
-    redo = True
+    redo = False
 
     config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
-    for mouse_name in {
+    for mouse_name in [
         "JB011",
         "JB012",
         "JB013",
@@ -884,9 +1251,20 @@ if __name__ == "__main__":
         "JB034",
         "JB035",
         "JB036",
-    }:
+        "J030",
+        "J031",
+        "J032",
+        "J035",
+        "J034",
+        "J036",
+        "J037",
+        "J038",
+    ]:
 
         print(f"\nProcessing {mouse_name}...")
+        # if not get_genotype(mouse_name) in {"WT", "NLGF"}:
+        # continue
+
         if redo:
             cache_mouse(mouse_name)
             mice.append(load_cache(mouse_name))
@@ -901,12 +1279,17 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
+    # for s in ["learning", "reversal"]:
+    #     plot_performance_summaries(mice, s, ["genotype"], config=config)
+
+    plot_mouse_performance(mice[-7], config=config)
+
+    # plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
 
     # plot_mouse_performance(mice[0], config=config)
-    plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    plot_mouse_performance(mice[0], config=config)
+    # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
+    # for mouse in mice:
+    #     plot_mouse_performance(mouse, config=config)
     # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
     # ## Probably not interesting as related to speed
     # plot_trial_time_summaries(mice, "learning")

@@ -44,6 +44,7 @@ npTDMS==1.10.0
 numpy==2.2.3
 oauthlib==3.2.2
 opt_einsum==3.4.0
+opencv_python==4.13.0.92
 osqp==1.0.4
 packaging==24.2
 pandas==2.2.3
@@ -76,7 +77,6 @@ setuptools==80.9.0
 six==1.17.0
 stack-data==0.6.3
 statsmodels==0.14.5
-threadpoolctl==3.5.0
 tornado==6.4.2
 threadpoolctl==3.6.0
 tifffile==2025.12.20
