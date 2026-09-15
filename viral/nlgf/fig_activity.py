@@ -2,7 +2,7 @@
 
 Layout follows the logic of the test rather than the data:
   row 1  firing rate, in quiescence (clean) and running (speed-confounded)
-  row 2  synchrony, on absolute-scale measures, with Chang's SCE rate last and
+  row 2  synchrony, on absolute-scale measures, with the synchronous-event rate last and
          labelled as self-normalising
 """
 
@@ -36,46 +36,102 @@ PANELS_SYNC = [
         "P(>5% cells co-active)",
         "Absolute co-activation",
     ),
-    ("still_sce_rate_hz", "SCE rate (Hz)", "Chang SCE — self-normalising"),
+    ("still_sce_rate_hz", "Synchronous event rate (Hz)", "Synchronous events"),
 ]
 
 
 def load() -> pd.DataFrame:
+    """Tier 1, with the graded co-fluctuation measure merged in.
+
+    `still_graded_cofluct` comes from activity_graded.py: the same population
+    co-fluctuation quantity, but scored on the denoised trace rather than on spks > 0.
+    Binarising costs roughly a factor of three in sensitivity here, so the graded column
+    is the measure and the binary one (still_mua_fano) is kept only for the supplement.
+    """
     df = pd.read_csv(RESULTS / "activity_sessions.csv")
+    graded = RESULTS / "activity_graded.csv"
+    if graded.exists():
+        g = pd.read_csv(graded)[["mouse", "date", "still_graded_cofluct",
+                                 "still_graded_mean_r", "run_graded_mean_r"]]
+        df = df.merge(g, on=["mouse", "date"], how="left")
     return df[df.genotype.isin(GENOTYPE_ORDER)]
+
+
+# Four panels for the talk: is the cell firing normally, is it firing normally while
+# running, are synchronous events as frequent - and are cells still fluctuating together.
+# Three panels. Synchronous-event rate is dropped: explaining what an SCE is costs more
+# talk time than the null is worth. Mean pairwise correlation replaces the
+# co-fluctuation index - they are the SAME quantity (index = 1 + (n-1)r, and both give
+# p = 0.034), so showing both would present one result twice under two names. The
+# correlation is the more familiar of the two.
+# Ordered running-then-rest within each measure, so the two pairs line up and the slide
+# ends on the one panel that differs. The rest/running contrast is the argument: during
+# running, shared sensory and motor drive imposes correlation from outside and would
+# mask any intrinsic coordination deficit; at rest, correlation is generated internally.
+# An effect that respects that boundary is hard to explain as an artefact.
+PANELS_TALK = [
+    ("run_rate_median", "Event rate (Hz)", "Firing rate, running"),
+    ("still_rate_median", "Event rate (Hz)", "Firing rate, rest"),
+    ("run_graded_mean_r", "Mean pairwise correlation", "Population coupling, running"),
+    ("still_graded_mean_r", "Mean pairwise correlation", "Population coupling, rest"),
+]
+# Panels that must share a y-axis, so the reader can compare them directly rather than
+# across two silently different scales.
+SHARED_Y = [("run_rate_median", "still_rate_median"),
+            ("run_graded_mean_r", "still_graded_mean_r")]
+# Panels whose session distribution is heavy-tailed enough to flatten every box on a
+# linear axis. A log axis shows the spread without dropping any point; the test runs on
+# per-mouse medians and is unaffected by the scale.
+LOG_PANELS: set = set()
 
 
 def _panel(ax, df, value, label, title, legend: bool = False) -> dict:
     per_mouse, res = compare(df, value, how="median")
+    # the scale must be set before superplot draws, so the bracket is placed in the
+    # coordinates it will actually be shown in
+    if value in LOG_PANELS:
+        ax.set_yscale("log")
     superplot(ax, df, value, legend=legend, p_value=res["p"])
     ax.set_ylabel(label)
-    ax.set_title(title, fontsize=10.5)
+    ax.set_title(title)
     return dict(metric=value, **res)
 
 
-def figure(df: pd.DataFrame) -> pd.DataFrame:
-    fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+def figure(df: pd.DataFrame, panels=None, out: str = "fig3_rsc_activity_synchrony.png",
+           title: str | None = None, shape=None) -> pd.DataFrame:
+    panels = panels if panels is not None else PANELS_TALK
+    rows, cols = shape if shape else (1, len(panels))
+    fig, axes = plt.subplots(rows, cols, figsize=(7.5 * cols, 7.0 * rows))
+    axes = np.atleast_1d(axes).ravel()
     results = []
-    for i, (ax, (value, label, title)) in enumerate(zip(axes[0], PANELS_RATE)):
+    for i, (ax, (value, label, panel_title)) in enumerate(zip(axes, panels)):
         if value in df.columns:
-            results.append(_panel(ax, df, value, label, title, legend=(i == 0)))
-    for ax, (value, label, title) in zip(axes[1], PANELS_SYNC):
-        if value in df.columns:
-            results.append(_panel(ax, df, value, label, title))
+            results.append(_panel(ax, df.dropna(subset=[value]), value, label,
+                                  panel_title, legend=(i == 0)))
+        else:
+            ax.axis("off")
+
+    # equalise the y-axis within each measure pair
+    by_value = {v: ax for ax, (v, _, _) in zip(axes, panels)}
+    for group in SHARED_Y:
+        present = [by_value[v] for v in group if v in by_value]
+        if len(present) > 1:
+            lo = min(a.get_ylim()[0] for a in present)
+            hi = max(a.get_ylim()[1] for a in present)
+            for a in present:
+                a.set_ylim(lo, hi)
 
     n_nlgf = df[df.genotype == "NLGF"].mouse.nunique()
     n_wt = df[df.genotype == "WT"].mouse.nunique()
     fig.suptitle(
-        f"RSC excitability and synchrony  ·  {len(df)} sessions, "
-        f"{n_nlgf} NLGF / {n_wt} WT mice  ·  one point per mouse, "
-        f"exact permutation over mice",
-        y=1.02,
-        fontsize=12.5,
-        weight="semibold",
+        (title or "RSC fires normally in NLGF, but coordinates less during rest")
+        + f"\n{n_nlgf} NLGF / {n_wt} WT mice  ·  "
+          "small dots sessions, large dots mice",
+        y=1.04, fontsize=34, weight="semibold",
     )
     fig.tight_layout()
-    fig.savefig(PLOTS / "fig3_activity_synchrony.png")
-    # plt.close(fig)
+    fig.savefig(PLOTS / out)
+    plt.close(fig)
     return pd.DataFrame(results)
 
 
@@ -120,10 +176,14 @@ def figure_rate_distribution(df: pd.DataFrame) -> None:
 
 
 if __name__ == "__main__":
-    set_style()
+    set_style(talk=True)
     df = load()
-    res = figure(df)
+    # 2x2: rate on the top row, coupling on the bottom, running then rest in each
+    res = figure(df, shape=(2, 2))
+    # the full eight-panel version stays available for the supplement
+    figure(df, panels=PANELS_RATE + PANELS_SYNC, shape=(2, 4),
+           out="figS1_activity_synchrony_full.png",
+           title="RSC excitability and synchrony, all measures")
     figure_rate_distribution(df)
-    1 / 0
     print(res.to_string(index=False))
     print(f"\nwrote figures to {PLOTS}")

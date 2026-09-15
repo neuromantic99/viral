@@ -637,11 +637,11 @@ def example_traces() -> None:
 
     s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-04/JB034/suite2p/plane0/")
 
-    stat = np.load(s2p_path / "stat.npy", allow_pickle=True)
-    ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
-    imwrite(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", ops["meanImg"])
+    # stat = np.load(s2p_path / "stat.npy", allow_pickle=True)
+    # ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
+    # imwrite(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", ops["meanImg"])
 
-    pass
+    # pass
     # np.save(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", stat['me')
 
     # f_raw = np.load(s2p_path / "F.npy")
@@ -665,7 +665,7 @@ def example_traces() -> None:
 
     # For grant plot
     cells_keep = cells_keep[:7]
-    display_fov(stat, cells_keep)
+    # display_fov(stat, cells_keep)
 
     # np.random.shuffle(cells_keep)
     n = 0
@@ -673,11 +673,25 @@ def example_traces() -> None:
         data = dff[idx] + n * 1.6
         data = moving_average(data, 5)
 
-        plt.plot(data, color=colors[0], linewidth=1)
+        plt.plot(data, color="black", linewidth=2.5)
         n += 1
 
     sns.despine(left=True, bottom=True)
     plt.axis("off")
+
+    roman = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+
+    # Add incrementing roman numerals to the left of each trace
+    for i, idx in enumerate(cells_keep):
+        plt.text(
+            -800,
+            i * 1.6,
+            f"{roman[i]}",
+            fontsize=24,
+            fontweight="bold",
+            color="black",
+            va="center",
+        )
 
     # --- Add compact bottom-right scalebar (replacing axes) ---
     ax = plt.gca()
@@ -710,11 +724,12 @@ def example_traces() -> None:
         if np.any(nice_dff <= target_dff)
         else float(nice_dff[0])
     )
+    bar_dff = 1
 
     # Position: bottom-right with small margins (in data coords)
     x0, x1 = ax.get_xlim()
     margin_x = 0.02 * (x1 - x0)
-    margin_y = 0.007 * (y_range)
+    margin_y = -0.5
 
     x_start = x1 - margin_x - bar_t_frames
     y_start = ymin + margin_y
@@ -747,7 +762,7 @@ def example_traces() -> None:
 
     # Place time label centered under the horizontal bar (clamp to stay inside axes)
     x_mid = x_start + 0.5 * bar_t_frames
-    y_text_bottom = y_start - 0.015 * y_range
+    y_text_bottom = y_start - 0.01 * y_range
     # if y_text_bottom < ymin + 0.005 * y_range:
     #     y_text_bottom = y_start + 0.018 * y_range
     ax.text(
@@ -756,26 +771,32 @@ def example_traces() -> None:
         time_label,
         ha="center",
         va="top" if y_text_bottom <= y_start else "bottom",
-        fontsize=9,
+        fontsize=24,
         color="black",
     )
 
     # Place dF/F label to the left of the vertical bar, centered vertically
     x_text_side = x_start + bar_t_frames - 0.01 * (x1 - x0)
-    y_mid = y_start + 0.5 * bar_dff
+    y_mid = y_start + 0.4 * bar_dff
+
     ax.text(
         x_text_side,
         y_mid,
         dff_label,
         ha="right",
         va="center",
-        fontsize=9,
+        fontsize=24,
         color="black",
     )
 
     # plt.savefig(SERVER_PATH / "viral_plots" / "example_traces" / f"example_traces.png")
+
     save_figure(
-        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_grant.pdf"
+        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_talk.png"
+    )
+
+    save_figure(
+        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_talk.pdf"
     )
     plt.show()
 
@@ -844,7 +865,7 @@ def basic_anticipatory_licking_plot() -> None:
         for session in tuples:
             ax.plot([1, 0], session, color="gray", alpha=0.3)
 
-        ax.plot([1, 0], means, color="black", linewidth=3, marker="o")
+        ax.plot([1, 0], means, color="black", linewidth=2, marker="o")
 
         ax.set_xlim(-0.2, 1.2)
         ax.set_xticks([0, 1], ["Unrewarded\nTexture", "Rewarded\nTexture"])
@@ -946,7 +967,7 @@ def firing_rates_simple_histogram() -> None:
 
 if __name__ == "__main__":
     # basic_anticipatory_licking_plot()
-    firing_rates_simple_histogram()
+    # firing_rates_simple_histogram()
 
     # save_firing_rates("WT")
     # # save_firing_rates("NLGF")
@@ -956,7 +977,7 @@ if __name__ == "__main__":
     # ):
     #     # for rewarded in [True, False, None]:
 
-    # example_traces()
+    example_traces()
     # n_responders_comparison_plot()
     # firing_rates_plot(None)
     # 1 / 0

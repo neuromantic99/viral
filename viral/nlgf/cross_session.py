@@ -51,6 +51,7 @@ neuron and reads as a remapped code - instead of covarying away its consequence.
 
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -72,10 +73,10 @@ from viral.nlgf.textures import texture_labels
 from viral.utils import get_genotype
 
 WINDOW = (20.0, 100.0)      # early corridor, before anticipatory licking diverges
-N_POOL = 150                # equalised matched-cell pool
+N_POOL = int(os.environ.get("VIRAL_N_POOL", 150))    # equalised matched-cell pool
 MAX_CELL_RESIDUAL = 4.0     # px from the affine fit; drops individually bad matches
 N_CELLS = 60                # decoder size, drawn from that pool
-N_PER_CLASS = 12
+N_PER_CLASS = int(os.environ.get("VIRAL_N_PER_CLASS", 12))
 N_REPEATS = 12
 N_FOLDS = 5
 
@@ -234,7 +235,8 @@ def transfer_table() -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if len(df):
         df["transfer_vs_baseline"] = df.transfer_texture - df[["within_a", "within_b"]].mean(axis=1)
-        df.to_csv(RESULTS / "cross_session_transfer.csv", index=False)
+        suffix = os.environ.get("VIRAL_SUFFIX", "")
+    df.to_csv(RESULTS / f"cross_session_transfer{suffix}.csv", index=False)
     return df
 
 

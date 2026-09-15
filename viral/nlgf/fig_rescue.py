@@ -202,8 +202,7 @@ def main() -> None:
     )
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     out = PLOTS / "fig23_rescue.png"
-    1 / 0
-    # fig.savefig(out, dpi=200, bbox_inches="tight")
+    fig.savefig(out, dpi=200, bbox_inches="tight")
 
     plt.close(fig)
     print(f"wrote {out}")

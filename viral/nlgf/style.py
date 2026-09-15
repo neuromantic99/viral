@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import matplotlib as mpl
+import numpy as np
 import matplotlib.pyplot as plt
 
 # Genotype is the only categorical axis that appears in every figure, so it gets a
@@ -19,6 +20,15 @@ GENOTYPE_ORDER = ["WT", "NLGF"]
 # plot; the legend and titles keep the full name.
 SHORT_NAME = {"Oligo-BACE1-KO": "Oligo-KO", "Neuronal-BACE1-KO": "Neuronal-KO"}
 
+# Text drawn by hand (p-brackets, the SuperPlot legend) sits outside rcParams, so it
+# would stay small when set_style(talk=True) scales everything else. set_style records
+# the scale here and those helpers multiply by it.
+_SCALE = 1.0
+
+
+def text_scale() -> float:
+    return _SCALE
+
 REWARDED_COLOUR = "#1C7ED6"
 UNREWARDED_COLOUR = "#F03E3E"
 
@@ -28,24 +38,36 @@ AZ_START_CM = 150.0
 CORRIDOR_END_CM = 180.0
 
 
-def set_style() -> None:
+def set_style(talk: bool = False) -> None:
+    """Shared rcParams. `talk=True` scales every text element for projection.
+
+    One switch rather than per-figure font sizes, so a talk figure and its paper
+    counterpart cannot drift apart. Marker and line sizes scale too: type alone growing
+    turns a figure into text with a small chart in it.
+    """
+    global _SCALE
+    scale = 1.7 if talk else 1.0
+    _SCALE = scale
     mpl.rcParams.update(
         {
+            "lines.linewidth": 1.5 * scale,
+            "lines.markersize": 6 * scale,
+            "patch.linewidth": 1.0 * scale,
             "figure.facecolor": "white",
             "axes.facecolor": "white",
             "axes.spines.top": False,
             "axes.spines.right": False,
-            "axes.linewidth": 1.0,
-            "axes.labelsize": 16,
-            "axes.titlesize": 16,
+            "axes.linewidth": 1.0 * scale,
+            "axes.labelsize": 16 * scale,
+            "axes.titlesize": 16 * scale,
             "axes.titleweight": "semibold",
-            "axes.titlepad": 10,
-            "xtick.labelsize": 16,
-            "ytick.labelsize": 16,
+            "axes.titlepad": 10 * scale,
+            "xtick.labelsize": 16 * scale,
+            "ytick.labelsize": 16 * scale,
             "xtick.direction": "out",
             "ytick.direction": "out",
             "legend.frameon": False,
-            "legend.fontsize": 16,
+            "legend.fontsize": 16 * scale,
             "font.family": "sans-serif",
             "font.sans-serif": ["Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
             "figure.dpi": 130,
@@ -83,6 +105,7 @@ def p_bracket(
     pad_frac: float = 0.06,
     height_frac: float = 0.035,
     label: str | None = None,
+    fontsize: float | None = None,
 ) -> None:
     """Significance bracket spanning two groups, with the p above it.
 
@@ -94,33 +117,37 @@ def p_bracket(
 
     `label` prefixes the p, for panels carrying more than one contrast.
     """
+    # On a log axis, evenly spaced positions have to be computed in log space or the
+    # bracket lands far above the data (or below the axis) - the arithmetic that spaces
+    # it is linear in whatever coordinates it is given.
+    log = ax.get_yscale() == "log"
     lo, hi = ax.get_ylim()
-    span = hi - lo
-    y = hi + pad_frac * span
-    h = height_frac * span
-    ax.plot(
-        [x0, x0, x1, x1],
-        [y, y + h, y + h, y],
-        lw=1.1,
-        color="#495057",
-        clip_on=False,
-        zorder=6,
-    )
+    if log:
+        llo, lhi = np.log10(max(lo, 1e-12)), np.log10(hi)
+        lspan = lhi - llo
+        ly = lhi + pad_frac * lspan
+        lh = height_frac * lspan
+        y, h_top = 10 ** ly, 10 ** (ly + lh)
+        ax.plot([x0, x0, x1, x1], [y, h_top, h_top, y], lw=1.1 * _SCALE,
+                color="#495057", clip_on=False, zorder=6)
+        text_y = 10 ** (ly + lh * 1.15)
+        top = 10 ** (ly + lh * 3.2)
+    else:
+        span = hi - lo
+        y = hi + pad_frac * span
+        h = height_frac * span
+        ax.plot([x0, x0, x1, x1], [y, y + h, y + h, y], lw=1.1 * _SCALE,
+                color="#495057", clip_on=False, zorder=6)
+        text_y = y + h * 1.15
+        top = y + h * 3.2
+
     text = "p < 0.001" if p_value < 0.001 else f"p = {p_value:.2f}"
     if label:
         text = f"{label}  {text}"
-    ax.text(
-        (x0 + x1) / 2,
-        y + h * 1.15,
-        text,
-        ha="center",
-        va="bottom",
-        fontsize=16 if not label else 16,
-        color="#212529",
-        clip_on=False,
-        zorder=6,
-    )
-    ax.set_ylim(lo, y + h * 3.2)
+    ax.text((x0 + x1) / 2, text_y, text, ha="center", va="bottom",
+            fontsize=fontsize if fontsize else (9.5 if not label else 8.5) * _SCALE,
+            color="#212529", clip_on=False, zorder=6)
+    ax.set_ylim(lo, top)
 
 
 def superplot(
@@ -222,7 +249,7 @@ def superplot(
                 [],
                 marker="o",
                 linestyle="none",
-                markersize=4,
+                markersize=4 * _SCALE,
                 markerfacecolor="#868E96",
                 markeredgecolor="none",
                 alpha=0.45,
@@ -233,7 +260,7 @@ def superplot(
                 [],
                 marker="o",
                 linestyle="none",
-                markersize=8,
+                markersize=8 * _SCALE,
                 markerfacecolor="#495057",
                 markeredgecolor="white",
                 markeredgewidth=1.1,
@@ -243,7 +270,7 @@ def superplot(
         ax.legend(
             handles=handles,
             loc="best",
-            fontsize=8.5,
+            fontsize=8.5 * _SCALE,
             handletextpad=0.4,
             borderpad=0.4,
             labelspacing=0.35,
