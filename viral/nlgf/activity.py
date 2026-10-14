@@ -69,8 +69,9 @@ MIN_FRAMES = 3000
 N_CELLS = MIN_CELLS  # fixed subsample, from the cohort floor
 
 
-def detect_sce_contiguous(rates: np.ndarray, mask: np.ndarray,
-                          min_bout_frames: int = 3 * FS):
+def detect_sce_contiguous(
+    rates: np.ndarray, mask: np.ndarray, min_bout_frames: int = 3 * FS
+):
     """SCEs detected within each contiguous immobility bout, in absolute frames.
 
     detect_sce must not be given a concatenated mask. It merges events less than 250 ms
@@ -120,8 +121,11 @@ def _rates_hz(onsets: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 def _synchrony(
-    spks_epoch: np.ndarray, rates_epoch: np.ndarray, rng: np.random.Generator,
-    spks_full: Optional[np.ndarray] = None, rates_full: Optional[np.ndarray] = None,
+    spks_epoch: np.ndarray,
+    rates_epoch: np.ndarray,
+    rng: np.random.Generator,
+    spks_full: Optional[np.ndarray] = None,
+    rates_full: Optional[np.ndarray] = None,
     mask: Optional[np.ndarray] = None,
 ) -> Dict:
     """Correlation, Fano and SCE measures on one epoch's frames.
@@ -158,8 +162,13 @@ def _synchrony(
         out["frac_frames_5pct_coactive"] = float(np.mean(mua > 0.05 * n_cells))
         out["n_frames_synchrony"] = float(sub.shape[1])
     else:
-        for k in ("mean_pairwise_r", "frac_pairs_r_above_0.1", "mua_fano",
-                  "frac_frames_5pct_coactive", "n_frames_synchrony"):
+        for k in (
+            "mean_pairwise_r",
+            "frac_pairs_r_above_0.1",
+            "mua_fano",
+            "frac_frames_5pct_coactive",
+            "n_frames_synchrony",
+        ):
             out[k] = np.nan
 
     # Chang's SCEs, detected WITHIN each contiguous bout - see detect_sce_contiguous
@@ -214,9 +223,13 @@ def session_activity(mouse: str, date: str) -> Optional[Dict]:
 
     rng = np.random.default_rng(0)
     row: Dict = dict(
-        mouse=mouse, date=date, genotype=digest.genotype,
+        mouse=mouse,
+        date=date,
+        genotype=digest.genotype,
         session_type=digest.meta["session_type"],
-        n_cells=n_cells, n_cells_total=n_cells_total, n_frames=n_frames,
+        n_cells=n_cells,
+        n_cells_total=n_cells_total,
+        n_frames=n_frames,
         run_seconds=float(run_mask.sum() / FS),
         still_seconds=float(still_mask.sum() / FS),
         frac_session_still=float(still_mask.mean()),
@@ -230,15 +243,26 @@ def session_activity(mouse: str, date: str) -> Optional[Dict]:
         # Distribution shape: hyperactivity in APP mice is a heavy upper tail plus a
         # silent population, not a shift of the whole distribution, so the tails are
         # reported alongside the centre
-        row[f"{name}_rate_p90"] = float(np.percentile(finite, 90)) if finite.size else np.nan
+        row[f"{name}_rate_p90"] = (
+            float(np.percentile(finite, 90)) if finite.size else np.nan
+        )
         row[f"{name}_frac_silent"] = (
             float(np.mean(finite < 0.01)) if finite.size else np.nan
         )
         if mask.sum() >= MIN_FRAMES:
-            row.update({f"{name}_{k}": v for k, v in
-                        _synchrony(spks[:, mask], rates_full[:, mask], rng,
-                                   spks_full=spks, rates_full=rates_full,
-                                   mask=mask).items()})
+            row.update(
+                {
+                    f"{name}_{k}": v
+                    for k, v in _synchrony(
+                        spks[:, mask],
+                        rates_full[:, mask],
+                        rng,
+                        spks_full=spks,
+                        rates_full=rates_full,
+                        mask=mask,
+                    ).items()
+                }
+            )
 
     return row
 
@@ -265,10 +289,15 @@ def activity_table() -> pd.DataFrame:
 if __name__ == "__main__":
     df = activity_table()
     print(f"\n{len(df)} sessions, {df.mouse.nunique()} mice")
-    print(df.groupby("genotype").agg(
-        mice=("mouse", "nunique"), sessions=("date", "size"),
-        still_sec=("still_seconds", "median"),
-        still_rate=("still_rate_median", "median"),
-        run_rate=("run_rate_median", "median"),
-        pairwise_r=("still_mean_pairwise_r", "median"),
-    ).to_string())
+    print(
+        df.groupby("genotype")
+        .agg(
+            mice=("mouse", "nunique"),
+            sessions=("date", "size"),
+            still_sec=("still_seconds", "median"),
+            still_rate=("still_rate_median", "median"),
+            run_rate=("run_rate_median", "median"),
+            pairwise_r=("still_mean_pairwise_r", "median"),
+        )
+        .to_string()
+    )

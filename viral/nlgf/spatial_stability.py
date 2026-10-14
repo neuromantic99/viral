@@ -50,8 +50,8 @@ from viral.utils import get_genotype, get_wheel_circumference_from_rig
 
 CONFIG = grosmark_config
 WHEEL = get_wheel_circumference_from_rig("2P")
-N_LAPS = 30
-SIGMA = 7.5 / CONFIG.bin_size
+N_LAPS = 60
+SIGMA = 9.0 / CONFIG.bin_size
 
 
 def _lap_maps(mouse: str, date: str, rows: np.ndarray) -> Optional[np.ndarray]:
@@ -60,7 +60,8 @@ def _lap_maps(mouse: str, date: str, rows: np.ndarray) -> Optional[np.ndarray]:
     if not path.exists():
         return None
     session = Cached2pSession.model_validate_json(
-        (CACHED_2P / f"{mouse}_{date}.json").read_text())
+        (CACHED_2P / f"{mouse}_{date}.json").read_text()
+    )
     trials = []
     for t in session.trials:
         try:
@@ -76,19 +77,31 @@ def _lap_maps(mouse: str, date: str, rows: np.ndarray) -> Optional[np.ndarray]:
     spks = spks[rows]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return np.array([
-            activity_trial_position(
-                trial=t, flu=spks, wheel_circumference=WHEEL,
-                bin_size=CONFIG.bin_size, start=CONFIG.start, max_position=CONFIG.end,
-                verbose=False, do_shuffle=False, threshold_speed=True)
-            for t in trials[:N_LAPS]], dtype=np.float32)
+        return np.array(
+            [
+                activity_trial_position(
+                    trial=t,
+                    flu=spks,
+                    wheel_circumference=WHEEL,
+                    bin_size=CONFIG.bin_size,
+                    start=CONFIG.start,
+                    max_position=CONFIG.end,
+                    verbose=False,
+                    do_shuffle=False,
+                    threshold_speed=True,
+                )
+                for t in trials[:N_LAPS]
+            ],
+            dtype=np.float32,
+        )
 
 
 def _smooth(maps: np.ndarray) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return gaussian_filter1d(np.nan_to_num(np.nanmean(maps, axis=0)),
-                                 sigma=SIGMA, axis=1)
+        return gaussian_filter1d(
+            np.nan_to_num(np.nanmean(maps, axis=0)), sigma=SIGMA, axis=1
+        )
 
 
 def _rowwise_corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -108,8 +121,9 @@ def pair_stability(mouse: str, date_a: str, date_b: str) -> Optional[Dict]:
     try:
         ca, cb = _centroids(mouse, date_a), _centroids(mouse, date_b)
         if matches.row_a.max() < len(ca) and matches.row_b.max() < len(cb):
-            _, resid = _fit_affine(ca[matches.row_a.to_numpy()],
-                                   cb[matches.row_b.to_numpy()])
+            _, resid = _fit_affine(
+                ca[matches.row_a.to_numpy()], cb[matches.row_b.to_numpy()]
+            )
             matches = matches[resid <= MAX_CELL_RESIDUAL]
     except Exception:  # noqa: BLE001
         pass
@@ -129,20 +143,27 @@ def pair_stability(mouse: str, date_a: str, date_b: str) -> Optional[Dict]:
     b_odd, b_even = _smooth(mb[1::2]), _smooth(mb[0::2])
 
     field_cross = np.nanmedian(_rowwise_corr(a, b))
-    field_within = np.nanmedian(np.r_[_rowwise_corr(a_odd, a_even),
-                                      _rowwise_corr(b_odd, b_even)])
+    field_within = np.nanmedian(
+        np.r_[_rowwise_corr(a_odd, a_even), _rowwise_corr(b_odd, b_even)]
+    )
     pv_cross = np.nanmedian(_rowwise_corr(a.T, b.T))
-    pv_within = np.nanmedian(np.r_[_rowwise_corr(a_odd.T, a_even.T),
-                                   _rowwise_corr(b_odd.T, b_even.T)])
+    pv_within = np.nanmedian(
+        np.r_[_rowwise_corr(a_odd.T, a_even.T), _rowwise_corr(b_odd.T, b_even.T)]
+    )
     shift = np.abs(np.argmax(a, axis=1) - np.argmax(b, axis=1)) * CONFIG.bin_size
 
     return dict(
-        mouse=mouse, date_a=date_a, date_b=date_b, genotype=get_genotype(mouse),
+        mouse=mouse,
+        date_a=date_a,
+        date_b=date_b,
+        genotype=get_genotype(mouse),
         gap_days=int((pd.to_datetime(date_b) - pd.to_datetime(date_a)).days),
         n_cells=int(len(matches)),
-        field_corr_cross=float(field_cross), field_corr_within=float(field_within),
+        field_corr_cross=float(field_cross),
+        field_corr_within=float(field_within),
         field_corr_ratio=float(field_cross / field_within) if field_within else np.nan,
-        pv_corr_cross=float(pv_cross), pv_corr_within=float(pv_within),
+        pv_corr_cross=float(pv_cross),
+        pv_corr_within=float(pv_within),
         pv_corr_ratio=float(pv_cross / pv_within) if pv_within else np.nan,
         centroid_shift_cm=float(np.median(shift)),
     )
@@ -160,8 +181,10 @@ def stability_table() -> pd.DataFrame:
                 out["affine_rms_px"] = r.affine_rms_px
                 rows.append(out)
         except Exception as e:  # noqa: BLE001
-            print(f"FAIL {r.mouse} {r.date_a} {r.date_b}: {type(e).__name__}: {e}",
-                  flush=True)
+            print(
+                f"FAIL {r.mouse} {r.date_a} {r.date_b}: {type(e).__name__}: {e}",
+                flush=True,
+            )
         if i % 10 == 0:
             print(f"  [{i}/{len(good)}] kept {len(rows)}", flush=True)
     df = pd.DataFrame(rows)
@@ -172,11 +195,17 @@ def stability_table() -> pd.DataFrame:
 if __name__ == "__main__":
     df = stability_table()
     print(f"\n{len(df)} pairs, {df.mouse.nunique()} mice")
-    print(df.groupby("genotype").agg(
-        pairs=("mouse", "size"),
-        field_cross=("field_corr_cross", "median"),
-        field_within=("field_corr_within", "median"),
-        field_ratio=("field_corr_ratio", "median"),
-        pv_cross=("pv_corr_cross", "median"),
-        pv_ratio=("pv_corr_ratio", "median"),
-        shift_cm=("centroid_shift_cm", "median")).round(3).to_string())
+    print(
+        df.groupby("genotype")
+        .agg(
+            pairs=("mouse", "size"),
+            field_cross=("field_corr_cross", "median"),
+            field_within=("field_corr_within", "median"),
+            field_ratio=("field_corr_ratio", "median"),
+            pv_cross=("pv_corr_cross", "median"),
+            pv_ratio=("pv_corr_ratio", "median"),
+            shift_cm=("centroid_shift_cm", "median"),
+        )
+        .round(3)
+        .to_string()
+    )
