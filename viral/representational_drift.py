@@ -29,7 +29,11 @@ from viral.constants import (
     TIFF_UMBRELLA,
     grosmark_config,
 )
-from viral.imaging_utils import activity_trial_position, trial_is_imaged
+from viral.imaging_utils import (
+    activity_trial_position,
+    load_imaging_data,
+    trial_is_imaged,
+)
 from viral.models import Cached2pSession
 from viral.utils import (
     degrees_to_cm,
@@ -482,8 +486,7 @@ def main() -> None:
             if date is None:
                 continue
 
-            spks_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
-            spks_all = np.load(spks_path / "oasis_spikes.npy")
+            _, spks_all, _ = load_imaging_data(mouse=mouse_name, date=date)
             session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
             session = Cached2pSession.model_validate_json(session_path.read_text())
 

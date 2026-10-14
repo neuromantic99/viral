@@ -154,6 +154,36 @@
       "console": "integratedTerminal",
       "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
       "justMyCode": true
+    },
+
+    {
+      "name": "wheel_freeze_movement",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/wheel_freeze_movement.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "justMyCode": true
+    },
+
+    {
+      "name": "decoder over sessions",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/decoder_over_sessions.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "justMyCode": true
+    },
+
+    {
+      "name": "chang ",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "viral/chang.py",
+      "console": "integratedTerminal",
+      "env": { "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "10" },
+      "justMyCode": true
     }
   ]
 }

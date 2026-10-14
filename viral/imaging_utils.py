@@ -8,10 +8,12 @@ from viral.utils import (
     above_threshold_for_n_consecutive_samples,
     array_bin_mean,
     below_threshold_for_n_consecutive_samples,
+    circularly_permute_rows,
     degrees_to_cm,
+    get_movement_bool,
     get_wheel_circumference_from_rig,
+    read_npy_shape,
     has_n_consecutive_trues,
-    shuffle_rows,
     threshold_detect,
 )
 from deprecated import deprecated
@@ -42,7 +44,7 @@ def load_imaging_data(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s2p_path = TIFF_UMBRELLA / date / mouse / "suite2p" / "plane0"
     print(f"Suite 2p path is {s2p_path}")
-    if not s2p_path.exists():
+    if not s2p_path.exists() or not (s2p_path / "F.npy").exists():
         raise FileNotFoundError("This session likely was not suite2p'ed yet")
     iscell = np.load(s2p_path / "iscell.npy")[:, 0].astype(bool)
     assert (
@@ -60,6 +62,20 @@ def load_imaging_data(
     return dff, spks, denoised
 
 
+def get_session_n_frames(mouse_name: str, date: str) -> int:
+    """Number of imaging frames in a session, read from a .npy header.
+
+    Avoids pulling a multi-gigabyte spike matrix off the server just to learn its
+    length. Prefers oasis_spikes.npy and falls back to F.npy, which exists even before
+    the deconvolution has been run; both have one column per frame.
+    """
+    s2p_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
+    for name in ("oasis_spikes.npy", "F.npy"):
+        if (s2p_path / name).exists():
+            return int(read_npy_shape(s2p_path / name)[1])
+    raise FileNotFoundError(f"No oasis_spikes.npy or F.npy under {s2p_path}")
+
+
 def get_ITI_start_frame(trial: TrialInfo) -> int:
     for state in trial.states_info:
         if state.name in {"ITI", "trigger_ITI"}:
@@ -72,11 +88,13 @@ def get_ITI_start_frame(trial: TrialInfo) -> int:
 
 def get_sampling_rate(frame_clock: np.ndarray) -> int:
     """Bit of a hack as the sampling rate is not stored in the tdms file I think. I've used
-    two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 100 minutes.
+    two different sampling rates: 1,000 and 10,000. The sessions should be between 30 and 120 minutes.
     """
-    if 30 < len(frame_clock) / 1000 / 60 < 120:
+    if 30 < len(frame_clock) / 1000 / 60 < 130:
         return 1000
-    elif 30 < len(frame_clock) / 10000 / 60 < 120:
+    elif 30 < len(frame_clock) / 10000 / 60 < 130:
+        return 10000
+    elif len(frame_clock) == 607666161:  # accidently left one session running overnight
         return 10000
     raise ValueError("Could not determine sampling rate")
 
@@ -91,7 +109,12 @@ def trial_is_imaged(trial: TrialInfo) -> bool:
         state
         for state in trial.states_info
         if state.name
-        in {"trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"}
+        in {
+            "trigger_panda",
+            "trigger_panda_post_reward",
+            "trigger_panda_ITI",
+            "store_encoder_position",
+        }
     ]
     start_times_bpod = [state.start_time for state in trigger_panda_states]
     length_trial_bpod = start_times_bpod[-1] - start_times_bpod[0]
@@ -183,12 +206,18 @@ def compute_speed_grosmark(position: np.ndarray) -> np.ndarray:
 
 
 def get_resting_position_and_frames(
-    trial: TrialInfo, wheel_circumference: float
+    trial: TrialInfo, wheel_circumference: float, speed_threshold: float = 3
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Offline immobility epochs were defined as those in which the animal's velocity,
     smoothed with a half-second Gaussian kernel, was below 3cms-1 for at least 3 consecutive seconds.
     Online running epochs were defined as those in which the animal's smoothed velocity was above 5cms-1
-    for at least 3 consecutive seconds."""
+    for at least 3 consecutive seconds.
+
+    speed_threshold is in cm / s and defaults to Grosmark's 3. It was previously
+    hardcoded to 1, which is stricter than the quoted definition and left the 1-5 cm/s
+    band belonging to neither this state nor the running state in
+    get_online_position_and_frames. If time spent shuffling slowly differs between
+    groups, that gap makes the two states unmatched between them."""
 
     position = degrees_to_cm(
         np.array(trial.rotary_encoder_position), wheel_circumference
@@ -205,7 +234,6 @@ def get_resting_position_and_frames(
     assert len(position) == len(frame_position)
 
     speed = compute_speed_grosmark(position)
-    speed_threshold = 1
     idx_keep = below_threshold_for_n_consecutive_samples(
         speed, threshold=speed_threshold, n_samples=3 * 30
     )
@@ -269,7 +297,6 @@ def activity_trial_position(
     verbose: bool = False,
     do_shuffle: bool = False,
     threshold_speed: bool = True,
-    bin_occupancy_divide: bool = False,
 ) -> np.ndarray:
     """Returns the dff activity of the trial binned by position in matrix of shape (n_cells, n_bins)
     trial: TrialInfo
@@ -280,7 +307,26 @@ def activity_trial_position(
     start: in cm
     max_position: in cm
     verbose: if True, print the binning information
-    do_shuffle: if True, shuffle the rows of the dff matrix
+    do_shuffle: if True, circularly rotate each cell's firing-rate-by-position vector
+        for this lap by an independent random offset. This is the null used by
+        Grosmark et al. for place field detection: "2,000 shuffled smoothed firing
+        rate by position vectors were computed for each cell following the per-lap
+        randomized circular permutation of estimated activity vector, Ssp".
+
+        Note the rotation is in POSITION, not in time. On Grosmark's circular belt the
+        two are equivalent, because the animal runs at a roughly constant speed and
+        position maps onto time monotonically. On a linear corridor they are not: our
+        animals run at ~6 cm/s at the start of the corridor and ~24 cm/s in the middle,
+        so occupancy varies fourfold across bins. Rotating in time makes the null
+        variance at a bin scale as 1/occupancy, which produces an artificially low
+        threshold at the well-sampled ends of the track and a flood of spurious place
+        fields there. Rotating the binned rate map keeps each bin's sampling noise
+        attached to that bin, and only randomises where the field sits.
+
+        A plain permutation (the previous behaviour) is wrong in the other direction:
+        it destroys the spatial autocorrelation that survives the 7.5 cm smoothing, and
+        builds each bin's null from the spread of the whole lap, which for a tuned cell
+        already contains that cell's own field amplitude.
     """
     assert trial_is_imaged(trial), "Trial does not have imaging data"
     position, frame_position = get_online_position_and_frames(
@@ -296,10 +342,6 @@ def activity_trial_position(
             ]
         )
         dff_bin = flu[:, frame_idx_bin]
-        if bin_occupancy_divide:
-            dff_bin = (
-                dff_bin / len(frame_idx_bin) if len(frame_idx_bin) > 0 else dff_bin
-            )
 
         if verbose:
             print(f"bin_start: {bin_start}")
@@ -311,7 +353,7 @@ def activity_trial_position(
     dff_position = np.array(dff_position_list).T
 
     if do_shuffle:
-        return shuffle_rows(dff_position)
+        return circularly_permute_rows(dff_position)
 
     return dff_position
 
@@ -472,6 +514,36 @@ def split_fluoresence_online_freeze(
     )
 
 
+def restrict_to_immobility(
+    offline_pre: np.ndarray, offline_post: np.ndarray, wheel_freeze: WheelFreeze
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop the frames in which the mouse was moving from the pre and post freeze epochs.
+
+    Grosmark et al. restrict all offline analyses to immobility ("Offline immobility
+    epochs were defined as those in which the animal's velocity [...] was below 3 cm/s
+    for at least 3 consecutive seconds"). Without this, grooming and fidgeting during
+    the frozen-wheel blocks end up inside the reactivation estimate, which both
+    confounds the pre versus post contrast (mice do not settle equally in the two
+    blocks) and confounds any group comparison in which the groups differ in how much
+    they move while frozen.
+
+    Takes the two offline epochs as returned by split_fluoresence_online_freeze.
+    """
+    movement_pre, movement_post = get_movement_bool(wheel_freeze=wheel_freeze)
+
+    for name, offline, movement in (
+        ("pre", offline_pre, movement_pre),
+        ("post", offline_post, movement_post),
+    ):
+        assert offline.shape[1] == movement.shape[0], (
+            f"{name}-freeze epoch is {offline.shape[1]} frames but its movement vector "
+            f"is {movement.shape[0]} frames. get_movement_bool pads to 27000, so a "
+            f"WheelFreeze whose epoch is not 27000 frames long will not line up."
+        )
+
+    return offline_pre[:, ~movement_pre], offline_post[:, ~movement_post]
+
+
 def get_imaging_crashed(mouse_name: str, date: str) -> bool:
     """Manually define if sessions have crashed imaging, based on the metadata"""
     return (mouse_name, date) in [
@@ -479,6 +551,7 @@ def get_imaging_crashed(mouse_name: str, date: str) -> bool:
         ("JB011", "2024-10-25"),
         ("JB031", "2025-03-10"),
         ("JB034", "2025-07-04"),
+        ("JB030", "2025-03-11"),
     ]
 
 

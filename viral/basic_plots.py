@@ -1,11 +1,10 @@
 import sys
 from pathlib import Path
 
-
 HERE = Path(__file__).parent
+sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
-import time
 from typing import Dict, List
 
 import pandas as pd
@@ -35,6 +34,7 @@ from viral.imaging_utils import (
     activity_trial_position,
     get_online_position_and_frames,
     get_resting_position_and_frames,
+    load_imaging_data,
     subtract_neuropil,
     trial_is_imaged,
 )
@@ -57,21 +57,17 @@ from viral.utils import (
 )
 from viral.multiple_sessions import load_cache, parse_session_number
 
-
 plt.rcParams["pdf.fonttype"] = 42
 
 
 def get_firing_rates(
     session: Cached2pSession,
     spks: np.ndarray,
-    rewarded: bool | None,
 ) -> tuple[np.ndarray, np.ndarray]:
     all_resting_frames: List[int] = []
     all_running_frames: List[int] = []
     for trial in session.trials:
-        if not trial_is_imaged(trial) or (
-            rewarded is not None and trial.texture_rewarded != rewarded
-        ):
+        if not trial_is_imaged(trial):
             continue
         _, resting_frames = get_resting_position_and_frames(
             trial=trial,
@@ -285,16 +281,11 @@ def get_firing_rates_df(genotype: str, rewarded: bool | None) -> pd.DataFrame:
 
 
 def save_firing_rates(genotype: str) -> None:
-
-    result: Dict[str, List[tuple[np.ndarray, np.ndarray]]] = {
-        "unsupervised": [],
-        "learning": [],
-        "learned": [],
-    }
     for mouse_name in SESSIONS_KEEP.keys():
         if get_genotype(mouse_name) != genotype:
             continue
-        for stage in ["unsupervised", "learning", "learned"]:
+        # for stage in ["unsupervised", "learning", "learned"]:
+        for stage in ["unsupervised", "learned"]:
             print(f"Doing {mouse_name} at {stage} stage")
             date = SESSIONS_KEEP[mouse_name][stage]
             if date is None:
@@ -303,63 +294,35 @@ def save_firing_rates(genotype: str) -> None:
             spks_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
             spks_all = np.load(spks_path / "oasis_spikes.npy")
             is_cell = np.load(spks_path / "iscell.npy")[:, 0].astype(bool)
-            spks_all = spks_all[is_cell, :]
+            spks = spks_all[is_cell, :]
 
             session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
             session = Cached2pSession.model_validate_json(session_path.read_text())
 
-            for rewarded in [True, False, None]:
+            save_path = (
+                SERVER_PATH
+                / "viral_caches"
+                / "firing_rates"
+                / f"{mouse_name}_{date}_firing_rates.npy"
+            )
+            # Weird suffix fiddle because the file is saved as .npy.npz
+            load_path = save_path.with_suffix(save_path.suffix + ".npz")
+            if load_path.exists():
+                print(f"Aready done {mouse_name}, {date}")
+                continue
 
-                save_path = (
-                    SERVER_PATH
-                    / "viral_caches"
-                    / "firing_rates"
-                    / f"{mouse_name}_{date}_rewarded_{rewarded}_firing_rates_iscell_filtered.npy"
-                )
-                # Weird suffix fiddle because the file is saved as .npy.npz
-                load_path = save_path.with_suffix(save_path.suffix + ".npz")
-                if load_path.exists():
-                    print(f"aready done {mouse_name}, {date}")
-                    result_mouse = np.load(load_path)
-                    result[stage].append(
-                        (result_mouse["resting_rates"], result_mouse["running_rates"])
-                    )
-                    continue
+            print(f"Processing {mouse_name} on {date} for {stage} stage.")
 
-                print(f"Processing {mouse_name} on {date} for {stage} stage.")
-                mask_files = [
-                    file
-                    for file in list(
-                        (
-                            SERVER_PATH
-                            / "viral_caches"
-                            / "place_cells"
-                            / "pcs_combined"
-                        ).glob("*.npy")
-                    )
-                    if mouse_name in file.name
-                    and date in file.name
-                    and f"rewarded_{rewarded}" in file.name
-                    and str(grosmark_config) in file.name
-                ]
+            resting_rates, running_rates = get_firing_rates(
+                session=session,
+                spks=spks,
+            )
 
-                assert (
-                    len(mask_files) == 1
-                ), f"Should find one mask file, found {mask_files}"
-
-                pc_mask = np.load(mask_files[0])
-                spks = spks_all[pc_mask, :]
-                resting_rates, running_rates = get_firing_rates(
-                    session=session,
-                    spks=spks,
-                    rewarded=rewarded,
-                )
-
-                np.savez(
-                    save_path,
-                    running_rates=running_rates,
-                    resting_rates=resting_rates,
-                )
+            np.savez(
+                save_path,
+                running_rates=running_rates,
+                resting_rates=resting_rates,
+            )
 
 
 def n_responders_session(session: Cached2pSession, rewarded: bool | None) -> float:
@@ -519,8 +482,8 @@ def save_correlations(genotype: str) -> None:
             if date is None:
                 continue
 
-            spks_path = TIFF_UMBRELLA / date / mouse_name / "suite2p" / "plane0"
-            spks_all = np.load(spks_path / "oasis_spikes.npy")
+            _, spks_all, _ = load_imaging_data(mouse=mouse_name, date=date)
+
             session_path = CACHE_PATH / f"{mouse_name}_{date}.json"
             session = Cached2pSession.model_validate_json(session_path.read_text())
 
@@ -674,11 +637,11 @@ def example_traces() -> None:
 
     s2p_path = Path("/Volumes/MarcBusche/Josef/2P/2025-07-04/JB034/suite2p/plane0/")
 
-    stat = np.load(s2p_path / "stat.npy", allow_pickle=True)
-    ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
-    imwrite(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", ops["meanImg"])
+    # stat = np.load(s2p_path / "stat.npy", allow_pickle=True)
+    # ops = np.load(s2p_path / "ops.npy", allow_pickle=True).item()
+    # imwrite(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", ops["meanImg"])
 
-    pass
+    # pass
     # np.save(SERVER_PATH / "viral_plots" / "example_traces" / "fov.tiff", stat['me')
 
     # f_raw = np.load(s2p_path / "F.npy")
@@ -702,7 +665,7 @@ def example_traces() -> None:
 
     # For grant plot
     cells_keep = cells_keep[:7]
-    display_fov(stat, cells_keep)
+    # display_fov(stat, cells_keep)
 
     # np.random.shuffle(cells_keep)
     n = 0
@@ -710,11 +673,25 @@ def example_traces() -> None:
         data = dff[idx] + n * 1.6
         data = moving_average(data, 5)
 
-        plt.plot(data, color=colors[0], linewidth=1)
+        plt.plot(data, color="black", linewidth=2.5)
         n += 1
 
     sns.despine(left=True, bottom=True)
     plt.axis("off")
+
+    roman = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+
+    # Add incrementing roman numerals to the left of each trace
+    for i, idx in enumerate(cells_keep):
+        plt.text(
+            -800,
+            i * 1.6,
+            f"{roman[i]}",
+            fontsize=24,
+            fontweight="bold",
+            color="black",
+            va="center",
+        )
 
     # --- Add compact bottom-right scalebar (replacing axes) ---
     ax = plt.gca()
@@ -747,11 +724,12 @@ def example_traces() -> None:
         if np.any(nice_dff <= target_dff)
         else float(nice_dff[0])
     )
+    bar_dff = 1
 
     # Position: bottom-right with small margins (in data coords)
     x0, x1 = ax.get_xlim()
     margin_x = 0.02 * (x1 - x0)
-    margin_y = 0.007 * (y_range)
+    margin_y = -0.5
 
     x_start = x1 - margin_x - bar_t_frames
     y_start = ymin + margin_y
@@ -784,7 +762,7 @@ def example_traces() -> None:
 
     # Place time label centered under the horizontal bar (clamp to stay inside axes)
     x_mid = x_start + 0.5 * bar_t_frames
-    y_text_bottom = y_start - 0.015 * y_range
+    y_text_bottom = y_start - 0.01 * y_range
     # if y_text_bottom < ymin + 0.005 * y_range:
     #     y_text_bottom = y_start + 0.018 * y_range
     ax.text(
@@ -793,26 +771,32 @@ def example_traces() -> None:
         time_label,
         ha="center",
         va="top" if y_text_bottom <= y_start else "bottom",
-        fontsize=9,
+        fontsize=24,
         color="black",
     )
 
     # Place dF/F label to the left of the vertical bar, centered vertically
     x_text_side = x_start + bar_t_frames - 0.01 * (x1 - x0)
-    y_mid = y_start + 0.5 * bar_dff
+    y_mid = y_start + 0.4 * bar_dff
+
     ax.text(
         x_text_side,
         y_mid,
         dff_label,
         ha="right",
         va="center",
-        fontsize=9,
+        fontsize=24,
         color="black",
     )
 
     # plt.savefig(SERVER_PATH / "viral_plots" / "example_traces" / f"example_traces.png")
+
     save_figure(
-        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_grant.pdf"
+        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_talk.png"
+    )
+
+    save_figure(
+        SERVER_PATH / "viral_plots" / "example_traces" / "example_traces_talk.pdf"
     )
     plt.show()
 
@@ -881,7 +865,7 @@ def basic_anticipatory_licking_plot() -> None:
         for session in tuples:
             ax.plot([1, 0], session, color="gray", alpha=0.3)
 
-        ax.plot([1, 0], means, color="black", linewidth=3, marker="o")
+        ax.plot([1, 0], means, color="black", linewidth=2, marker="o")
 
         ax.set_xlim(-0.2, 1.2)
         ax.set_xticks([0, 1], ["Unrewarded\nTexture", "Rewarded\nTexture"])
@@ -920,19 +904,80 @@ def basic_anticipatory_licking_plot() -> None:
     1 / 0
 
 
+def session_type_lookup(mouse: str, date: str) -> str:
+    for stage in ["unsupervised", "learning", "learned"]:
+        if SESSIONS_KEEP[mouse][stage] == date:
+            return stage
+    raise ValueError(f"Mouse {mouse} does not have session on {date}")
+
+
+def firing_rates_simple_histogram() -> None:
+    cache_umbrella = SERVER_PATH / "viral_caches" / "firing_rates"
+
+    cache_files = list(cache_umbrella.glob("*.npz"))
+    running = []
+    resting = []
+
+    wt = []
+    nlgf = []
+
+    for cache_file in cache_files:
+        mouse = cache_file.name.split("_")[0]
+        date = cache_file.name.split("_")[1]
+        session_type = session_type_lookup(mouse, date)
+        if session_type != "unsupervised":
+            continue
+        genotype = get_genotype(mouse)
+        data = np.load(cache_file)
+        running.append(data["running_rates"])
+        resting.append(data["resting_rates"])
+
+        if genotype == "NLGF":
+            nlgf.append(data["resting_rates"])
+        elif genotype == "WT":
+            wt.append(data["resting_rates"])
+        else:
+            raise ValueError(f"Unknown genotype {genotype} for mouse {mouse}")
+
+    print(f"number of WTs: {len(wt)}, number of NLGFs: {len(nlgf)}")
+    plt.figure()
+    running = np.concatenate(running)
+    resting = np.concatenate(resting)
+    sns.histplot(running, bins=100, alpha=0.8, label="Running", kde=True)
+    sns.histplot(resting, bins=100, alpha=0.8, label="Rest ", kde=True)
+    plt.legend()
+
+    plt.figure()
+
+    # norm = lambda x: np.sqrt(x)
+    # norm = lambda x: np.log(x + 1)
+    norm = lambda x: x
+
+    genotype_data = {"WT": norm(np.concatenate(wt)), "NLGF": norm(np.concatenate(nlgf))}
+    sns.histplot(
+        genotype_data,
+        alpha=0.8,
+        kde=True,
+        stat="probability",
+        legend=True,
+        common_norm=False,
+        common_bins=True,
+    )
+
+
 if __name__ == "__main__":
     # basic_anticipatory_licking_plot()
+    # firing_rates_simple_histogram()
 
     # save_firing_rates("WT")
-    # save_firing_rates("NLGF")
-
-    firing_rates_plot(None)
+    # # save_firing_rates("NLGF")
+    # firing_rates_plot(None)
     # for genotype in tqdm(
     #     ["Oligo-BACE1-KO", "NLGF", "WT", "Neuronal-BACE1-KO"], desc="corrleations"
     # ):
     #     # for rewarded in [True, False, None]:
 
-    # example_traces()
+    example_traces()
     # n_responders_comparison_plot()
     # firing_rates_plot(None)
     # 1 / 0

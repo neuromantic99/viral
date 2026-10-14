@@ -1,14 +1,13 @@
-import pickle
 import os.path
+import pickle
 from typing import Dict
 
-from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 import pandas as pd
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 from viral.constants import HERE
-
 
 CRED_PATH = HERE.parent / "credentials.json"
 TOKEN_PATH = HERE.parent / "token.pickle"
@@ -93,7 +92,6 @@ def gsheet2df(spreadsheet_id: str, sheet_name: str, header_row: int) -> pd.DataF
 
     all_data = []
     for col_id, col_name in enumerate(header):
-
         column_data = [row[col_id] for row in values]
         ds = pd.Series(data=column_data, name=col_name)
         all_data.append(ds)

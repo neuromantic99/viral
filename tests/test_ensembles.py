@@ -141,7 +141,7 @@ def test_get_ssp_vectors(mock_trials) -> None:
                         mode,
                         speed_threshold,
                         n_consecutive_samples,
-                        None,
+                        0,  # 0 disables the minimum; None now means 4 * sigma
                     )
 
     expected_ssp_vectors = np.zeros(shape=(10, 14))

@@ -16,7 +16,15 @@ sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
 
 
-from viral.constants import CACHE_PATH, HERE, SERVER_PATH, grosmark_config
+from viral.constants import (
+    CACHE_PATH,
+    HERE,
+    LOCAL_DFF_PATH,
+    SERVER_PATH,
+    SPREADSHEET_ID,
+    grosmark_config,
+)
+from viral.gsheets_importer import gsheet2df
 from viral.imaging_utils import (
     get_ITI_matrix,
     load_imaging_data,
@@ -24,18 +32,19 @@ from viral.imaging_utils import (
     activity_trial_position,
     split_fluoresence_online_freeze,
 )
-
 from viral.models import Cached2pSession, GrosmarkConfig, WheelFreeze
 
 from viral.utils import (
+    SessionType,
     compute_linear_slope,
     cross_correlation_pandas,
     degrees_to_cm,
-    find_n_consecutive_trues_center,
+    find_n_consecutive_trues_extent,
+    get_genotype,
+    get_movement_bool,
+    get_session_type,
     get_wheel_circumference_from_rig,
     has_n_consecutive_trues,
-    interpolate_nans_vector,
-    remove_consecutive_ones,
     remove_diagonal,
     session_is_unsupervised,
     shaded_line_plot,
@@ -51,7 +60,9 @@ def grosmark_place_field(
     rewarded: bool | None,
     config: GrosmarkConfig,
     plot: bool = True,
-) -> None:
+    cache_file_additional_info: str | None = None,
+    use_cache: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Grosmark et al. place field analysis.
     1. get place cell mask
@@ -71,7 +82,13 @@ def grosmark_place_field(
         assert spks_raw.shape == spks.shape
 
     pcs, smoothed_matrix, _ = get_place_cells(
-        session=session, spks=spks, rewarded=rewarded, config=config, plot=plot
+        session=session,
+        spks=spks,
+        rewarded=rewarded,
+        config=config,
+        plot=plot,
+        cache_file_additional_info=cache_file_additional_info,
+        use_cache=use_cache,
     )
 
     spks = spks[pcs, :]
@@ -84,15 +101,19 @@ def grosmark_place_field(
     smoothed_matrix = smoothed_matrix[sorted_order, :]
     spks = spks[sorted_order, :]
 
+    offline_spks_pre = offline_spks_pre[pcs, :]
+    offline_spks_post = offline_spks_post[pcs, :]
+    offline_spks_pre = offline_spks_pre[sorted_order, :]
+    offline_spks_post = offline_spks_post[sorted_order, :]
+
     if plot:
         plot_circular_distance_matrix(smoothed_matrix)
 
-    offline_correlations(
-        session,
-        spks,
+    return offline_correlations(
+        offline_spks_pre=offline_spks_pre,
+        offline_spks_post=offline_spks_post,
         peak_position_cm=peak_position_cm,
         wheel_freeze=session.wheel_freeze,
-        rewarded=rewarded,
     )
 
 
@@ -102,7 +123,6 @@ def get_place_cells(
     config: GrosmarkConfig,
     rewarded: bool | None,
     use_cache: bool = True,
-    bin_occupancy_divide: bool = False,
     plot: bool = True,
     cache_file_additional_info: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -148,8 +168,7 @@ def get_place_cells(
                 max_position=config.end,
                 verbose=False,
                 do_shuffle=False,
-                threshold_speed=False if bin_occupancy_divide else True,
-                bin_occupancy_divide=bin_occupancy_divide,
+                threshold_speed=True,
             )
             for trial in session.trials
             if trial_is_imaged(trial)
@@ -167,7 +186,7 @@ def get_place_cells(
             / "viral_caches"
             / "place_cells"
             / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{variable_name}_BOD_{"IGNORE!"}.npy"
         )
     else:
         # e.g. train-test split
@@ -176,7 +195,7 @@ def get_place_cells(
             / "viral_caches"
             / "place_cells"
             / variable_name
-            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{bin_occupancy_divide}.npy"
+            / f"{session.mouse_name}_{session.date}_rewarded_{rewarded}_{config}_{cache_file_additional_info}_{variable_name}_BOD_{"IGNORE!"}.npy"
         )
 
     if use_cache and get_cache_path("place_threshold").exists():
@@ -205,8 +224,7 @@ def get_place_cells(
                             max_position=config.end,
                             verbose=False,
                             do_shuffle=True,
-                            threshold_speed=False if bin_occupancy_divide else True,
-                            bin_occupancy_divide=bin_occupancy_divide,
+                            threshold_speed=True,
                         )
                         for trial in session.trials
                         if trial_is_imaged(trial)
@@ -304,12 +322,11 @@ def plot_speed(
 
 
 def offline_correlations(
-    session: Cached2pSession,
-    spks: np.ndarray,
+    offline_spks_pre: np.ndarray,
+    offline_spks_post: np.ndarray,
     peak_position_cm: np.ndarray,
-    wheel_freeze: WheelFreeze | None,
-    rewarded: bool | None,
-) -> None:
+    wheel_freeze: WheelFreeze,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Correlates offline activity with running sequences. There used to be a lot of alternative definitions of offline activity
     that can be found in the commit history (e.g. d2e7852f54282a52722767e52cca1ab71e56851b) if you need them
 
@@ -320,73 +337,62 @@ def offline_correlations(
     and convolved with a 150-ms Gaussian kernel.
 
     """
+    movement_pre, movement_post = get_movement_bool(wheel_freeze=wheel_freeze)
 
-    if not wheel_freeze:
-        offline = get_ITI_matrix(
-            trials=[
-                trial
-                for trial in session.trials
-                if trial_is_imaged(trial)
-                and (rewarded is None or trial.texture_rewarded == rewarded)
-            ],
-            flu=spks,
-            bin_size=None,
-        )
+    offline_spks_pre = offline_spks_pre[:, ~movement_pre]
+    offline_spks_post = offline_spks_post[:, ~movement_post]
 
-        shuffled_corrs = get_offline_correlation_matrix(
-            offline, wheel_freeze=False, do_shuffle=True, plot=True
-        )
-        real_corrs = get_offline_correlation_matrix(
-            offline, wheel_freeze=False, do_shuffle=False, plot=True
-        )
-        plt.figure()
-
-        r, p = correlations_vs_peak_distance(
-            real_corrs, peak_position_cm=peak_position_cm, plot=True
-        )
-
-        plt.xlabel("Distance between peaks")
-        plt.ylabel("Average pearson correlation")
-        plt.title(f"Fit pearson corrleation r = {r:.2f}, p = {p:.2f}")
-        # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
-    else:
-        offline_spks_pre, _, offline_spks_post = split_fluoresence_online_freeze(
-            flu=spks, wheel_freeze=wheel_freeze
-        )
-        pre_corrs_real = get_offline_correlation_matrix(
-            offline=offline_spks_pre, wheel_freeze=True, do_shuffle=False, plot=True
-        )
-        pre_corrs_shuffled = get_offline_correlation_matrix(
-            offline=offline_spks_pre, wheel_freeze=True, do_shuffle=True, plot=True
-        )
-        post_corrs_real = get_offline_correlation_matrix(
-            offline=offline_spks_post, wheel_freeze=True, do_shuffle=False, plot=True
-        )
-        post_corrs_shuffled = get_offline_correlation_matrix(
-            offline=offline_spks_post, wheel_freeze=True, do_shuffle=True, plot=True
-        )
-        plt.figure()
-        plt.xlabel("Distance between peaks")
-        plt.ylabel("Average pearson correlation")
-        r_pre, p_pre = correlations_vs_peak_distance(
-            pre_corrs_real,
-            peak_position_cm=peak_position_cm,
-            colour="blue",
-            label="pre-epoch",
-            plot=True,
-        )
-        r_post, p_post = correlations_vs_peak_distance(
-            post_corrs_real,
-            peak_position_cm=peak_position_cm,
-            colour="red",
-            label="post-epoch",
-            plot=True,
-        )
-        plt.legend()
-        plt.title(
-            f"pre: r={r_pre:.2f}, p={p_pre:.2f}\npost: r={r_post:.2f}, p={p_post:.2f}"
-        )
-        # plt.savefig("plots/correlations_peak_distance.png", dpi=300)
+    pre_corrs_real = get_offline_correlation_matrix(
+        offline=offline_spks_pre,
+        wheel_freeze=True,
+        do_shuffle=False,
+        plot=True,
+        name="pre",
+    )
+    pre_corrs_shuffled = get_offline_correlation_matrix(
+        offline=offline_spks_pre,
+        wheel_freeze=True,
+        do_shuffle=True,
+        plot=False,
+        name="pre shuffled",
+    )
+    post_corrs_real = get_offline_correlation_matrix(
+        offline=offline_spks_post,
+        wheel_freeze=True,
+        do_shuffle=False,
+        plot=True,
+        name="post",
+    )
+    post_corrs_shuffled = get_offline_correlation_matrix(
+        offline=offline_spks_post,
+        wheel_freeze=True,
+        do_shuffle=True,
+        plot=False,
+        name="post shuffled",
+    )
+    plt.figure()
+    plt.xlabel("Distance between peaks")
+    plt.ylabel("Average pearson correlation")
+    x_pre, y_pre = correlations_vs_peak_distance(
+        pre_corrs_real,
+        peak_position_cm=peak_position_cm,
+        colour="blue",
+        label="pre-epoch",
+        plot=True,
+    )
+    x_post, y_post = correlations_vs_peak_distance(
+        post_corrs_real,
+        peak_position_cm=peak_position_cm,
+        colour="red",
+        label="post-epoch",
+        plot=True,
+    )
+    return (
+        x_pre,
+        y_pre,
+        x_post,
+        y_post,
+    )
 
 
 def get_offline_correlation_matrix(
@@ -394,6 +400,7 @@ def get_offline_correlation_matrix(
     wheel_freeze: bool,
     do_shuffle: bool = False,
     plot: bool = True,
+    name: str | None = None,
 ) -> np.ndarray:
     """Reproducing Grosmark et al. figure 4. c/d."""
     if not wheel_freeze:
@@ -413,17 +420,19 @@ def get_offline_correlation_matrix(
         offline = gaussian_filter1d(offline, sigma=4.5, axis=1)
         all_corrs = [cross_correlation_pandas(offline.T)]
 
+    # Silent cells, correctly are correlated to NaN, so we take the mean across trials and ignore NaNs
     corrs = np.nanmean(np.array(all_corrs), 0)
 
     if plot:
         plt.figure()
-        plt.title("shuffled" if do_shuffle else "real")
+        if name:
+            plt.title(name)
         if do_shuffle:
             np.random.shuffle(corrs)
         plt.imshow(
             gaussian_filter1d(remove_diagonal(corrs), sigma=2.5),
             vmin=0,
-            vmax=0.1,
+            vmax=0.2,
             cmap="bwr",
         )
     return corrs
@@ -432,11 +441,10 @@ def get_offline_correlation_matrix(
 def correlations_vs_peak_distance(
     corrs: np.ndarray,
     peak_position_cm: np.ndarray,
-    bin_starts: np.ndarray,
     colour: str | None = None,
     label: str | None = None,
     plot: bool = False,
-) -> tuple[float, tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Figure 4. e/f in Grosmark. Computes the pairwise offline correlations between neurons as a function of the
         distance between their place field peaks.
     Args:
@@ -464,30 +472,20 @@ def correlations_vs_peak_distance(
     x = []
     y = []
 
-    bin_width = bin_starts[1] - bin_starts[0]
-    for bin_start in bin_starts:
+    bin_width = 20
+    for bin_start in np.arange(120):
         in_bin = np.logical_and(
             peak_distances >= bin_start, peak_distances < bin_start + bin_width
         )
         x.append(bin_start)
-        y.append(np.mean(cell_corrs[in_bin]))
+        y.append(np.nanmean(cell_corrs[in_bin]))
 
     if plot:
         plt.figure()
-        plt.plot(np.array(x) / 60, y, color=colour, label=label)
+        plt.plot(np.array(x), y, color=colour, label=label)
         plt.legend()
 
-    # Need to put this back if grosmarking
-    # r, p = pearsonr(x, y)
-    # return r, p
-    x = np.array(x)
-    y = np.array(y)
-
-    y = interpolate_nans_vector(y)
-
-    m = compute_linear_slope((x / 60), y / y[0])
-
-    return m, (np.array(x), np.array(y))
+    return np.array(x), np.array(y)
 
 
 def plot_circular_distance_matrix(smoothed_matrix: np.ndarray) -> None:
@@ -509,7 +507,7 @@ def plot_place_cell_heatmap(
         aspect="auto",
         cmap="bwr",
         vmin=-1,
-        vmax=2,
+        vmax=2.5,
     )
 
     plt.xlabel("Corridor position (cm)")
@@ -535,24 +533,21 @@ def filter_additional_check(
     in at least 3 or 15% of laps (whichever was greater for each session) were considered bona fide PFs and kept for further analysis.
     """
 
-    centers = find_n_consecutive_trues_center(
+    # The place field is the whole contiguous supra-threshold region, not just the
+    # n_consecutive_trues bins that made it qualify
+    place_fields = find_n_consecutive_trues_extent(
         smoothed_matrix > place_threshold, n_consecutive_trues
     )
 
     n_trials, n_cells, n_bins = all_trials.shape
+    assert place_fields.shape == (n_cells, n_bins)
 
-    valid_pcs = np.array([False] * n_cells)
+    # "in at least 3 or 15% of laps (whichever was greater for each session)"
+    min_laps = max(3, math.ceil(0.15 * n_trials))
+
+    valid_pcs = np.zeros(n_cells, dtype=bool)
     for cell in range(n_cells):
-        center = centers[cell]
-        assert center + math.ceil(n_consecutive_trues / 2) <= n_bins
-        assert center - math.floor(n_consecutive_trues / 2) >= 0
-
-        cell_place_field = np.array([False] * n_bins)
-        cell_place_field[
-            center
-            - math.floor(n_consecutive_trues) : center
-            + math.ceil(n_consecutive_trues)
-        ] = True
+        cell_place_field = place_fields[cell, :]
         cell_out_of_place_field = np.logical_not(cell_place_field)
 
         cell_place_activity = all_trials[:, cell, cell_place_field]
@@ -564,10 +559,9 @@ def filter_additional_check(
             ):
                 count += 1
 
-        if count / n_trials > 0.15:
-            valid_pcs[cell] = True
+        valid_pcs[cell] = count >= min_laps
 
-    return np.array(valid_pcs)
+    return valid_pcs
 
 
 def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
@@ -603,42 +597,181 @@ def circular_distance_matrix(activity_matrix: np.ndarray) -> np.ndarray:
     return circular_dist_matrix
 
 
-if __name__ == "__main__":
+def batch_runner() -> None:
 
-    # mouse = "JB031"
-    # date = "2025-03-28"
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    data_type = "spks"
+    use_cache = False
+    use_local_dff = False
 
-    mouse = "JB027"
-    date = "2025-02-26"
-
-    with open(
-        SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
-    ) as f:
-        session = Cached2pSession.model_validate_json(f.read())
-
-    print(f"Total number of trials: {len(session.trials)}")
-    print(
-        f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
+    cache_files = sorted(
+        cache_files, key=lambda x: (x.stem.split("_")[0], x.stem.split("_")[1])
     )
 
-    dff, spks, denoised = load_imaging_data(mouse, date)
+    for cache_file in cache_files:
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
 
-    print("Got dff")
+        print("Processing", cache_file)
 
-    assert (
-        max(
-            trial.states_info[-1].closest_frame_start
-            for trial in session.trials
-            if trial.states_info[-1].closest_frame_start is not None
+        with open(
+            SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json", "r"
+        ) as f:
+            session = Cached2pSession.model_validate_json(f.read())
+
+        print(f"Total number of trials: {len(session.trials)}")
+        print(
+            f"number of trials imaged {len([trial for trial in session.trials if trial_is_imaged(trial)])}"
         )
-        < dff.shape[1]
-    ), "Tiff is too short"
 
-    is_unsupervised = session_is_unsupervised(session)
+        if use_local_dff and (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
+            dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy")
+            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy")
+            denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy")
+        else:
+            dff, spks, denoised = load_imaging_data(mouse, date)
+            if use_local_dff:
+                np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy", dff)
+                np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy", spks)
+                np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy", denoised)
 
-    grosmark_place_field(
-        session,
-        spks,
-        rewarded=None if is_unsupervised else False,
-        config=grosmark_config,
-    )
+        assert (
+            max(
+                trial.states_info[-1].closest_frame_start
+                for trial in session.trials
+                if trial.states_info[-1].closest_frame_start is not None
+            )
+            < dff.shape[1]
+        ), "Tiff is too short"
+
+        is_unsupervised = session_is_unsupervised(session)
+
+        for rewarded in [True, None, False]:
+            try:
+                grosmark_place_field(
+                    session,
+                    spks if data_type == "spks" else denoised,
+                    rewarded=None if is_unsupervised else rewarded,
+                    config=grosmark_config,
+                    cache_file_additional_info=(
+                        data_type if data_type == "denoised" else None
+                    ),
+                    use_cache=use_cache,
+                )
+            except Exception as e:
+                print(f"Error processing {mouse} {date} rewarded={rewarded}: {e}")
+            # Don't run unsupervised three times
+            if is_unsupervised:
+                break
+
+
+def offline_correlation_across_sessions() -> None:
+
+    cache_files = list(CACHE_PATH.glob("*.json"))
+    mice = set([cache_file.stem.split("_")[0] for cache_file in cache_files])
+    data_type = "spks"
+
+    x_pre_all = []
+    y_pre_all = []
+    x_post_all = []
+    y_post_all = []
+
+    metadata_dict = {mouse: gsheet2df(SPREADSHEET_ID, mouse, 1) for mouse in mice}
+    result = {}
+
+    for cache_file in cache_files:
+        file_parts = cache_file.stem.split("_")
+        date = file_parts[1]
+        mouse = file_parts[0]
+
+        if mouse == "JB031":
+            continue
+
+        genotype = get_genotype(mouse)
+        if genotype not in {"WT"}:
+            continue
+        print(f"Processing mouse {mouse} with genotype {genotype}")
+        metadata = metadata_dict[mouse]
+        session_metadata = metadata[metadata["Date"] == date]
+        if get_session_type(session_metadata["Type"].values[0]) not in {
+            # SessionType.LEARNING.value,
+            SessionType.UNSUPERVISED.value,
+            # SessionType.REVERSAl.value,
+        }:
+            print(
+                f"Skipping {mouse} {date} because session type is not learning, unsupervised, or reversal"
+            )
+            continue
+
+        try:
+            with open(
+                SERVER_PATH / "viral_caches" / "cached_2p" / f"{mouse}_{date}.json",
+                "r",
+            ) as f:
+                session = Cached2pSession.model_validate_json(f.read())
+        except:
+            print(f"Skipping {mouse} {date} because session file not found")
+            continue
+
+        if session.wheel_freeze is None:
+            print(f"Skipping {mouse} {date} because wheel_freeze is None")
+            continue
+
+        if (LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy").exists():
+            dff = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy")
+            spks = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy")
+            denoised = np.load(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy")
+        else:
+            dff, spks, denoised = load_imaging_data(mouse, date)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_dff.npy", dff)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy", spks)
+            np.save(LOCAL_DFF_PATH / f"{mouse}_{date}_denoised.npy", denoised)
+
+        try:
+            (
+                x_pre,
+                y_pre,
+                x_post,
+                y_post,
+            ) = grosmark_place_field(
+                session,
+                spks if data_type == "spks" else denoised,
+                rewarded=None,
+                config=grosmark_config,
+                cache_file_additional_info=(
+                    data_type if data_type == "denoised" else None
+                ),
+                use_cache=True,
+                plot=False,
+            )
+        except Exception as e:
+            print(f"Error processing {mouse} {date}: {e}")
+            continue
+
+        x_pre_all.append(x_pre)
+        y_pre_all.append(y_pre)
+        x_post_all.append(x_post)
+        y_post_all.append(y_post)
+
+    np.save("x_pre_all.npy", x_pre_all)
+    np.save("y_pre_all.npy", y_pre_all)
+    np.save("x_post_all.npy", x_post_all)
+    np.save("y_post_all.npy", y_post_all)
+    1 / 0
+
+
+if __name__ == "__main__":
+    # offline_correlation_across_sessions()
+    x_pre_all = np.load("x_pre_all.npy", allow_pickle=True)
+    y_pre_all = np.load("y_pre_all.npy", allow_pickle=True)
+    x_post_all = np.load("x_post_all.npy", allow_pickle=True)
+    y_post_all = np.load("y_post_all.npy", allow_pickle=True)
+
+    # y_pre_all = zscore(np.array(y_pre_all), axis=1, nan_policy="omit")
+    # y_post_all = zscore(np.array(y_post_all), axis=1, nan_policy="omit")
+
+    shaded_line_plot(y_pre_all, np.arange(120), "red", "pre")
+    shaded_line_plot(y_post_all, np.arange(120), "green", "post")
+
+    1 / 0

@@ -110,6 +110,11 @@ class WheelFreeze(BaseModel):
     pre_training_end_frame: int
     post_training_start_frame: int
     post_training_end_frame: int
+    trials_pre_freeze: List[TrialInfo] | None = None
+    trials_post_freeze: List[TrialInfo] | None = None
+    movement_pre_freeze: List[float] | None = None
+    movement_post_freeze: List[float] | None = None
+    freeze_movement_type: Literal["camera", "rotary_encoder", "suite2p"] | None = None
 
 
 class Cached2pSession(BaseModel):
@@ -180,6 +185,9 @@ class SessionImagingInfo:
     behaviour_times: np.ndarray
     sampling_rate: int
     offset_after_pre_epoch: int
+    # Only relevant after we started recording movements in the sync periods
+    # In these sessions we need to keep track of the first sync for the given bpod session
+    task_sync_start: int | None = None
 
 
 @dataclass
@@ -198,6 +206,27 @@ class EnsembleSessionResult:
     number_of_events: Tuple[np.ndarray, np.ndarray]
     sum_values_over_threshold: Tuple[np.ndarray, np.ndarray]
     three_sd_events: Tuple[np.ndarray, np.ndarray]
+
+
+@dataclass
+class ReactivationSummary:
+    """Per-component summary of ICA ensemble reactivation in one offline epoch.
+
+    Rate and amplitude are kept apart on purpose: they are the two arms of the
+    rate-versus-content question, and a single scalar cannot tell "fewer, normal
+    events" from "as many events that no longer match the run map".
+
+    Both are computed on the shuffle-referenced z (see reactivation_zscore), so they
+    are dimensionless and comparable across sessions and animals. Rate is per second
+    of retained immobility rather than per frame, because the pre and post epochs
+    keep different numbers of frames once movement is masked out.
+    """
+
+    event_rate_hz: np.ndarray  # (n_components,) events per second of immobility
+    mean_peak_z: np.ndarray  # (n_components,) mean peak z per event, NaN if no events
+    n_events: np.ndarray  # (n_components,)
+    n_events_rejected: np.ndarray  # (n_components,) excursions failing the cell count
+    immobility_seconds: float
 
 
 @dataclass

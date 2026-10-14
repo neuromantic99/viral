@@ -11,7 +11,6 @@ from sklearn.decomposition import PCA
 from tqdm import tqdm
 import seaborn as sns
 
-
 # Allow you to run the file directly, remove if exporting as a proper module
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
@@ -79,7 +78,6 @@ def load_signal(
             verbose=False,
             do_shuffle=False,
             threshold_speed=False,
-            bin_occupancy_divide=True,
         )
         signal.append(data)
     return np.array(signal)

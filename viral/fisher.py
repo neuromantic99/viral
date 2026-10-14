@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 from scipy.ndimage import gaussian_filter1d
 
-
 HERE = Path(__file__).parent
 sys.path.append(str(HERE.parent))
 sys.path.append(str(HERE.parent.parent))
@@ -32,7 +31,6 @@ from scipy.stats import zscore
 from viral.models import Cached2pSession
 from viral.utils import get_genotype, get_wheel_circumference_from_rig
 from viral.constants import grosmark_config
-
 
 CACHE_PATH = Path("/Volumes/MarcBusche/Josef/viral_caches/fisher/denoised")
 

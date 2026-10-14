@@ -36,7 +36,7 @@ from viral.constants import (
 from viral.ensemble_reactivation import main as ensemble_main
 from viral.grosmark_analysis import get_place_cells, plot_place_cell_heatmap
 from viral.gsheets_importer import gsheet2df
-from viral.imaging_utils import trial_is_imaged
+from viral.imaging_utils import load_imaging_data, trial_is_imaged
 from viral.models import Cached2pSession, GrosmarkConfig, Mouse2pSessions
 from viral.multiple_sessions import parse_session_number
 from viral.sessions_keep import SESSIONS_KEEP
@@ -163,14 +163,8 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
     print("Processing", mouse_name, date)
     with open(CACHE_PATH / f"{mouse_name}_{date}.json", "r") as f:
         session = Cached2pSession.model_validate_json(f.read())
-    spks_path = TIFF_UMBRELLA / session.date / session.mouse_name / "suite2p" / "plane0"
 
-    assert (
-        spks_path / "full_grosmark_oasis_preprocessed.npy"
-    ).exists(), (
-        f"File {spks_path / 'full_grosmark_oasis_preprocessed.npy'} does not exist"
-    )
-    spks = np.load(spks_path / "oasis_spikes.npy")
+    _, spks, _ = load_imaging_data(mouse=mouse_name, date=date)
 
     for rewarded in [False, True, None]:
         pcs_mask, smoothed_matrix, place_threshold = get_place_cells(
@@ -179,7 +173,6 @@ def store_place_cell_result(mouse_name: str, date: str, config: GrosmarkConfig) 
             rewarded=rewarded,
             config=config,
             plot=False,
-            bin_occupancy_divide=True,
         )
 
 
@@ -392,7 +385,6 @@ def get_speed_summary(
 
 def tuning_comparison_plot() -> None:
 
-
     wt = PlaceCellResults(
         SERVER_PATH / "viral_caches" / "place_cells",
         genotype="WT",
@@ -435,7 +427,6 @@ def tuning_comparison_plot() -> None:
         bbox_inches="tight",
         transparent=True,
     )
-
 
 
 def plot_place_cell_results(
@@ -880,10 +871,9 @@ def plot_place_cell_heatmaps() -> None:
             )
 
 
-
-
 if __name__ == "__main__":
     # plot_place_cell_heatmaps()
+    pass
     # landmark_comparison_plot(bod=False)
     # tuning_comparison_plot()
 
