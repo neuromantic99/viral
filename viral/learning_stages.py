@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from pydantic import ValidationError
 from scipy import stats
 
-from ensemble_reactivation import main as ensemble_main
+from viral.ensemble_reactivation import main as ensemble_main
 from viral.grosmark_analysis import get_place_cells
 from viral.sessions_keep import SESSIONS_KEEP
 from scipy import stats

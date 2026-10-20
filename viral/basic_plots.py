@@ -966,7 +966,7 @@ def firing_rates_simple_histogram() -> None:
 
 
 if __name__ == "__main__":
-    # basic_anticipatory_licking_plot()
+    basic_anticipatory_licking_plot()
     # firing_rates_simple_histogram()
 
     # save_firing_rates("WT")
@@ -977,7 +977,7 @@ if __name__ == "__main__":
     # ):
     #     # for rewarded in [True, False, None]:
 
-    example_traces()
+    # example_traces()
     # n_responders_comparison_plot()
     # firing_rates_plot(None)
     # 1 / 0

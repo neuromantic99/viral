@@ -40,7 +40,13 @@ from viral.utils import read_npy_shape
 
 STAGES: List[str] = ["learning", "reversal"]
 MIN_CELLS = 250
-GENOTYPES = ["WT", "NLGF"]
+# CAUTION (2026-10-20): Oligo-BACE1-KO was added here for the three-group figures. Every
+# caller of sessions() with no `genotypes=` now gets Oligo sessions too. compare() still
+# defaults to NLGF vs WT, so existing tests are unaffected, but anything that pools or
+# normalises across the whole cohort (a cohort-wide median, a matched cell count, a
+# shared decoder) now includes Oligo. Pass `genotypes=["WT", "NLGF"]` or use `arm()`
+# for a two-group analysis.
+GENOTYPES = ["WT", "NLGF", "Oligo-BACE1-KO"]
 
 
 def n_cells(mouse: str, date: str) -> int:
@@ -54,8 +60,11 @@ def n_cells(mouse: str, date: str) -> int:
         return 0
 
 
-def sessions(min_cells: int = MIN_CELLS, stages: List[str] | None = None,
-             genotypes: List[str] | None = None) -> pd.DataFrame:
+def sessions(
+    min_cells: int = MIN_CELLS,
+    stages: List[str] | None = None,
+    genotypes: List[str] | None = None,
+) -> pd.DataFrame:
     d = ledger()
     d = d[d.has_spks]
     d = d[d.stage.isin(stages if stages is not None else STAGES)]
@@ -70,7 +79,9 @@ def sessions(min_cells: int = MIN_CELLS, stages: List[str] | None = None,
 
 def describe(d: pd.DataFrame) -> str:
     g = d.groupby("genotype").agg(mice=("mouse", "nunique"), sessions=("date", "size"))
-    return "  ".join(f"{k} {v.mice} mice/{v.sessions} sessions" for k, v in g.iterrows())
+    return "  ".join(
+        f"{k} {v.mice} mice/{v.sessions} sessions" for k, v in g.iterrows()
+    )
 
 
 if __name__ == "__main__":

@@ -907,10 +907,10 @@ def temp_spks_copier() -> None:
         # if not get_genotype(mouse).startswith("WT") and not get_genotype(
         #     mouse
         # ).startswith("NLGF"):
-        if not get_genotype(mouse) == "Oligo-BACE1-KO":
-            continue
-            # print(f"Skipping {mouse} {date}: not WT or NLGF")
-            # continue
+        # if not get_genotype(mouse) == "Oligo-BACE1-KO":
+        #     continue
+        #     # print(f"Skipping {mouse} {date}: not WT or NLGF")
+        #     # continue
         local = LOCAL_DFF_PATH / f"{mouse}_{date}_spks.npy"
         if not local.exists():
             print(f"Copying {mouse} {date}")
@@ -933,8 +933,8 @@ def temp_stat_ops_copier() -> None:
         # ).startswith("NLGF"):
         #     print(f"Skipping {mouse} {date}: not WT or NLGF")
         #     continue
-        if not get_genotype(mouse) == "Oligo-BACE1-KO":
-            continue
+        # if not get_genotype(mouse) == "Oligo-BACE1-KO":
+        #     continue
 
         local = LOCAL_DFF_PATH / f"{mouse}_{date}_stat.npy"
         if not local.exists():

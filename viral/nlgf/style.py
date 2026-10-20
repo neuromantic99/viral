@@ -14,7 +14,12 @@ GENOTYPE_COLOURS = {
     "Oligo-BACE1-KO": "#0CA678",
     "Neuronal-BACE1-KO": "#AE3EC9",
 }
-GENOTYPE_ORDER = ["WT", "NLGF"]
+# CAUTION (2026-10-20): Oligo-BACE1-KO was added here for the three-group figures. Many
+# fig_*.py modules filter or loop on GENOTYPE_ORDER, so they now include Oligo as well.
+# Known case: fig_behaviour._curve truncates the WT/NLGF learning curves wherever Oligo
+# drops below min_mice, and its n label still lists only WT/NLGF. Before reusing a fig_*
+# module for a two-group figure, check how it uses GENOTYPE_ORDER.
+GENOTYPE_ORDER = ["WT", "NLGF", "Oligo-BACE1-KO"]
 
 # Axis labels only. The full names are too wide to sit side by side under a two-box
 # plot; the legend and titles keep the full name.
@@ -28,6 +33,7 @@ _SCALE = 1.0
 
 def text_scale() -> float:
     return _SCALE
+
 
 REWARDED_COLOUR = "#1C7ED6"
 UNREWARDED_COLOUR = "#F03E3E"
@@ -106,6 +112,7 @@ def p_bracket(
     height_frac: float = 0.035,
     label: str | None = None,
     fontsize: float | None = None,
+    text: str | None = None,
 ) -> None:
     """Significance bracket spanning two groups, with the p above it.
 
@@ -115,7 +122,8 @@ def p_bracket(
     what three-group panels need: two brackets at the same height would collide on the
     middle group they share.
 
-    `label` prefixes the p, for panels carrying more than one contrast.
+    `label` prefixes the p, for panels carrying more than one contrast. `text` replaces
+    the p entirely, for a contrast that was deliberately not tested.
     """
     # On a log axis, evenly spaced positions have to be computed in log space or the
     # bracket lands far above the data (or below the axis) - the arithmetic that spaces
@@ -127,26 +135,47 @@ def p_bracket(
         lspan = lhi - llo
         ly = lhi + pad_frac * lspan
         lh = height_frac * lspan
-        y, h_top = 10 ** ly, 10 ** (ly + lh)
-        ax.plot([x0, x0, x1, x1], [y, h_top, h_top, y], lw=1.1 * _SCALE,
-                color="#495057", clip_on=False, zorder=6)
+        y, h_top = 10**ly, 10 ** (ly + lh)
+        ax.plot(
+            [x0, x0, x1, x1],
+            [y, h_top, h_top, y],
+            lw=1.1 * _SCALE,
+            color="#495057",
+            clip_on=False,
+            zorder=6,
+        )
         text_y = 10 ** (ly + lh * 1.15)
         top = 10 ** (ly + lh * 3.2)
     else:
         span = hi - lo
         y = hi + pad_frac * span
         h = height_frac * span
-        ax.plot([x0, x0, x1, x1], [y, y + h, y + h, y], lw=1.1 * _SCALE,
-                color="#495057", clip_on=False, zorder=6)
+        ax.plot(
+            [x0, x0, x1, x1],
+            [y, y + h, y + h, y],
+            lw=1.1 * _SCALE,
+            color="#495057",
+            clip_on=False,
+            zorder=6,
+        )
         text_y = y + h * 1.15
         top = y + h * 3.2
 
-    text = "p < 0.001" if p_value < 0.001 else f"p = {p_value:.2f}"
+    if text is None:
+        text = "p < 0.001" if p_value < 0.001 else f"p = {p_value:.2f}"
     if label:
         text = f"{label}  {text}"
-    ax.text((x0 + x1) / 2, text_y, text, ha="center", va="bottom",
-            fontsize=fontsize if fontsize else (9.5 if not label else 8.5) * _SCALE,
-            color="#212529", clip_on=False, zorder=6)
+    ax.text(
+        (x0 + x1) / 2,
+        text_y,
+        text,
+        ha="center",
+        va="bottom",
+        fontsize=fontsize if fontsize else (9.5 if not label else 8.5) * _SCALE,
+        color="#212529",
+        clip_on=False,
+        zorder=6,
+    )
     ax.set_ylim(lo, top)
 
 
