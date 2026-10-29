@@ -1,7 +1,7 @@
 from typing import List
-from viral.multiple_sessions import create_metric_dict
-from viral.models import TrialSummary
-from unittest.mock import Mock
+from viral.multiple_sessions import create_metric_dict, rolling_performance
+from viral.models import TrialSummary, MultipleSessionsConfig
+from unittest.mock import Mock, patch
 
 
 def create_mock_mouse() -> Mock:
@@ -122,3 +122,19 @@ def test_create_metric_dict_sessions():
     assert mouse_metric["reversal"] == 1
     assert mouse_metric["recall"] == 1
     assert mouse_metric["recall_reversal"] == 1
+
+
+def test_rolling_performance():
+    """Tests that rolling performance is off by one"""
+    # this test was written with help from Claude Opus 5.5 (medium effort) on 28/10/2026
+    n_trials = 10
+    trials = list(range(0, n_trials))
+    assert len(trials) == n_trials
+    config = MultipleSessionsConfig(window=n_trials, speed=0.5, licking=0.5)
+    with patch(
+        "viral.multiple_sessions.learning_metric",
+        side_effect=lambda trials, config: list(trials),
+    ):
+        windows = rolling_performance(trials=trials, config=config)
+    assert len(windows) == 0
+    # i.e., if there are as many trials as the window is set to, no windows can be found

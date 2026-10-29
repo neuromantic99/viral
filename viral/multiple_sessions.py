@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import random
 import pandas as pd
+import os
 import re
 import sys
 from scipy import stats
@@ -435,6 +436,8 @@ def cache_mouse(mouse_name: str) -> None:
                 f"Missing setup information for {mouse_name}, session type: {session_type}"
             )
 
+    behaviour_summaries_path = HERE.parent / "data" / "behaviour_summaries"
+    behaviour_summaries_path.mkdir(parents=True, exist_ok=True)
     with open(
         HERE.parent / "data" / "behaviour_summaries" / f"{mouse_name}.json", "w"
     ) as f:
@@ -1277,7 +1280,12 @@ if __name__ == "__main__":
     # # for s in ["learning", "reversal"]:
     # #     plot_performance_summaries(mice, s, ["genotype"], config=config)
 
-    plot_mouse_performance(mice[10], config=config)
+    # plot_mouse_performance(mice[10], config=config)
+    plot_performance_across_days(mice[0].sessions, config=config)
+    plt.show()
+    # plot_learning_metric_first_x_trials(
+    #     mice=mice, session_type="learning", group_by=["genotype"], config=config, x=100
+    # )
 
     # # plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
 
