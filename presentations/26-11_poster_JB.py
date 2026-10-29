@@ -5,9 +5,9 @@ discussing analysis choices. All code was reviewed and checked by JB.
 List not exhaustive:
 - 19/10/2026: statistical tests in statistics_behavioural_performance
 - 27-28/10/2026 and earlier (partly via 26-10_meeting_JB.py): parts of plot_behaviour and plot_performance_summaries_per_genotype (AI assistance was not recorded as thoroughly)
-- 28/10/2026: pick_example (criterion check, median-based selection), figure saving and session lookup in plot_example_licking_and_running, tests.multiple_sessions.test_rolling_performance, more minor changes in the entire document,
+- 28/10/2026: pick_example (criterion check, median-based selection), figure saving and session lookup in plot_example_licking_and_running, tests.test_multiple_sessions.test_rolling_performance, more minor changes in the entire document,
 help with adjusting plot_speed_reward_unrewarded
-- 29/10/2026: help with fixing the SEM issue in viral.utils.shaded_line_plot
+- 29/10/2026: help with fixing the SEM issue in viral.utils.shaded_line_plot, help with figuring out why speed can get infinite, helped make licking plots prettier
 Substantial AI-written passages are marked inline.
 Some git commit hashes might become out of date after this branch is merged.
 """
@@ -25,6 +25,7 @@ from matplotlib import pyplot as plt
 from pydantic import ValidationError
 import numpy as np
 import seaborn as sns
+import csv
 from viral.gsheets_importer import gsheet2df
 from viral.single_session import load_data, summarise_trial
 from viral.constants import (
@@ -39,10 +40,7 @@ from viral.utils import (
     degrees_to_cm,
     get_speed_positions,
 )
-from viral.single_session import (
-    remove_bad_trials,
-    plot_rewarded_vs_unrewarded_licking,
-)
+from viral.single_session import remove_bad_trials, plot_rewarded_vs_unrewarded_licking
 from viral.multiple_sessions import (
     load_cache,
     parse_session_number,
@@ -298,8 +296,9 @@ def plot_speed_reward_unrewarded(
     prev_unrewarded = []
 
     first_position = 0
-    last_position = 200
-    # last_position = 180
+    # 28/10/2026 JB: in accordance with JR, I decided to plot speed up until 180cm only
+    # last_position = 200
+    last_position = 180
     step_size = 5
 
     for idx, trial in enumerate(trials):
@@ -338,10 +337,10 @@ def plot_speed_reward_unrewarded(
 
     # Should be the same for all trials
     # Use the bin_stop so there is no forward look ahead
-    plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=-1)
+    # plt.axvspan(180, 200, color="gray", alpha=0.5, zorder=-1)
     plt.axvspan(150, 180, color="lightgray", alpha=0.5, zorder=-1)
-    plt.xlim(0, 200)
-    # plt.xlim(0, 180)
+    # plt.xlim(0, 200)
+    plt.xlim(0, 180)
     x_axis = [bin.position_stop for bin in rewarded[0]]
     shaded_line_plot(
         np.array([[bin.speed for bin in trial] for trial in rewarded]),
@@ -357,11 +356,42 @@ def plot_speed_reward_unrewarded(
         "Unrewarded",
     )
 
-    plt.xticks([0, 50, 100, 150, 200])
+    plt.xticks([0, 50, 100, 150, 180])
     plt.legend()
     plt.ylim(0, None)
     plt.xlabel("Distance (cm)")
     plt.ylabel("Speed (cm / s)")
+
+    # Snippet by Claude Opus 5.5 (medium effort) 29/10/2026 to inspect the infinite speed issue
+    # --start
+    # Claude's reasoning:it is the state machine's sampling (position sampling lagging behind after entering the reward zone)
+    # 29/10/2026 JB: in accordance with JR, I decided to plot speed up until 180cm only
+    # with open(HERE.parent / "data" / "speed_debug.csv", "w", newline="") as f:
+    #     w = csv.writer(f)
+    #     w.writerow(["trial", "rewarded", "sample", "state", "time_s", "position_cm"])
+    #     for idx, trial in enumerate(trials):  # trials after remove_bad_trials
+    #         position = degrees_to_cm(
+    #             np.array(trial.rotary_encoder_position), wheel_circumference
+    #         )
+    #         states = [
+    #             s
+    #             for s in trial.states_info
+    #             if s.name
+    #             in ["trigger_panda", "trigger_panda_post_reward", "trigger_panda_ITI"]
+    #         ]
+    #         for i, pos in enumerate(position):
+    #             state = states[i] if i < len(states) else None
+    #             w.writerow(
+    #                 [
+    #                     idx,
+    #                     trial.texture_rewarded,
+    #                     i,
+    #                     state.name if state else "",
+    #                     state.end_time if state else "",
+    #                     round(pos, 3),
+    #                 ]
+    #             )
+    # --end
 
 
 def pick_example(

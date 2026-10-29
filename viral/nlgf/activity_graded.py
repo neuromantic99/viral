@@ -1,5 +1,16 @@
 """Tier 1's synchrony measures, binary and graded, against the same fair null.
 
+CHANGED 29/10/2026 (Claude Opus 5.5, medium effort, at JB's request): the random seed
+in `session_graded` was derived from Python's built-in hash(), which changes with every
+process, so the results were not reproducible between runs. It is now a fixed
+default_rng(0) per session, like activity.py. Results from runs before this change
+used a different random subsample of cells and frames each time. Re-run this script
+before using activity_graded.csv. Each session still uses ONE random subsample of
+250 cells; how sensitive the results are to that subsample has not been assessed yet.
+Note: the cells now match activity.py, but the frames do not (this script draws its
+frames from the same generator after the cell draw, activity.py from a separate one),
+so "same frames" below is not literally true.
+
 Everything in `_synchrony` is computed on `spks > 0`. The SCE structure work showed
 that binarising costs roughly five-fold sensitivity for co-activation (co-participation
 z of 15.6 binary versus 73.0 graded), so Tier 1's synchrony nulls are weaker than they
@@ -42,6 +53,10 @@ from viral.nlgf.load import load_digest
 from viral.nlgf.paths import DFF, RESULTS, spks_path
 
 N_SHUFFLES = 100
+# 29/10/2026: fixed seed for the random cell/frame subsample, written into every row of
+# activity_graded.csv as `subsample_seed` so figures can show which seed the data were
+# made with (fig_activity.py puts it in the title).
+SUBSAMPLE_SEED = 0
 
 # QC. A mean pairwise correlation this high across 250 cortical cells is not
 # physiological - the bulk of sessions sit at 0.05-0.15 - and the offending sessions
@@ -104,7 +119,13 @@ def session_graded(mouse: str, date: str) -> Optional[Dict]:
         return None
     n_frames = spks_all.shape[1]
 
-    rng = np.random.default_rng(abs(hash((mouse, date))) % (2**32))
+    # 29/10/2026 (Claude Opus 5.5, medium effort, at JB's request): was
+    #   np.random.default_rng(abs(hash((mouse, date))) % (2**32))
+    # Python's built-in hash() of strings changes with every process, so the cell and
+    # frame subsamples, and with them every value in activity_graded.csv, changed from
+    # run to run. A fresh default_rng(SUBSAMPLE_SEED = 0) per session follows activity.py, and its first
+    # draw (the 250 cells below) is then the same cells activity.py uses.
+    rng = np.random.default_rng(SUBSAMPLE_SEED)
     keep = np.sort(rng.choice(spks_all.shape[0], N_CELLS, replace=False))
     binary = (np.asarray(spks_all)[keep] > 0).astype(np.float32)
     den = np.asarray(np.load(dn, mmap_mode="r"))[keep].astype(np.float32)
@@ -123,7 +144,8 @@ def session_graded(mouse: str, date: str) -> Optional[Dict]:
         return None
 
     row: Dict = dict(mouse=mouse, date=date, genotype=d.genotype,
-                     session_type=d.meta["session_type"], n_cells=N_CELLS)
+                     session_type=d.meta["session_type"], n_cells=N_CELLS,
+                     subsample_seed=SUBSAMPLE_SEED)
     for epoch, mask in (("run", run), ("still", still)):
         if mask.sum() < MIN_FRAMES:
             continue

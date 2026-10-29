@@ -1,5 +1,17 @@
 """Inference when there are three genotypes and one of them is an intervention.
 
+EDITED 29/10/2026 by Claude Opus 5.5 (medium effort), at JB's request, after a review:
+  - Removed `tost` and `rescue_index_ci`. Neither was used anywhere in the repo, and
+    both were found to be incorrect: `tost` built its null from unshifted data and
+    inverted the +1 correction, so its p-values were too small and could be 0;
+    `rescue_index_ci` returned different keys on different paths ('frac_undefined' vs
+    'denom_sign_flips') and computed its sign-flip check on separate resamples. They
+    can be recovered from git history (any commit before this change).
+  - Removed imports that were only needed by them or not used at all.
+  - Updated the references to them in this docstring (marked "29/10/2026" below).
+  `holm` (used by presentations/26-10_meeting_JB.py and 26-11_poster_JB.py) was
+  checked and left unchanged; `permutation_anova` is unchanged and currently unused.
+
 TWO QUESTIONS, WITH DIFFERENT ANSWERS.
 
 1. How to get p-values across three groups.
@@ -24,7 +36,8 @@ TWO QUESTIONS, WITH DIFFERENT ANSWERS.
    reported here for completeness and because reviewers ask for it, not because a
    non-significant F should stop you looking at a planned contrast. The real
    multiplicity problem is not the three genotypes, it is the eight measures, and that
-   is what the Holm correction below addresses.
+   is what the Holm correction below addresses. (29/10/2026: fig_activity.py does not
+   currently apply it across measures; it gates the rescue contrast per measure instead.)
 
 2. Is it valid to test WT against Oligo to examine rescue?
 
@@ -47,31 +60,25 @@ TWO QUESTIONS, WITH DIFFERENT ANSWERS.
      - Oligo vs NLGF, the intervention contrast. One test, time-matched, a real null.
      - if the claim is specifically "restored to WT levels", that is an EQUIVALENCE
        claim and needs an equivalence test (TOST) against a margin chosen in advance -
-       not a failed difference test. `tost` below runs it, and at this n it will
-       usually be inconclusive, which is the correct answer rather than a
-       disappointing one.
+       not a failed difference test. At this n it will usually be inconclusive, which
+       is the correct answer rather than a disappointing one. (29/10/2026: the earlier
+       `tost` implementation here was removed as incorrect; none is currently
+       available. Note it would still compare Oligo with WT, the era-confounded
+       contrast above - a correct equivalence test does not remove that confound.)
      - the rescue index with a bootstrap interval, which estimates HOW FAR toward WT
        the intervention got and shows honestly how little the data pin it down. This is
-       more informative than any of the p-values.
+       more informative than any of the p-values. (29/10/2026: the earlier
+       `rescue_index_ci` was removed as incorrect; not currently implemented.)
 """
 
 from __future__ import annotations
 
-import sys
-from itertools import combinations
-from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, Sequence
 
 import numpy as np
 import pandas as pd
 
-HERE = Path(__file__).parent
-sys.path.append(str(HERE.parent.parent))
-
-from viral.nlgf.stats import exact_permutation
-
 N_PERM = 20000
-N_BOOT = 5000
 
 
 def _f_stat(groups: Sequence[np.ndarray]) -> float:
@@ -89,8 +96,9 @@ def _f_stat(groups: Sequence[np.ndarray]) -> float:
     return (ssb / (k - 1)) / (ssw / (n - k))
 
 
-def permutation_anova(per_mouse: pd.DataFrame, value: str,
-                      n_perm: int = N_PERM, seed: int = 0) -> Dict:
+def permutation_anova(
+    per_mouse: pd.DataFrame, value: str, n_perm: int = N_PERM, seed: int = 0
+) -> Dict:
     """Omnibus F over all genotypes, with the null built by relabelling mice."""
     d = per_mouse.dropna(subset=[value])
     labels = d.genotype.to_numpy()
@@ -104,80 +112,13 @@ def permutation_anova(per_mouse: pd.DataFrame, value: str,
     for _ in range(n_perm):
         perm = rng.permutation(labels)
         count += _f_stat([v[perm == g] for g in names]) >= obs
-    return dict(F=float(obs), p=float((count + 1) / (n_perm + 1)), n=len(v),
-                groups=names)
+    return dict(
+        F=float(obs), p=float((count + 1) / (n_perm + 1)), n=len(v), groups=names
+    )
 
 
-def tost(per_mouse: pd.DataFrame, value: str, group_a: str, group_b: str,
-         margin: float, n_perm: int = N_PERM, seed: int = 0) -> Dict:
-    """Two one-sided tests: is |a - b| smaller than `margin`?
-
-    This is how an equivalence claim is actually made. The null is that the groups
-    differ by AT LEAST the margin; rejecting it in both directions supports "these are
-    alike to within `margin`". A large p here means inconclusive - never "equivalent".
-
-    The margin must be chosen on scientific grounds before looking. Here the natural
-    choice is a fraction of the disease effect: if the intervention leaves a residual
-    gap smaller than, say, a third of the NLGF-WT deficit, that is a meaningful rescue.
-    """
-    d = per_mouse.dropna(subset=[value])
-    d = d[d.genotype.isin([group_a, group_b])]
-    a = d.loc[d.genotype == group_a, value].to_numpy(dtype=float)
-    b = d.loc[d.genotype == group_b, value].to_numpy(dtype=float)
-    if a.size < 2 or b.size < 2:
-        return dict(p=np.nan, diff=np.nan, margin=margin, conclusive=False)
-    obs = a.mean() - b.mean()
-    rng = np.random.default_rng(seed)
-    pooled = np.concatenate([a, b])
-    k = a.size
-    # one-sided permutation p for (diff > -margin) and for (diff < +margin)
-    lo_count = hi_count = 0
-    for _ in range(n_perm):
-        s = rng.permutation(pooled)
-        d0 = s[:k].mean() - s[k:].mean()
-        lo_count += d0 <= obs + margin
-        hi_count += d0 >= obs - margin
-    p_lo = (lo_count + 1) / (n_perm + 1)
-    p_hi = (hi_count + 1) / (n_perm + 1)
-    p = max(1 - p_lo, 1 - p_hi)
-    return dict(p=float(p), diff=float(obs), margin=float(margin),
-                conclusive=bool(p < 0.05))
-
-
-def rescue_index_ci(per_mouse: pd.DataFrame, value: str, disease: str, healthy: str,
-                    treated: str, n_boot: int = N_BOOT, seed: int = 0) -> Dict:
-    """(treated - disease) / (healthy - disease), with a bootstrap-over-mice interval.
-
-    The denominator is itself estimated and can approach zero, which sends the ratio to
-    infinity - so the interval is reported on the percentile scale and will be very
-    wide whenever the disease effect is not well separated from zero. That width IS the
-    result: a rescue index quoted without it is meaningless.
-    """
-    d = per_mouse.dropna(subset=[value])
-    arrs = {g: d.loc[d.genotype == g, value].to_numpy(dtype=float)
-            for g in (disease, healthy, treated)}
-    if any(a.size < 2 for a in arrs.values()):
-        return dict(index=np.nan, lo=np.nan, hi=np.nan, frac_undefined=np.nan)
-    denom = arrs[healthy].mean() - arrs[disease].mean()
-    point = ((arrs[treated].mean() - arrs[disease].mean()) / denom
-             if denom else np.nan)
-    rng = np.random.default_rng(seed)
-    vals = []
-    for _ in range(n_boot):
-        rs = {g: rng.choice(a, a.size, replace=True) for g, a in arrs.items()}
-        den = rs[healthy].mean() - rs[disease].mean()
-        if den == 0:
-            continue
-        vals.append((rs[treated].mean() - rs[disease].mean()) / den)
-    vals = np.asarray(vals)
-    # a denominator that changes sign under resampling means the disease effect itself
-    # is not established, and the index is not interpretable at all
-    sign_flips = float(np.mean(np.sign(
-        [rng.choice(arrs[healthy], arrs[healthy].size).mean()
-         - rng.choice(arrs[disease], arrs[disease].size).mean()
-         for _ in range(1000)]) != np.sign(denom)))
-    return dict(index=float(point), lo=float(np.percentile(vals, 2.5)),
-                hi=float(np.percentile(vals, 97.5)), denom_sign_flips=sign_flips)
+# 29/10/2026: `tost` and `rescue_index_ci` were removed here (unused and incorrect; see the
+# module docstring). Recover them from git history if needed.
 
 
 def holm(ps: Sequence[float]) -> np.ndarray:

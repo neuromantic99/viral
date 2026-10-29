@@ -62,7 +62,7 @@ def shaded_line_plot(
         sem_scipy = gaussian_filter1d(
             stats.sem(a=arr, axis=0, ddof=1, nan_policy="omit"), sigma=1
         )
-        assert np.all(np.isclose(sem, sem_scipy, equal_nan=True))
+        np.testing.assert_allclose(sem, sem_scipy, equal_nan=True)
 
         # just for comparison
         # sem_old = gaussian_filter1d(
@@ -84,7 +84,7 @@ def shaded_line_plot(
         sem = np.nanstd(arr, 0, ddof=1) / np.sqrt(n_valid)
         # test against scipy's implementation
         sem_scipy = stats.sem(a=arr, axis=0, ddof=1, nan_policy="omit")
-        assert np.all(np.isclose(sem, sem_scipy, equal_nan=True))
+        np.testing.assert_allclose(sem, sem_scipy, equal_nan=True)
 
         # just for comparison
         # sem_old = np.nanstd(arr, 0) / np.sqrt(

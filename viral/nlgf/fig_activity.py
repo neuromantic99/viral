@@ -71,11 +71,15 @@ def load() -> pd.DataFrame:
                 "still_graded_mean_r",
                 "run_graded_mean_r",
             ]
+            # 29/10/2026: seed of the random cell subsample, shown in the figure title;
+            # absent in CSVs made before the seed fix in activity_graded.py
+            + (["subsample_seed"] if "subsample_seed" in pd.read_csv(graded, nrows=0).columns else [])
         ]
         df = df.merge(g, on=["mouse", "date"], how="left")
     return df[df.genotype.isin(GENOTYPE_ORDER)]
 
 
+# 29/10/2026 JB: outdated
 # Four panels for the talk: is the cell firing normally, is it firing normally while
 # running, are synchronous events as frequent - and are cells still fluctuating together.
 # Three panels. Synchronous-event rate is dropped: explaining what an SCE is costs more
@@ -187,13 +191,31 @@ def figure(
     n_nlgf = df[df.genotype == "NLGF"].mouse.nunique()
     n_wt = df[df.genotype == "WT"].mouse.nunique()
     n_oligo = df[df.genotype == "Oligo-BACE1-KO"].mouse.nunique()
+    # 29/10/2026 (Claude Opus 5.5, medium effort, at JB's request): show the random
+    # subsample in the title. The seed is read from activity_graded.csv itself, so the
+    # title cannot claim a seed the coupling values were not made with; a CSV from before
+    # the seed fix has no `subsample_seed` column and gets a warning instead.
+    n_cells = int(df["n_cells"].max()) if "n_cells" in df.columns else "?"
+    if "subsample_seed" in df.columns and df["subsample_seed"].notna().any():
+        seeds = sorted(int(x) for x in df["subsample_seed"].dropna().unique())
+        if seeds == [0]:
+            seed_line = (f"\n one random subsample of {n_cells} cells per session"
+                         "\n fixed seed 0, same cells in all panels")
+        else:
+            seed_line = (f"\n one random subsample of {n_cells} cells per session"
+                         f"\n seed {seeds} (coupling) / 0 (rate)")
+    else:
+        seed_line = ("\n WARNING: activity_graded.csv predates the seed fix"
+                     "\n (29/10/2026): coupling not reproducible, re-run it")
     fig.suptitle(
         # (title or "RSC fires normally in NLGF, but coordinates less during rest")
         # + f"\n{n_nlgf} NLGF / {n_wt} WT mice  ·  "
         #   "small dots sessions, large dots mice",
-        "p: exact permutation over mice; rescue tested only if deficit p < 0.05"
+        "p: exact permutation over mice, uncorrected across measures"
+        + f"\n Oligo vs NLGF tested only if deficit p < 0.05"
         + f"\n {n_nlgf} NLGF / {n_wt} WT / {n_oligo} Oligo-BACE1-KO mice"
-        + f"\n small dots sessions, large dots mice",
+        + f"\n small dots sessions, large dots mice"
+        + seed_line,
         y=1.04,
         fontsize=34,
         weight="semibold",
@@ -241,7 +263,7 @@ def figure_rate_distribution(df: pd.DataFrame) -> None:
     )
     fig.tight_layout()
     fig.savefig(PLOTS / "fig4_rate_distribution.png")
-    # plt.close(fig)
+    plt.close(fig)
 
 
 if __name__ == "__main__":

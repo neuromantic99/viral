@@ -188,7 +188,7 @@ def superplot(
     show_box: bool = True,
     legend: bool = False,
 ) -> None:
-    """Sessions as faint dots, animals as solid markers, box over the animal means.
+    """Sessions as faint dots, animals as solid markers, box over the animal medians.
 
     The SuperPlot convention (Lord et al. 2020, J Cell Biol) for nested data: the
     replicate level is visible so the reader can see the spread and the within-animal
