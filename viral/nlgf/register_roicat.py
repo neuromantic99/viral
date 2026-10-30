@@ -52,7 +52,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-HD = Path("/Volumes/hard_drive/viral")
+HD = Path("/mnt/local-ssd/josef/viral_tmp_data")
 DFF = HD / "dff"
 DERIVED = HD / "nlgf_derived"
 # Input tree on LOCAL disk, not the exFAT drive. exFAT has no native extended

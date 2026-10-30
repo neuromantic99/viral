@@ -50,8 +50,11 @@ from viral.utils import get_genotype, get_wheel_circumference_from_rig
 
 CONFIG = grosmark_config
 WHEEL = get_wheel_circumference_from_rig("2P")
-N_LAPS = 60
-SIGMA = 9.0 / CONFIG.bin_size
+# N_LAPS = 60
+# SIGMA = 9.0 / CONFIG.bin_size
+# in accordance with JR, changed both N_LAPS and SIGMA back to their respective values before neuromatic99's commit commit f4925a5edd9d31635ec157025ee0aaed6fc6d4c7 (14/10/2026)
+N_LAPS = 30
+SIGMA = 7.5 / CONFIG.bin_size
 
 
 def _lap_maps(mouse: str, date: str, rows: np.ndarray) -> Optional[np.ndarray]:
