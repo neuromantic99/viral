@@ -43,10 +43,59 @@ def shaded_line_plot(
 
     if do_moving_average:
         mean = gaussian_filter1d(np.nanmean(arr, 0), sigma=1)
-        sem = gaussian_filter1d(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), sigma=1)
+        # sem = gaussian_filter1d(np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), sigma=1)
+        # `np.sqrt(arr.shape[1])` was probably wrong since it refers to n_bins but in this case n_samples would be n_trials, i.e. n_valid with NaNs excluded (they are dropped in np.nanstd)
+        # sem = gaussian_filter1d(np.nanstd(arr, 0) / np.sqrt(arr.shape[0]), sigma=1)
+        # numpy is using ddof=0, scipy is using ddof=1
+        # Claude Opus 5.5 (medium effort) plus scipy's documentation https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.sem.html (accessed: 29/10/2026)
+        # and explanation found at
+        # https://www.statisticshowto.com/bessels-correction/ (accessed: 29/10/2026)
+        # https://statisticsbyjim.com/hypothesis-testing/standard-error-mean/ (accessed: 29/10/2026)
+        # https://statisticsbyjim.com/basics/variability-range-interquartile-variance-standard-deviation/ (accessed: 29/10/2026)
+        # https://statisticsbyjim.com/basics/standard-deviation/ (accessed: 29/10/2026)
+        # convinced me that we probably have to use standard deviation of the sample rather than standard deviation of the population, so that Bessel's correction should be applied
+        # i.e., ddof=1 should be used, like in scipy.stats.sem
+        n_valid = np.sum(~np.isnan(arr), axis=0)
+        sem = gaussian_filter1d(np.nanstd(arr, 0, ddof=1) / np.sqrt(n_valid), sigma=1)
+
+        # test against scipy's implementation
+        sem_scipy = gaussian_filter1d(
+            stats.sem(a=arr, axis=0, ddof=1, nan_policy="omit"), sigma=1
+        )
+        np.testing.assert_allclose(sem, sem_scipy, equal_nan=True)
+
+        # just for comparison
+        # sem_old = gaussian_filter1d(
+        #     np.nanstd(arr, 0) / np.sqrt(arr.shape[1]), sigma=1
+        # )  # implementation before correcting n_samples and ddof issues
+        # plt.figure()
+        # plt.plot(sem_old, color="red", label="sem_old")
+        # plt.plot(sem, color="blue", label="sem_new")
+        # plt.legend()
+        # plt.title("SEM_old vs SEM_new")
+        # plt.show()
+
     else:
         mean = np.nanmean(arr, 0)
-        sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[1])
+        # see above
+        # sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[1])
+        # sem = np.nanstd(arr, 0) / np.sqrt(arr.shape[0])
+        n_valid = np.sum(~np.isnan(arr), axis=0)
+        sem = np.nanstd(arr, 0, ddof=1) / np.sqrt(n_valid)
+        # test against scipy's implementation
+        sem_scipy = stats.sem(a=arr, axis=0, ddof=1, nan_policy="omit")
+        np.testing.assert_allclose(sem, sem_scipy, equal_nan=True)
+
+        # just for comparison
+        # sem_old = np.nanstd(arr, 0) / np.sqrt(
+        #     arr.shape[1]
+        # )  # implementation before correcting n_samples and ddof issues
+        # plt.figure()
+        # plt.plot(sem_old, color="red", label="sem_old")
+        # plt.plot(sem, color="blue", label="sem_new")
+        # plt.legend()
+        # plt.title("SEM_old vs SEM_new")
+        # plt.show()
 
     plotter.plot(x_axis, mean, color=color, label=label, marker="", zorder=1)
     plotter.fill_between(

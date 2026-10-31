@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import random
 import pandas as pd
+import os
 import re
 import sys
 from scipy import stats
@@ -435,6 +436,8 @@ def cache_mouse(mouse_name: str) -> None:
                 f"Missing setup information for {mouse_name}, session type: {session_type}"
             )
 
+    behaviour_summaries_path = HERE.parent / "data" / "behaviour_summaries"
+    behaviour_summaries_path.mkdir(parents=True, exist_ok=True)
     with open(
         HERE.parent / "data" / "behaviour_summaries" / f"{mouse_name}.json", "w"
     ) as f:
@@ -1226,20 +1229,27 @@ if __name__ == "__main__":
 
     config = MultipleSessionsConfig(speed=0.5, licking=0.5, window=50)
 
-    for mouse_name in [
+    # got this list from viral.utils get_genotype
+    # explicitly used all mice (also behaviour-only), dumped the neuronal BACE 1 KO because there are no of mine
+    # CAVE: there are 5 mice I didnt experiment on ("J030", "J031", "J032", "J034", "J035")
+    mouse_list = [
+        "JB014",
+        "JB015",
+        "JB018",
+        "JB020",
+        "JB022",
         "JB011",
         "JB012",
         "JB013",
-        "JB014",
-        "JB015",
         "JB016",
         "JB017",
-        "JB018",
         "JB019",
-        "JB020",
         "JB021",
-        "JB022",
         "JB023",
+        "JB036",
+        "J030",
+        "J031",
+        "J032",
         "JB024",
         "JB025",
         "JB026",
@@ -1248,23 +1258,11 @@ if __name__ == "__main__":
         "JB031",
         "JB032",
         "JB033",
-        "JB034",
-        "JB035",
-        "JB036",
-        "J030",
-        "J031",
-        "J032",
-        "J035",
         "J034",
-        "J036",
-        "J037",
-        "J038",
-    ]:
+        "J035",
+    ]
 
-        print(f"\nProcessing {mouse_name}...")
-        # if not get_genotype(mouse_name) in {"WT", "NLGF"}:
-        # continue
-
+    for mouse_name in mouse_list:
         if redo:
             cache_mouse(mouse_name)
             mice.append(load_cache(mouse_name))
@@ -1279,20 +1277,25 @@ if __name__ == "__main__":
                 mice.append(load_cache(mouse_name))
                 print(f"mouse_name {mouse_name} cached now")
 
-    # for s in ["learning", "reversal"]:
-    #     plot_performance_summaries(mice, s, ["genotype"], config=config)
+    # # for s in ["learning", "reversal"]:
+    # #     plot_performance_summaries(mice, s, ["genotype"], config=config)
 
-    plot_mouse_performance(mice[-7], config=config)
+    # plot_mouse_performance(mice[10], config=config)
+    plot_performance_across_days(mice[0].sessions, config=config)
+    plt.show()
+    # plot_learning_metric_first_x_trials(
+    #     mice=mice, session_type="learning", group_by=["genotype"], config=config, x=100
+    # )
 
-    # plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
+    # # plot_learning_metric_first_x_trials(mice, "learning", ["genotype"], config, x=10)
 
-    # plot_mouse_performance(mice[0], config=config)
-    # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
-    # for mouse in mice:
-    #     plot_mouse_performance(mouse, config=config)
-    # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
-    # ## Probably not interesting as related to speed
-    # plot_trial_time_summaries(mice, "learning")
-    # plot_num_trials_summaries(mice, "reversal")
-    # plot_num_trials_summaries(mice, "recall")
-    # plot_num_trials_summaries(mice, "recall_reversal")
+    # # plot_mouse_performance(mice[0], config=config)
+    # # plot_performance_summaries(mice, "learning", ["genotype"], config=config)
+    # # for mouse in mice:
+    # #     plot_mouse_performance(mouse, config=config)
+    # # plot_running_speed_summaries(mice, "recall", running_speed_AZ)
+    # # ## Probably not interesting as related to speed
+    # # plot_trial_time_summaries(mice, "learning")
+    # # plot_num_trials_summaries(mice, "reversal")
+    # # plot_num_trials_summaries(mice, "recall")
+    # # plot_num_trials_summaries(mice, "recall_reversal")

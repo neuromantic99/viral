@@ -58,6 +58,7 @@ def plot_lick_raster(
     x_label: str = "Position (cm)",
     x_max: int = 200,
     bins: np.ndarray | None = None,
+    xticks: List[float] | None = None,
 ) -> float | None:
     """Plots a raster of lick times with a row for each trial.
     Also plots a histogram, a count of the number of licks in each bin across all trials.
@@ -98,16 +99,25 @@ def plot_lick_raster(
 
     a0.set_ylabel("Trial number")
     a0.set_ylim(-1, len(lick_positions))
+    if xticks is not None:
+        a0.set_xticks(xticks)
     a0.axvspan(180, 200, color="gray", alpha=0.5)
+    a0.axvspan(150, 180, color="lightgray", alpha=0.5, zorder=-1)
     a0.set_xlim(0, max(all_trials) + 0.1 * max(all_trials))
-    bins = bins if bins is not None else np.arange(0, 200, 5)
+    # Claude Opus 5.5 (medium effort) brought to attention that np.arange(0, 200, 5) would exclude 200 as the upper edge
+    # verified with https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.hist.html (accessed: 29/10/2026) that bins should include 200 as the upper edge
+    # thus, the line should generate bins with np.arange(0, 201, 5)
+    bins = bins if bins is not None else np.arange(0, 201, 5)
 
     n, _, _ = a1.hist(all_trials, bins)
     a1.set_ylabel("Total # licks")
     a1.set_xlabel(x_label)
     a1.set_ylim(0, y_max_histogram)
     a1.set_xlim(0, x_max)
+    if xticks is not None:
+        a1.set_xticks(xticks)
     a1.axvspan(180, 200, color="gray", alpha=0.5)
+    a1.axvspan(150, 180, color="lightgray", alpha=0.5, zorder=-1)
 
     return max(n)
 
@@ -241,18 +251,22 @@ def plot_rewarded_vs_unrewarded_licking(
     rewarded = [trial for trial in trials if trial.texture_rewarded]
     unrewarded = [trial for trial in trials if not trial.texture_rewarded]
 
+    xticks = [0, 50, 100, 150, 180, 200]
+
     jitter = 0.1
     y_max = plot_lick_raster(
         [licks_to_position(trial, wheel_circumference) for trial in rewarded],
         "Rewarded Trials",
         None,
         jitter=jitter,
+        xticks=xticks,
     )
     plot_lick_raster(
         [licks_to_position(trial, wheel_circumference) for trial in unrewarded],
         "Unrewarded Trials",
         y_max,
         jitter=jitter,
+        xticks=xticks,
     )
 
     plt.figure()
@@ -498,6 +512,8 @@ def summarise_trial(trial: TrialInfo, wheel_circumference: float) -> TrialSummar
     )
 
 
+# Claude Opus 5.5 (medium effort) brought to attention the same issue as in plot_lick_raster (np.arange(0, 200, 5) excludes the last bin with upper edge 200)
+# As this is used downstream to cache mice behaviour sessions and subsequently, many functions downstream rely on it, I left it unchanged
 def get_binned_licks(trials: List[TrialInfo], wheel_circumference: float) -> List[int]:
     """Bin licks across trials. Need to think about doing this for separate trials for the error"""
     licks = np.concatenate(

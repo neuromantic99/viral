@@ -8,7 +8,8 @@ computation from viral/* unchanged.
 
 from pathlib import Path
 
-HD = Path("/Volumes/hard_drive/viral")
+# technically not a hard drive at the moment
+HD = Path("/mnt/local-ssd/josef/viral_tmp_data")
 
 CACHED_2P = HD / "cached_2p"
 DFF = HD / "dff"
@@ -45,6 +46,4 @@ def digest_path(mouse: str, date: str) -> Path:
 def session_json_paths() -> list[Path]:
     """Cached session JSONs, minus the AppleDouble ._ stubs that copying to exFAT
     leaves behind. Those are not JSON and raise UnicodeDecodeError if parsed."""
-    return sorted(
-        p for p in CACHED_2P.glob("*.json") if not p.name.startswith("._")
-    )
+    return sorted(p for p in CACHED_2P.glob("*.json") if not p.name.startswith("._"))

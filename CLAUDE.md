@@ -43,3 +43,9 @@
 - With ~7-8 mice per group, use leave-pair-out AUC, not pooled leave-one-out. Pooled LOO
   gives spurious below-chance AUCs at this n.
 - The gap confound on cross-day drift is already handled in `viral/nlgf/fig_stability.py`.
+- **Oligo is in the default genotype lists (since 2026-10-20).** Both
+  `viral/nlgf/cohort.py:GENOTYPES` and `viral/nlgf/style.py:GENOTYPE_ORDER` include
+  Oligo-BACE1-KO. Any code that relies on those defaults now picks up Oligo mice. For a
+  WT/NLGF-only analysis, pass the genotypes explicitly or use `cohort.arm()`. Before
+  trusting a fig_*/tier script that hasn't been run since then, check whether it pools,
+  matches or truncates across all genotypes (e.g. `fig_behaviour._curve`).

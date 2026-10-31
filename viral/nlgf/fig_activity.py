@@ -20,7 +20,19 @@ sys.path.append(str(HERE.parent.parent))
 
 from viral.nlgf.paths import PLOTS, RESULTS
 from viral.nlgf.stats import compare
-from viral.nlgf.style import GENOTYPE_COLOURS, GENOTYPE_ORDER, set_style, superplot
+from viral.nlgf.style import (
+    GENOTYPE_COLOURS,
+    GENOTYPE_ORDER,
+    set_style,
+    superplot,
+    p_bracket,
+)
+
+# Fixed-sequence (gatekeeping) testing. The rescue contrast is only meaningful where
+# there is a deficit to rescue, so it is tested at ALPHA only if the deficit is
+# significant at ALPHA. This holds the familywise error at ALPHA for the pair without
+# inflating either p, which Holm would (it doubles the smaller p at m = 2).
+ALPHA = 0.05
 
 PANELS_RATE = [
     ("still_rate_median", "Event rate (Hz)", "Firing rate (rest)"),
@@ -51,12 +63,23 @@ def load() -> pd.DataFrame:
     df = pd.read_csv(RESULTS / "activity_sessions.csv")
     graded = RESULTS / "activity_graded.csv"
     if graded.exists():
-        g = pd.read_csv(graded)[["mouse", "date", "still_graded_cofluct",
-                                 "still_graded_mean_r", "run_graded_mean_r"]]
+        g = pd.read_csv(graded)[
+            [
+                "mouse",
+                "date",
+                "still_graded_cofluct",
+                "still_graded_mean_r",
+                "run_graded_mean_r",
+            ]
+            # 29/10/2026: seed of the random cell subsample, shown in the figure title;
+            # absent in CSVs made before the seed fix in activity_graded.py
+            + (["subsample_seed"] if "subsample_seed" in pd.read_csv(graded, nrows=0).columns else [])
+        ]
         df = df.merge(g, on=["mouse", "date"], how="left")
     return df[df.genotype.isin(GENOTYPE_ORDER)]
 
 
+# 29/10/2026 JB: outdated
 # Four panels for the talk: is the cell firing normally, is it firing normally while
 # running, are synchronous events as frequent - and are cells still fluctuating together.
 # Three panels. Synchronous-event rate is dropped: explaining what an SCE is costs more
@@ -77,8 +100,10 @@ PANELS_TALK = [
 ]
 # Panels that must share a y-axis, so the reader can compare them directly rather than
 # across two silently different scales.
-SHARED_Y = [("run_rate_median", "still_rate_median"),
-            ("run_graded_mean_r", "still_graded_mean_r")]
+SHARED_Y = [
+    ("run_rate_median", "still_rate_median"),
+    ("run_graded_mean_r", "still_graded_mean_r"),
+]
 # Panels whose session distribution is heavy-tailed enough to flatten every box on a
 # linear axis. A log axis shows the spread without dropping any point; the test runs on
 # per-mouse medians and is unaffected by the scale.
@@ -86,19 +111,53 @@ LOG_PANELS: set = set()
 
 
 def _panel(ax, df, value, label, title, legend: bool = False) -> dict:
-    per_mouse, res = compare(df, value, how="median")
+    # deficit is NLGF vs WT
+    _, deficit = compare(df, value, how="median", group_a="NLGF", group_b="WT")
+    # rescue is Oligo-BACE1-KO vs NLGF
+    _, rescue = compare(
+        df, value, how="median", group_a="Oligo-BACE1-KO", group_b="NLGF"
+    )
+    rescue_tested = deficit["p"] < ALPHA
     # the scale must be set before superplot draws, so the bracket is placed in the
     # coordinates it will actually be shown in
     if value in LOG_PANELS:
         ax.set_yscale("log")
-    superplot(ax, df, value, legend=legend, p_value=res["p"])
+    superplot(ax, df, value, legend=legend)
+
+    p_bracket(ax=ax, p_value=deficit["p"], x0=0, x1=1)
+    p_bracket(
+        ax=ax,
+        p_value=rescue["p"],
+        x0=1,
+        x1=2,
+        text=None if rescue_tested else "not tested (no deficit)",
+    )
+
     ax.set_ylabel(label)
     ax.set_title(title)
-    return dict(metric=value, **res)
+    return dict(
+        metric=value,
+        wt=deficit["mean_b"],  # mean of WT per-mouse medians
+        nlgf=deficit["mean_a"],  # mean of NLGF per-mouse medians
+        oligo=rescue["mean_a"],  # mean of Oligo per-mouse medians
+        deficit_diff=deficit["diff"],  # NLGF − WT
+        deficit_p=deficit["p"],
+        rescue_diff=rescue["diff"],  # Oligo − NLGF
+        rescue_p=rescue["p"],  # reported, but only interpretable where rescue_tested
+        rescue_tested=rescue_tested,
+        n_wt=deficit["n_b"],
+        n_nlgf=deficit["n_a"],
+        n_oligo=rescue["n_a"],
+    )
 
 
-def figure(df: pd.DataFrame, panels=None, out: str = "fig3_rsc_activity_synchrony.png",
-           title: str | None = None, shape=None) -> pd.DataFrame:
+def figure(
+    df: pd.DataFrame,
+    panels=None,
+    out: str = "fig3_rsc_activity_synchrony.png",
+    title: str | None = None,
+    shape=None,
+) -> pd.DataFrame:
     panels = panels if panels is not None else PANELS_TALK
     rows, cols = shape if shape else (1, len(panels))
     fig, axes = plt.subplots(rows, cols, figsize=(7.5 * cols, 7.0 * rows))
@@ -106,8 +165,16 @@ def figure(df: pd.DataFrame, panels=None, out: str = "fig3_rsc_activity_synchron
     results = []
     for i, (ax, (value, label, panel_title)) in enumerate(zip(axes, panels)):
         if value in df.columns:
-            results.append(_panel(ax, df.dropna(subset=[value]), value, label,
-                                  panel_title, legend=(i == 0)))
+            results.append(
+                _panel(
+                    ax,
+                    df.dropna(subset=[value]),
+                    value,
+                    label,
+                    panel_title,
+                    legend=(i == 0),
+                )
+            )
         else:
             ax.axis("off")
 
@@ -123,11 +190,35 @@ def figure(df: pd.DataFrame, panels=None, out: str = "fig3_rsc_activity_synchron
 
     n_nlgf = df[df.genotype == "NLGF"].mouse.nunique()
     n_wt = df[df.genotype == "WT"].mouse.nunique()
+    n_oligo = df[df.genotype == "Oligo-BACE1-KO"].mouse.nunique()
+    # 29/10/2026 (Claude Opus 5.5, medium effort, at JB's request): show the random
+    # subsample in the title. The seed is read from activity_graded.csv itself, so the
+    # title cannot claim a seed the coupling values were not made with; a CSV from before
+    # the seed fix has no `subsample_seed` column and gets a warning instead.
+    n_cells = int(df["n_cells"].max()) if "n_cells" in df.columns else "?"
+    if "subsample_seed" in df.columns and df["subsample_seed"].notna().any():
+        seeds = sorted(int(x) for x in df["subsample_seed"].dropna().unique())
+        if seeds == [0]:
+            seed_line = (f"\n one random subsample of {n_cells} cells per session"
+                         "\n fixed seed 0, same cells in all panels")
+        else:
+            seed_line = (f"\n one random subsample of {n_cells} cells per session"
+                         f"\n seed {seeds} (coupling) / 0 (rate)")
+    else:
+        seed_line = ("\n WARNING: activity_graded.csv predates the seed fix"
+                     "\n (29/10/2026): coupling not reproducible, re-run it")
     fig.suptitle(
-        (title or "RSC fires normally in NLGF, but coordinates less during rest")
-        + f"\n{n_nlgf} NLGF / {n_wt} WT mice  ·  "
-          "small dots sessions, large dots mice",
-        y=1.04, fontsize=34, weight="semibold",
+        # (title or "RSC fires normally in NLGF, but coordinates less during rest")
+        # + f"\n{n_nlgf} NLGF / {n_wt} WT mice  ·  "
+        #   "small dots sessions, large dots mice",
+        "p: exact permutation over mice, uncorrected across measures"
+        + f"\n Oligo vs NLGF tested only if deficit p < 0.05"
+        + f"\n {n_nlgf} NLGF / {n_wt} WT / {n_oligo} Oligo-BACE1-KO mice"
+        + f"\n small dots sessions, large dots mice"
+        + seed_line,
+        y=1.04,
+        fontsize=34,
+        weight="semibold",
     )
     fig.tight_layout()
     fig.savefig(PLOTS / out)
@@ -172,7 +263,7 @@ def figure_rate_distribution(df: pd.DataFrame) -> None:
     )
     fig.tight_layout()
     fig.savefig(PLOTS / "fig4_rate_distribution.png")
-    # plt.close(fig)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
@@ -181,9 +272,13 @@ if __name__ == "__main__":
     # 2x2: rate on the top row, coupling on the bottom, running then rest in each
     res = figure(df, shape=(2, 2))
     # the full eight-panel version stays available for the supplement
-    figure(df, panels=PANELS_RATE + PANELS_SYNC, shape=(2, 4),
-           out="figS1_activity_synchrony_full.png",
-           title="RSC excitability and synchrony, all measures")
+    figure(
+        df,
+        panels=PANELS_RATE + PANELS_SYNC,
+        shape=(2, 4),
+        out="figS1_activity_synchrony_full.png",
+        title="RSC excitability and synchrony, all measures",
+    )
     figure_rate_distribution(df)
     print(res.to_string(index=False))
     print(f"\nwrote figures to {PLOTS}")

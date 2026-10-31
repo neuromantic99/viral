@@ -52,7 +52,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-HD = Path("/Volumes/hard_drive/viral")
+HD = Path("/mnt/local-ssd/josef/viral_tmp_data")
 DFF = HD / "dff"
 DERIVED = HD / "nlgf_derived"
 # Input tree on LOCAL disk, not the exFAT drive. exFAT has no native extended
@@ -99,7 +99,8 @@ def build_input_tree(mouse: str, dates: List[str]) -> Path:
         if stat.shape[0] != accepted.size:
             raise ValueError(
                 f"{mouse} {date}: stat has {stat.shape[0]} ROIs, iscell has "
-                f"{accepted.size}")
+                f"{accepted.size}"
+            )
         np.save(plane / "stat.npy", stat[accepted], allow_pickle=True)
         np.save(plane / "iscell.npy", iscell[accepted])
         # copyfile, not copy2: copy2 carries metadata across and can recreate the
@@ -111,8 +112,9 @@ def build_input_tree(mouse: str, dates: List[str]) -> Path:
     return root
 
 
-def qc_figure(mouse: str, date_a: str, date_b: str, matches: pd.DataFrame,
-              diag: Dict) -> Path:
+def qc_figure(
+    mouse: str, date_a: str, date_b: str, matches: pd.DataFrame, diag: Dict
+) -> Path:
     """ROI centroids on each day, matched cells highlighted and joined.
 
     Built from stat.npy and the match table rather than from ROICaT internals, so it
@@ -122,6 +124,7 @@ def qc_figure(mouse: str, date_a: str, date_b: str, matches: pd.DataFrame,
     match, and the matches should not be trusted.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -136,13 +139,27 @@ def qc_figure(mouse: str, date_a: str, date_b: str, matches: pd.DataFrame,
     mb = matches.row_b.to_numpy()
 
     fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.4))
-    for ax, c, m, date, n in ((axes[0], ca, ma, date_a, diag["n_roi_a"]),
-                              (axes[1], cb, mb, date_b, diag["n_roi_b"])):
+    for ax, c, m, date, n in (
+        (axes[0], ca, ma, date_a, diag["n_roi_a"]),
+        (axes[1], cb, mb, date_b, diag["n_roi_b"]),
+    ):
         un = np.setdiff1d(np.arange(len(c)), m)
-        ax.scatter(c[un, 0], c[un, 1], s=13, c="#CED4DA", edgecolor="none",
-                   label=f"unmatched ({len(un)})")
-        ax.scatter(c[m, 0], c[m, 1], s=17, c="#D9480F", edgecolor="none",
-                   label=f"matched ({len(m)})")
+        ax.scatter(
+            c[un, 0],
+            c[un, 1],
+            s=13,
+            c="#CED4DA",
+            edgecolor="none",
+            label=f"unmatched ({len(un)})",
+        )
+        ax.scatter(
+            c[m, 0],
+            c[m, 1],
+            s=17,
+            c="#D9480F",
+            edgecolor="none",
+            label=f"matched ({len(m)})",
+        )
         ax.set_title(f"{date}   {n} cells", fontsize=11)
         ax.set_aspect("equal")
         ax.invert_yaxis()
@@ -159,23 +176,28 @@ def qc_figure(mouse: str, date_a: str, date_b: str, matches: pd.DataFrame,
     d = cb[mb] - ca[ma]
     shift = np.median(d, axis=0)
     resid = d - shift
-    rms = float(np.sqrt((resid ** 2).sum(axis=1).mean()))
+    rms = float(np.sqrt((resid**2).sum(axis=1).mean()))
     ax = axes[2]
-    ax.scatter(resid[:, 0], resid[:, 1], s=13, c="#3B5BDB", alpha=0.55,
-               edgecolor="none")
+    ax.scatter(
+        resid[:, 0], resid[:, 1], s=13, c="#3B5BDB", alpha=0.55, edgecolor="none"
+    )
     lim = max(6.0, float(np.percentile(np.abs(resid), 99)) * 1.5)
     ax.axhline(0, color="#ADB5BD", lw=0.8)
     ax.axvline(0, color="#ADB5BD", lw=0.8)
     for r in (2, 5):
-        ax.add_artist(plt.Circle((0, 0), r, fill=False, color="#ADB5BD",
-                                 lw=0.7, ls=":"))
+        ax.add_artist(
+            plt.Circle((0, 0), r, fill=False, color="#ADB5BD", lw=0.7, ls=":")
+        )
     ax.set_xlim(-lim, lim)
     ax.set_ylim(-lim, lim)
     ax.set_aspect("equal")
     ax.set_xlabel("dx residual (px)")
     ax.set_ylabel("dy residual (px)")
-    ax.set_title(f"match consistency\nFOV shift ({shift[0]:+.0f}, {shift[1]:+.0f}) px"
-                 f"  ·  residual RMS {rms:.1f} px", fontsize=11)
+    ax.set_title(
+        f"match consistency\nFOV shift ({shift[0]:+.0f}, {shift[1]:+.0f}) px"
+        f"  ·  residual RMS {rms:.1f} px",
+        fontsize=11,
+    )
     diag["fov_shift_px"] = float(np.linalg.norm(shift))
     diag["residual_rms_px"] = rms
 
@@ -183,7 +205,10 @@ def qc_figure(mouse: str, date_a: str, date_b: str, matches: pd.DataFrame,
         f"{mouse}   {date_a} -> {date_b}   ({diag.get('gap_days', '?')} d)   "
         f"match rate {diag['match_rate']:.0%}   "
         f"cluster silhouette {diag.get('cluster_silhouette', float('nan')):.2f}",
-        y=1.02, fontsize=12.5, weight="semibold")
+        y=1.02,
+        fontsize=12.5,
+        weight="semibold",
+    )
     fig.tight_layout()
     out = QC_DIR / f"qc_{mouse}_{date_a}_{date_b}.png"
     fig.savefig(out, dpi=150, bbox_inches="tight", facecolor="white")
@@ -191,9 +216,13 @@ def qc_figure(mouse: str, date_a: str, date_b: str, matches: pd.DataFrame,
     return out
 
 
-def run_pair(mouse: str, date_a: str, date_b: str,
-             um_per_pixel: float = UM_PER_PIXEL,
-             use_gpu: bool = False) -> Optional[Dict]:
+def run_pair(
+    mouse: str,
+    date_a: str,
+    date_b: str,
+    um_per_pixel: float = UM_PER_PIXEL,
+    use_gpu: bool = False,
+) -> Optional[Dict]:
     from roicat import pipelines, util
 
     dates = [date_a, date_b]
@@ -224,7 +253,8 @@ def run_pair(mouse: str, date_a: str, date_b: str,
     n_b = int(np.load(DFF / f"{mouse}_{date_b}_iscell.npy")[:, 0].sum())
     assert len(ucids[0]) == n_a and len(ucids[1]) == n_b, (
         f"{mouse}: roicat returned {len(ucids[0])}/{len(ucids[1])} ROIs but there are "
-        f"{n_a}/{n_b} accepted cells - indices would not map to spks rows")
+        f"{n_a}/{n_b} accepted cells - indices would not map to spks rows"
+    )
 
     ua, ub = np.asarray(ucids[0]), np.asarray(ucids[1])
     # -1 means unclustered
@@ -243,19 +273,28 @@ def run_pair(mouse: str, date_a: str, date_b: str,
     matches.to_csv(RESULTS / f"matches_{mouse}_{date_a}_{date_b}.csv", index=False)
 
     q = results.get("clusters", {}).get("quality_metrics", {}) or {}
+
     def _med(key):
         v = np.asarray(q.get(key, []), dtype=float)
         return float(np.nanmedian(v)) if v.size else float("nan")
 
-    diag = dict(mouse=mouse, date_a=date_a, date_b=date_b,
-                n_roi_a=int(ua.size), n_roi_b=int(ub.size),
-                n_matched=int(len(matches)),
-                match_rate=float(len(matches) / min(ua.size, ub.size))
-                if min(ua.size, ub.size) else np.nan,
-                cluster_silhouette=_med("cluster_silhouette"),
-                sample_silhouette=_med("sample_silhouette"),
-                cluster_intra_mean=_med("cluster_intra_means"),
-                um_per_pixel=um_per_pixel)
+    diag = dict(
+        mouse=mouse,
+        date_a=date_a,
+        date_b=date_b,
+        n_roi_a=int(ua.size),
+        n_roi_b=int(ub.size),
+        n_matched=int(len(matches)),
+        match_rate=(
+            float(len(matches) / min(ua.size, ub.size))
+            if min(ua.size, ub.size)
+            else np.nan
+        ),
+        cluster_silhouette=_med("cluster_silhouette"),
+        sample_silhouette=_med("sample_silhouette"),
+        cluster_intra_mean=_med("cluster_intra_means"),
+        um_per_pixel=um_per_pixel,
+    )
     try:
         gap = (pd.to_datetime(date_b) - pd.to_datetime(date_a)).days
         diag["gap_days"] = int(gap)
@@ -298,20 +337,32 @@ def build_pairs(mode: str) -> pd.DataFrame:
         elif mode == "consecutive":
             picks = [(g.loc[i], g.loc[i + 1]) for i in range(len(g) - 1)]
         elif mode == "all":
-            picks = [(g.loc[i], g.loc[j])
-                     for i in range(len(g)) for j in range(i + 1, len(g))]
+            picks = [
+                (g.loc[i], g.loc[j])
+                for i in range(len(g))
+                for j in range(i + 1, len(g))
+            ]
         else:
             raise ValueError(mode)
         for a, b in picks:
-            rows.append(dict(mouse=mouse, genotype=a["genotype"],
-                             pre=a["date"], post=b["date"],
-                             gap=(b["when"] - a["when"]).days))
+            rows.append(
+                dict(
+                    mouse=mouse,
+                    genotype=a["genotype"],
+                    pre=a["date"],
+                    post=b["date"],
+                    gap=(b["when"] - a["when"]).days,
+                )
+            )
     pairs = pd.DataFrame(rows)
     # Every file the pipeline needs must be present, or the run dies mid-way overnight
     ok = []
     for r in pairs.itertuples():
-        have = all((DFF / f"{r.mouse}_{dt}_{k}.npy").exists()
-                   for dt in (r.pre, r.post) for k in SUITE2P_FILES)
+        have = all(
+            (DFF / f"{r.mouse}_{dt}_{k}.npy").exists()
+            for dt in (r.pre, r.post)
+            for k in SUITE2P_FILES
+        )
         ok.append(have)
     dropped = int((~np.array(ok)).sum())
     if dropped:
@@ -322,17 +373,22 @@ def build_pairs(mode: str) -> pd.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Cross-session ROI registration with ROICaT. Resumable: a pair "
-                    "whose match table already exists is skipped.")
+        "whose match table already exists is skipped."
+    )
     ap.add_argument("--mouse")
     ap.add_argument("--date-a")
     ap.add_argument("--date-b")
-    ap.add_argument("--mode", choices=["transition", "consecutive", "all"],
-                    default="consecutive")
+    ap.add_argument(
+        "--mode", choices=["transition", "consecutive", "all"], default="consecutive"
+    )
     ap.add_argument("--pairs-csv", help="explicit pair list instead of --mode")
     ap.add_argument("--um-per-pixel", type=float, default=UM_PER_PIXEL)
     ap.add_argument("--use-gpu", action="store_true")
-    ap.add_argument("--overwrite", action="store_true",
-                    help="redo pairs that already have a match table")
+    ap.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="redo pairs that already have a match table",
+    )
     ap.add_argument("--dry-run", action="store_true", help="list the work and stop")
     args = ap.parse_args()
 
@@ -344,15 +400,20 @@ def main() -> None:
         todo = build_pairs(args.mode)
 
     if not args.overwrite:
-        done = [(RESULTS / f"matches_{r.mouse}_{r.pre}_{r.post}.csv").exists()
-                for r in todo.itertuples()]
+        done = [
+            (RESULTS / f"matches_{r.mouse}_{r.pre}_{r.post}.csv").exists()
+            for r in todo.itertuples()
+        ]
         n_done = int(np.sum(done))
         if n_done:
             print(f"skipping {n_done} pairs already done (use --overwrite to redo)")
         todo = todo[~np.array(done)].reset_index(drop=True)
 
-    print(f"{len(todo)} pairs to register  (~12 min each, "
-          f"~{len(todo) * 12 / 60:.1f} h total)", flush=True)
+    print(
+        f"{len(todo)} pairs to register  (~12 min each, "
+        f"~{len(todo) * 12 / 60:.1f} h total)",
+        flush=True,
+    )
     if args.dry_run:
         print(todo.to_string(index=False))
         return
@@ -374,7 +435,7 @@ def main() -> None:
             if path.exists() and not args.overwrite:
                 old = pd.read_csv(path)
                 key = ["mouse", "date_a", "date_b"]
-                new = (pd.concat([old, new]).drop_duplicates(subset=key, keep="last"))
+                new = pd.concat([old, new]).drop_duplicates(subset=key, keep="last")
             new.to_csv(path, index=False)
     if diags:
         print("\n" + pd.DataFrame(diags).to_string(index=False))

@@ -26,6 +26,7 @@ data/
 
 OASIS/
 
+._*
 .DS_store
 
 nohup.out
